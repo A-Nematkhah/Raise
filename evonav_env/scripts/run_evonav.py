@@ -134,19 +134,22 @@ def main() -> int:
     parser.add_argument(
         "--stage2-train-steps",
         type=int,
-        default=50_000,
+        default=8_000,
         help=(
-            "K2 budget per Stage II candidate. Meaning depends on --k2-unit: "
-            "env_steps (default) = env interactions; gradient_steps = A2C updates "
-            "(paper §4.3.2). Paper numeric value 8000."
+            "K2 budget per Stage II candidate (paper Table 5: 8000). "
+            "Meaning depends on --k2-unit: gradient_steps = A2C updates "
+            "(paper §4.3.2 default); env_steps = env interactions."
         ),
     )
     parser.add_argument(
         "--k2-unit",
         type=str,
-        default="env_steps",
+        default="gradient_steps",
         choices=["env_steps", "gradient_steps"],
-        help="How to interpret --stage2-train-steps (default env_steps = prior baseline)",
+        help=(
+            "How to interpret --stage2-train-steps "
+            "(default gradient_steps = paper §4.3.2)"
+        ),
     )
     parser.add_argument("--stage2-eval-episodes", type=int, default=50)
     parser.add_argument("--stage2-stub", action="store_true")
@@ -162,18 +165,26 @@ def main() -> int:
     parser.add_argument("--stage3-stub", action="store_true")
     parser.add_argument("--no-h-sweep", action="store_true")
     parser.add_argument(
+        "--elitism",
+        action="store_true",
+        help=(
+            "Enable non-paper elite inject / protect-refine "
+            "(Algorithm 1 has no elitism; default off)"
+        ),
+    )
+    parser.add_argument(
         "--no-elitism",
         action="store_true",
-        help="Disable elite inject / protect-refine (closer to Algorithm 1; default on)",
+        help=argparse.SUPPRESS,  # legacy no-op; paper default is already off
     )
     parser.add_argument(
         "--final-rank",
         type=str,
-        default="scalar",
+        default="llm",
         choices=["scalar", "llm"],
         help=(
-            "R2/R3 ranking: scalar=SR-CR-0.5TR (default); "
-            "llm=Alg.1 multi-objective LLM rank (seed falls back to lex metrics)"
+            "R2/R3 ranking: llm=Alg.1 multi-objective LLM rank (default; "
+            "seed falls back to lex); scalar=SR-CR-0.5TR engineering baseline"
         ),
     )
 
@@ -239,7 +250,7 @@ def main() -> int:
         stage3_eval_episodes=args.stage3_eval_episodes,
         stage3_use_stub=args.stage3_stub or args.fast,
         stage3_run_h_sweep=not args.no_h_sweep,
-        elitism=not args.no_elitism,
+        elitism=bool(args.elitism),
         final_rank=args.final_rank,
         device=args.device,
         num_processes=args.num_processes,

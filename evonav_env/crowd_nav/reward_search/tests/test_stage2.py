@@ -173,8 +173,11 @@ def test_table5_defaults():
     cfg = Stage2Config()
     assert cfg.population_size == 8
     assert cfg.rounds == 16
-    # Practical default raised for reward ranking; paper K2=8000 via paper_scale.
-    assert cfg.train_env_steps == 50_000
+    # Paper Table 5 / §4.3.2: K2=8000 gradient steps.
+    assert cfg.train_env_steps == 8_000
+    assert cfg.k2_unit == "gradient_steps"
+    assert cfg.inject_elite is False
+    assert cfg.protect_elite_refine is False
     assert cfg.eval_episodes == 50
     assert cfg.horizon_steps == 100
     assert cfg.algo == "a2c"

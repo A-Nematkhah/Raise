@@ -1,12 +1,12 @@
 # BASELINE LOCK REPORT — `baseline-pre-amfrs`
 
-**Date:** 2026-09-19 (fidelity honesty pass: 2026-09-19 evening)  
+**Date:** 2026-09-19 (paper-default fidelity lock)  
 **Purpose:** Freeze the EvoNav Algorithm 1 replication (CrowdNav++ fork) before AMFRS work.  
-**Tag:** `baseline-pre-amfrs` — use for diffs, but read **Documented deviations** below before claiming paper parity.
+**Tag:** `baseline-pre-amfrs` — use for diffs; defaults now match paper K2 unit, R2/R3, and no Stage II/III elitism. Read **Documented deviations** below before claiming full paper parity.
 
-**Scope of the original lock:** Stage I Score1 pad/nav/degeneracy fixes, cleanup, tests, smoke. **No AMFRS.**
+**Scope of this lock:** Domain Pack + fidelity honesty + paper-faithful **defaults** (K2=`gradient_steps`/8000, `final_rank=llm`, `elitism=off`, best from R2/R3). **No AMFRS.**
 
-**Honesty note:** Do **not** label this tree “byte-faithful.” Algorithm 1 skeleton and Tables 3–6 knobs are largely matched; several operators, ranking, K2 units, and Stage I data diversity are deliberate or accidental deviations (see below). Cross-check: arXiv:2605.11859 + fidelity review vs commit/tag.
+**Honesty note:** Do **not** label this tree “byte-faithful.” Algorithm 1 skeleton and Tables 3–6 knobs are largely matched; remaining deviations are listed below. Cross-check: arXiv:2605.11859.
 
 ---
 
@@ -34,13 +34,13 @@
 
 | Deviation | Paper (arXiv:2605.11859) | This baseline | Why / notes |
 |-----------|--------------------------|---------------|-------------|
-| **R2 / R3 ranking** | Alg. 1 lines 20, 30: LLM evaluation of `{M(r)}` | Default **scalar** `SR−CR−0.5·TR`; CLI `--final-rank llm` | Elite selection still uses scalar; R2/R3 artifacts recorded |
-| **M(r) tuple** | Alg. 1 lists `(SR, NT, PL, ITR, SD)` (no CR/TR); §5.1 has seven metrics | Logs seven metrics; selects on SR/CR/TR scalar | Paper inconsistent; we keep seven logs. |
-| **K2 unit** | §4.3.2: **K2 gradient steps**; Table 5 = 8000 | Default **env_steps**; CLI `--k2-unit gradient_steps` | With env_steps+8000, A2C updates ≪ 8000 |
-| **K2 default (non-paper CLI)** | Table 5: 8000 | Default **50_000** env steps; paper_scale forces 8000 | Practical ranking; still not gradient-step unless flagged |
+| **R2 / R3 ranking** | Alg. 1 lines 20, 30: LLM evaluation of `{M(r)}` | Default **`final_rank=llm`** (seed → multi-objective lex fallback); `best_stage*` follows R2/R3. Opt-in `--final-rank scalar` | Within-round `best_trained` tracking still uses SR−CR−0.5·TR |
+| **M(r) tuple** | Alg. 1 lists `(SR, NT, PL, ITR, SD)` (no CR/TR); §5.1 has seven metrics | Logs seven metrics; LLM/lex rank uses all seven | Paper inconsistent; we keep seven logs. |
+| **K2 unit** | §4.3.2: **K2 gradient steps**; Table 5 = 8000 | Default **`gradient_steps`** + K2=`8000`; opt-in `--k2-unit env_steps` | `env_steps = 8000 × num_steps × num_processes` |
+| **K2 default (CLI)** | Table 5: 8000 | Default **8000** gradient steps (same as paper_scale) | Previously 50k env steps; that was a practical deviation |
 | **K3 default** | Table 6: `1e7` **environment** steps (§4.3.3) | Default `5e5`; paper_scale `1e7` | Hardware; unit matches paper for K3. |
-| **Stage I next-gen split** | Unspecified counts; mutation/crossover/random | Config claims 2/4/2; **runtime** ≈ 2 crossover + 4 mutation + **1** random + **1 elite carry** (`_next_generation`) | Elite slot steals one random. |
-| **Elitism** | Algorithm 1 has no elitism | Default **on**; CLI `--no-elitism` | Inject/protect disableable |
+| **Stage I next-gen split** | Unspecified counts; mutation/crossover/random | Config claims 2/4/2; **runtime** ≈ 2 crossover + 4 mutation + **1** random + **1 elite carry** (`_next_generation`) | Elite slot steals one random (Stage I evolver; separate from Stage II/III elitism flag). |
+| **Elitism (II/III)** | Algorithm 1 has no elitism | Default **off**; opt-in `--elitism` | Inject/protect when enabled |
 | **Mutation parent vs D.2 prompt** | Body §4.2: mutation addresses weaknesses; appendix D.2 said elite | Mutates lower half; prompt says **underperforming parent** | Aligned to §4.2 |
 | **Reflection** | “accumulated across generations” | Accumulates up to 3 gen notes with all Score1 ids | Bounded accumulation |
 | **N_traj mix** | Only “10 diverse trajectories” | Our mix: ORCA/SF/noise/random (see collector) | Do **not** claim the mix is from the paper. Older datasets may have duplicate ORCA/SF rollouts (~5 unique / 10). |
@@ -134,8 +134,8 @@ pytest crowd_nav/reward_search/tests -m "not slow"
 ### Tag
 
 ```bash
-git tag -a baseline-pre-amfrs -m "EvoNav Algorithm 1 baseline before AMFRS"
+git tag -a baseline-pre-amfrs -m "Paper-faithful EvoNav baseline (defaults match Alg.1 / §4.3.2)"
 git diff baseline-pre-amfrs
 ```
 
-Re-tag or add `baseline-fidelity-honest` after this honesty + Score1/collector pass if you need a clean AMFRS comparison point.
+This tag is the AMFRS comparison point. Move it only when intentionally re-locking the baseline.

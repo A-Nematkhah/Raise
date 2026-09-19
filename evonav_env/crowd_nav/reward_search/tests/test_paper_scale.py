@@ -58,12 +58,23 @@ def test_apply_paper_scale_distinct_from_fast():
     assert paper.stage1_generations == 10
     assert paper.stage2_rounds == 16
     assert paper.stage2_train_steps == 8000
+    assert paper.stage2_k2_unit == "gradient_steps"
+    assert paper.elitism is False
+    assert paper.final_rank == "llm"
     assert paper.stage3_rounds == 3
     assert paper.stage3_train_steps == int(1e7)
     assert paper.stage3_eval_episodes == 500
     assert paper.stage2_use_stub is False
     assert paper.stage3_use_stub is False
     assert paper.score1_mode == "dataset"
+
+
+def test_pipeline_defaults_match_paper_fidelity():
+    cfg = EvoNavRunConfig()
+    assert cfg.stage2_train_steps == 8_000
+    assert cfg.stage2_k2_unit == "gradient_steps"
+    assert cfg.elitism is False
+    assert cfg.final_rank == "llm"
 
 
 def test_parse_seeds_default_five():

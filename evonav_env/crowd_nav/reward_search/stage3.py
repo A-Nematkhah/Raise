@@ -97,10 +97,9 @@ class Stage3Config:
     device: str = "cpu"
     train_human_num: int = 20  # training population size (obs / Policy width)
     human_counts: Tuple[int, ...] = STAGE3_HUMAN_COUNTS
-    # Do not LLM-mutate the current best-ever genome (prevents refine regression).
-    protect_elite_refine: bool = True
-    # Inject best-ever genome into next population (non-paper elitism).
-    inject_elite: bool = True
+    # Alg. 1 has no elitism — defaults off; opt in via pipeline ``elitism=True``.
+    protect_elite_refine: bool = False
+    inject_elite: bool = False
 
 
 @dataclass
@@ -646,7 +645,7 @@ class Stage3Runner:
         return snapshot
 
     def _skip_refine_for_elite(self, candidate: RewardCandidate) -> bool:
-        if not bool(getattr(self.config, "protect_elite_refine", True)):
+        if not bool(getattr(self.config, "protect_elite_refine", False)):
             return False
         return self.best_trained is not None and is_same_genome(
             candidate, self.best_trained
@@ -655,7 +654,7 @@ class Stage3Runner:
     def _inject_elite(
         self, population: List[RewardCandidate]
     ) -> List[RewardCandidate]:
-        if not bool(getattr(self.config, "inject_elite", True)):
+        if not bool(getattr(self.config, "inject_elite", False)):
             return population
         elite = self.best_trained
         if elite is None or not population:

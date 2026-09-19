@@ -1,16 +1,17 @@
 """
 Navigation fitness helpers for Stage II / III selection.
 
-**Deviation from EvoNav Algorithm 1 (arXiv:2605.11859):**
-Paper produces final rankings R2 / R3 via *LLM evaluation* of multi-objective
-metrics M(r) (Alg. 1 lines 20 and 30). This baseline instead uses a fixed
-engineering scalar for elite selection and best-trained tracking:
+Paper (Alg. 1): final rankings R2 / R3 use LLM evaluation of multi-objective
+M(r). Pipeline default is ``final_rank=llm`` (see ``ranking.py``).
+
+This module's scalar is still used for *within-round* best-ever tracking and
+optional engineering elitism:
 
     SR - CR - 0.5 * TR
 
 NT, PL, ITR, and SD are logged on ProxyMetrics but are not part of this scalar.
-Treat any claim of paper-faithful R2/R3 ranking as false unless an LLM
-final-rank path is enabled and documented.
+Use ``--final-rank scalar`` only when you intentionally want this engineering
+order instead of paper R2/R3.
 """
 
 from __future__ import annotations

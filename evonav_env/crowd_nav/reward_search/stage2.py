@@ -67,9 +67,9 @@ class Stage2Config:
     population_size: int = 8
     rounds: int = 16  # G2
     # When k2_unit=env_steps: env interaction steps. When gradient_steps: K2 updates.
-    train_env_steps: int = 50_000  # practical default; paper Table 5 K2=8000
-    # Paper §4.3.2: K2 is gradient steps; historical baseline used env steps.
-    k2_unit: str = "env_steps"  # env_steps | gradient_steps
+    # Paper §4.3.2 default: K2=8000 gradient steps.
+    train_env_steps: int = 8_000
+    k2_unit: str = "gradient_steps"  # env_steps | gradient_steps
     eval_episodes: int = 50  # E2
     horizon_steps: int = 100  # T_short
     algo: str = "a2c"
@@ -86,10 +86,9 @@ class Stage2Config:
     randomization_regime: str = "without_random"
     output_root: str = "trained_models/stage2"
     device: str = "cpu"
-    # Do not LLM-mutate the current best-ever genome (prevents refine regression).
-    protect_elite_refine: bool = True
-    # Inject best-ever genome into next population (non-paper elitism).
-    inject_elite: bool = True
+    # Alg. 1 has no elitism — defaults off; opt in via pipeline ``elitism=True``.
+    protect_elite_refine: bool = False
+    inject_elite: bool = False
 
 
 @dataclass
@@ -203,12 +202,12 @@ def resolve_stage2_env_steps(config: Stage2Config, num_processes: int) -> int:
     """
     Map configured K2 budget to env interaction steps.
 
-    - ``env_steps`` (baseline default): ``train_env_steps`` is already env steps.
-    - ``gradient_steps`` (paper §4.3.2): ``train_env_steps`` holds K2 *updates*;
-      env steps = K2 * num_steps * num_processes so that
+    - ``env_steps``: ``train_env_steps`` is already env interactions.
+    - ``gradient_steps`` (paper §4.3.2 default): ``train_env_steps`` holds K2
+      *updates*; env steps = K2 * num_steps * num_processes so that
       ``num_updates = env_steps // num_steps // num_processes == K2``.
     """
-    unit = str(getattr(config, "k2_unit", "env_steps")).strip().lower()
+    unit = str(getattr(config, "k2_unit", "gradient_steps")).strip().lower()
     k2 = max(1, int(config.train_env_steps))
     nproc = max(1, int(num_processes))
     nsteps = max(1, int(config.num_steps))
@@ -448,7 +447,7 @@ class RealPolicyTrainer(PolicyTrainer):
         console.status(
             f"training {candidate.candidate_id} round={round_index} "
             f"algo={config.algo} K2={config.train_env_steps} "
-            f"k2_unit={getattr(config, 'k2_unit', 'env_steps')} "
+            f"k2_unit={getattr(config, 'k2_unit', 'gradient_steps')} "
             f"env_steps={algo_args.num_env_steps} "
             f"updates={num_updates} nproc={algo_args.num_processes}",
             stage="Stage II",
@@ -774,7 +773,7 @@ class Stage2Runner:
 
     def _skip_refine_for_elite(self, candidate: RewardCandidate) -> bool:
         """Do not LLM-mutate the current best-ever genome."""
-        if not bool(getattr(self.config, "protect_elite_refine", True)):
+        if not bool(getattr(self.config, "protect_elite_refine", False)):
             return False
         return self.best_trained is not None and is_same_genome(
             candidate, self.best_trained
@@ -1006,7 +1005,7 @@ class Stage2Runner:
         self, population: List[RewardCandidate]
     ) -> List[RewardCandidate]:
         """Keep best-ever genome in the next round population (elitism)."""
-        if not bool(getattr(self.config, "inject_elite", True)):
+        if not bool(getattr(self.config, "inject_elite", False)):
             return population
         elite = self.best_trained
         if elite is None or not population:

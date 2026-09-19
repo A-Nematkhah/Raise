@@ -2,7 +2,8 @@
 Final Stage II/III candidate ranking.
 
 Paper (Alg. 1 lines 20, 30): R2/R3 via LLM evaluation of multi-objective M(r).
-Baseline default remains the engineering scalar in ``selection.py``.
+Default mode is ``llm`` (seed / parse failure → multiobjective_lex).
+``scalar`` (SR−CR−0.5·TR) remains available as an engineering opt-in.
 """
 
 from __future__ import annotations
@@ -18,9 +19,22 @@ logger = logging.getLogger(__name__)
 
 
 def rank_ids_by_scalar(candidates: Sequence[RewardCandidate]) -> List[str]:
-    """Best-first by SR-CR-0.5·TR (baseline deviation from paper LLM rank)."""
+    """Best-first by SR-CR-0.5·TR (engineering opt-in; not paper R2/R3)."""
     ordered = sorted(candidates, key=candidate_nav_scalar, reverse=True)
     return [c.candidate_id for c in ordered]
+
+
+def pick_candidate_by_ranking(
+    ranking: Dict[str, Any],
+    pool: Sequence[RewardCandidate],
+) -> Optional[RewardCandidate]:
+    """Return the first ranked id that exists in ``pool`` (best-first)."""
+    by_id = {c.candidate_id: c for c in pool}
+    for cid in ranking.get("ranking") or []:
+        hit = by_id.get(str(cid))
+        if hit is not None:
+            return hit
+    return None
 
 
 def _metrics_block(candidates: Sequence[RewardCandidate]) -> str:
@@ -104,16 +118,16 @@ def multiobjective_lex_rank(candidates: Sequence[RewardCandidate]) -> List[str]:
 def produce_final_ranking(
     candidates: Sequence[RewardCandidate],
     *,
-    mode: str = "scalar",
+    mode: str = "llm",
     llm: Any = None,
 ) -> Dict[str, Any]:
     """
     Produce a best-first id list.
 
     mode:
-      - ``scalar``: SR-CR-0.5·TR (baseline default)
-      - ``llm``: ask LLM; on failure or seed-like providers, fall back to
+      - ``llm``: Alg. 1 R2/R3; on failure or seed-like providers, fall back to
         multiobjective_lex_rank (not scalar) and record the fallback.
+      - ``scalar``: SR-CR-0.5·TR engineering opt-in
     """
     mode_key = str(mode).strip().lower()
     ids = [c.candidate_id for c in candidates]

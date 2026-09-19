@@ -6,6 +6,7 @@ from crowd_nav.domains.crowdnav.prompts import format_d2_mutation
 from crowd_nav.reward_search.evolver import RewardCandidate
 from crowd_nav.reward_search.ranking import (
     multiobjective_lex_rank,
+    pick_candidate_by_ranking,
     produce_final_ranking,
     rank_ids_by_scalar,
 )
@@ -59,3 +60,11 @@ def test_produce_final_ranking_llm_seed_falls_back_to_lex():
     assert out["mode"] == "llm"
     assert out["fallback"] == "multiobjective_lex"
     assert out["ranking"][0] == "y"
+
+
+def test_pick_candidate_by_ranking_best_first():
+    pop = [_cand("x", 0.5), _cand("y", 0.9)]
+    ranking = {"ranking": ["y", "x"]}
+    best = pick_candidate_by_ranking(ranking, pop)
+    assert best is not None
+    assert best.candidate_id == "y"

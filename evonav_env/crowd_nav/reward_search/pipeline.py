@@ -35,7 +35,10 @@ from crowd_nav.reward_search.selection import (
     navigation_scalar_from_dict,
     pick_best_trained,
 )
-from crowd_nav.reward_search.ranking import produce_final_ranking
+from crowd_nav.reward_search.ranking import (
+    pick_candidate_by_ranking,
+    produce_final_ranking,
+)
 from crowd_nav.reward_search.proxy_consistency import compute_proxy_consistency
 from crowd_nav.reward_search.stage2 import (
     Stage2Config,
@@ -69,13 +72,10 @@ class EvoNavRunConfig:
     stage1_population: int = 8
     stage1_generations: int = 10
 
-    # Stage II — paper Table 5 uses K2=8000; that is too short to rank rewards
-    # reliably in practice. Default 5e4 for local/scaled runs; paper_scale.py
-    # still forces PAPER_K2=8000 when reproducing the paper budget.
+    # Stage II — paper Table 5: K2=8000 **gradient** steps (§4.3.2).
     stage2_rounds: int = 16
-    stage2_train_steps: int = 50_000
-    # Paper §4.3.2: gradient_steps; historical baseline: env_steps.
-    stage2_k2_unit: str = "env_steps"
+    stage2_train_steps: int = 8_000
+    stage2_k2_unit: str = "gradient_steps"
     stage2_eval_episodes: int = 50
     stage2_horizon: int = 100
     stage2_use_stub: bool = False
@@ -87,10 +87,9 @@ class EvoNavRunConfig:
     stage3_use_stub: bool = False
     stage3_run_h_sweep: bool = True
 
-    # Fidelity knobs (defaults preserve prior engineering baseline).
-    elitism: bool = True
-    # scalar = SR-CR-0.5TR; llm = Alg.1-style multi-objective LLM rank (with fallback).
-    final_rank: str = "scalar"
+    # Paper-faithful defaults (Alg. 1 has no elitism; R2/R3 via LLM eval).
+    elitism: bool = False
+    final_rank: str = "llm"
 
     device: str = "cuda"
     # None → auto (min(16, cpu-1)); set low on 4GB GPUs to avoid OOM.
@@ -112,6 +111,8 @@ class EvoNavRunConfig:
         self.stage1_generations = 1
         self.stage2_rounds = 1
         self.stage2_train_steps = 8
+        # Tiny absolute env-step budget for stub dry-runs (not paper unit).
+        self.stage2_k2_unit = "env_steps"
         self.stage2_eval_episodes = 2
         self.stage2_horizon = 5
         self.stage2_use_stub = True
@@ -369,13 +370,15 @@ class EvoNavPipeline:
             s2_runner.checkpoint_store = self.checkpoint_store
             s2_runner.checkpoint_seed = int(cfg.seed)
         stage2_pop = s2_runner.run(stage1_pop)
-        best_s2 = s2_runner.best_trained or self._best_by_ever_metrics(
-            stage2_pop, s2_runner.history, s2_runner.trained_snapshots
-        )
         rank_pool_s2 = list(s2_runner.trained_snapshots) or list(stage2_pop)
         r2_rank = produce_final_ranking(
             rank_pool_s2, mode=cfg.final_rank, llm=llm
         )
+        best_s2 = pick_candidate_by_ranking(r2_rank, rank_pool_s2)
+        if best_s2 is None:
+            best_s2 = s2_runner.best_trained or self._best_by_ever_metrics(
+                stage2_pop, s2_runner.history, s2_runner.trained_snapshots
+            )
         write_json(
             os.path.join(cfg.output_dir, "stage2_population.json"),
             {
@@ -457,13 +460,15 @@ class EvoNavPipeline:
             s3_runner.checkpoint_store = self.checkpoint_store
             s3_runner.checkpoint_seed = int(cfg.seed)
         stage3_pop = s3_runner.run(stage2_pop, run_h_sweep=cfg.stage3_run_h_sweep)
-        best_s3 = s3_runner.best_trained or self._best_by_ever_metrics(
-            stage3_pop, s3_runner.history, s3_runner.trained_snapshots
-        )
         rank_pool_s3 = list(s3_runner.trained_snapshots) or list(stage3_pop)
         r3_rank = produce_final_ranking(
             rank_pool_s3, mode=cfg.final_rank, llm=llm
         )
+        best_s3 = pick_candidate_by_ranking(r3_rank, rank_pool_s3)
+        if best_s3 is None:
+            best_s3 = s3_runner.best_trained or self._best_by_ever_metrics(
+                stage3_pop, s3_runner.history, s3_runner.trained_snapshots
+            )
         write_json(
             os.path.join(cfg.output_dir, "stage3_population.json"),
             {
