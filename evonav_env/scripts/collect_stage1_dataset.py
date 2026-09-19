@@ -2,9 +2,16 @@
 """
 Collect the Stage I analytical dataset once; reuse across all generations.
 
-Default: M=100 scenarios × N_traj=10 diverse behaviors
-  3× ORCA, 3× SF, 2× ORCA/SF + Gaussian action noise (2 std levels),
-  2× random-action — so Success / Other / Fail are all represented.
+Default: M=100 scenarios × N_traj=10 **diverse** behaviors on the *same*
+scenario layout (paper only specifies N_traj=10 diverse trajectories — not
+this mix). Our schedule (not from the paper):
+  1× ORCA clean, 1× SF clean,
+  2× ORCA + Gaussian noise (two std levels),
+  2× SF + Gaussian noise (two std levels),
+  2× high-noise ORCA/SF,
+  2× random-action
+so Success / Other / Fail are represented and duplicate deterministic
+rollouts are avoided.
 
 Persists RewardState sequences only (no env reward scalars). Default format is
 a compact gzip+pickle archive ``data/stage1_dataset/stage1_dataset.npz``;
@@ -206,6 +213,39 @@ def _rollout(
     return list(recorder.states), label
 
 
+def build_stage1_traj_schedule(
+    n_traj: int,
+    noise_stds: Tuple[float, float] = (0.25, 0.55),
+) -> List[Tuple[str, float, bool]]:
+    """
+    Behavior schedule for one scenario (policy_name, noise_std, is_random).
+
+    Not from the paper (which only says N_traj=10 diverse). Ensures distinct
+    (policy, noise, random) slots so deterministic ORCA/SF are not triplicated.
+    """
+    n0 = float(noise_stds[0])
+    n1 = float(noise_stds[1])
+    full_schedule: List[Tuple[str, float, bool]] = [
+        ("orca", 0.0, False),
+        ("social_force", 0.0, False),
+        ("orca", n0, False),
+        ("social_force", n0, False),
+        ("orca", n1, False),
+        ("social_force", n1, False),
+        ("orca", max(n1 * 1.5, n1 + 0.1), False),
+        ("social_force", max(n1 * 1.5, n1 + 0.1), False),
+        ("random", 0.0, True),
+        ("random", 0.0, True),
+    ]
+    if n_traj >= len(full_schedule):
+        schedule = list(full_schedule)
+        while len(schedule) < n_traj:
+            schedule.append(full_schedule[len(schedule) % len(full_schedule)])
+        return schedule
+    prefer = [0, 1, 8, 9, 2, 3, 4, 5, 6, 7]
+    return [full_schedule[i] for i in prefer[:n_traj]]
+
+
 def collect_dataset(
     *,
     n_scenarios: int = 100,
@@ -250,7 +290,8 @@ def _collect_dataset_impl(
 
     if n_traj != 10:
         logging.warning(
-            "Paper uses N_traj=10 (3 ORCA + 3 SF + 2 noisy + 2 random); got %d",
+            "Paper Table 4 uses N_traj=10 (diversity unspecified); got %d. "
+            "Our default mix is ORCA/SF/noise/random — not claimed as paper text.",
             n_traj,
         )
 
@@ -267,27 +308,8 @@ def _collect_dataset_impl(
     )
     dataset = {}
 
-    # Paper N_traj=10 mix; for smaller n_traj, pick a diverse subset first.
-    full_schedule = [
-        ("orca", 0.0, False),
-        ("orca", 0.0, False),
-        ("orca", 0.0, False),
-        ("social_force", 0.0, False),
-        ("social_force", 0.0, False),
-        ("social_force", 0.0, False),
-        ("orca", float(noise_stds[0]), False),
-        ("social_force", float(noise_stds[1]), False),
-        ("random", 0.0, True),
-        ("random", 0.0, True),
-    ]
-    if n_traj >= len(full_schedule):
-        schedule = list(full_schedule)
-        while len(schedule) < n_traj:
-            schedule.append(full_schedule[len(schedule) % len(full_schedule)])
-    else:
-        # Prefer covering ORCA, SF, noisy, random when truncating (e.g. slow test).
-        prefer = [0, 3, 6, 8, 1, 4, 7, 9, 2, 5]
-        schedule = [full_schedule[i] for i in prefer[:n_traj]]
+    # Ours (not paper): one clean ORCA/SF + graduated noise + random.
+    schedule = build_stage1_traj_schedule(n_traj, noise_stds)
 
     from crowd_nav.reward_search import console
     import time as _time
@@ -308,6 +330,10 @@ def _collect_dataset_impl(
         sid = f"scenario_{j:03d}"
         trajs: List[TrajectoryRecord] = []
         for t_idx, (policy_name, noise, is_random) in enumerate(schedule):
+            # Same scenario layout (case_counter=j, thisSeed=base_seed); diversify
+            # stochastic behaviors with a per-trajectory RNG stream.
+            traj_seed = int(base_seed) + int(j) * 10007 + int(t_idx) * 97
+            np.random.seed(traj_seed)
             _reset_scenario(env, scenario_id=j, base_seed=base_seed)
             if not is_random:
                 _set_robot_policy(env, cfg, policy_name)
@@ -335,7 +361,7 @@ def _collect_dataset_impl(
                 TrajectoryRecord(
                     trajectory_id=f"{sid}_t{t_idx:02d}",
                     scenario_id=sid,
-                    seed=base_seed + j,
+                    seed=traj_seed,
                     states=tuple(states),
                     label=label,
                     behavior=behavior,

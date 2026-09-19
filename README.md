@@ -35,6 +35,7 @@ pytest crowd_nav/reward_search/tests -m "not slow"
 
 See **`evonav_env/README_EVONAV.md`** for Algorithm 1, paper-scale runs, and API keys.
 Simulator train/test docs: **`evonav_env/README.md`**. Architecture notes: **`evonav_env/AUDIT.md`**.
+Domain packs (pluggable env backends): **`evonav_env/crowd_nav/domains/README.md`**.
 
 ## Groq API keys
 

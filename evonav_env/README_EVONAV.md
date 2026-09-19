@@ -59,6 +59,33 @@ The server URL defaults to `http://localhost:11434/v1`; override it with
 
 Defaults (AUDIT.md §8): `without_random`, Stage II/III `predict_method=inferred`, GST `...-seed_1000/sj`.
 
+## Domain packs
+
+Reward search is wired through a **domain pack** (default `crowdnav`). Prompts,
+Stage I Score1, and Stage II/III trainers are resolved via
+`crowd_nav.domains` so another environment can be added later as a sibling
+folder without rewriting the pipeline.
+
+- Guide: [`crowd_nav/domains/README.md`](crowd_nav/domains/README.md)
+- CLI: `python scripts/run_evonav.py --domain crowdnav ...`
+
+Do not add stub domains; only register a pack when the real env is ready.
+
+## Stage I dataset
+
+Collect once (paper: M=100, N_traj=10). Our behavior mix is **not** claimed as
+paper text — see `scripts/collect_stage1_dataset.py` and
+`crowd_nav/domains/README.md`.
+
+After the fidelity collector fix (diverse ORCA/SF/noise/random), **recollect**
+before new Stage I science runs:
+
+```bash
+python scripts/collect_stage1_dataset.py --out data/stage1_dataset
+```
+
+Older archives may have ~5 unique trajs / 10 (duplicate deterministic ORCA/SF).
+
 ## Tests
 
 ```bash

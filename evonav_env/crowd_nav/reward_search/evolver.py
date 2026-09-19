@@ -681,28 +681,38 @@ class StageIEvolver:
         assert len(next_pop) == cfg.population_size
         return next_pop
 
-    def _build_reflection(self, ranked: Sequence[RewardCandidate]) -> str:
-        """Short reflective note (Section 4.2) for the next generation's prompts."""
-        lines = []
+    def _build_reflection(
+        self, ranked: Sequence[RewardCandidate], *, generation: int
+    ) -> str:
+        """
+        Reflective note for the next generation (§4.2).
+
+        Accumulates concise notes across generations (bounded), including
+        Score1 for all candidates — not only best/worst.
+        """
+        score_bits = []
+        for c in ranked:
+            sc = c.score if c.score is not None else float("nan")
+            score_bits.append(f"{c.candidate_id}={sc}")
         best = ranked[0]
         worst = ranked[-1]
-        lines.append(
-            f"Best={best.candidate_id} score={best.score}; "
-            f"Worst={worst.candidate_id} score={worst.score}."
-        )
-        # Summarize lower half weaknesses for mutation guidance.
         lower = ranked[len(ranked) // 2 :]
-        if lower:
-            ids = ", ".join(c.candidate_id for c in lower[:3])
-            lines.append(
-                f"Lower performers ({ids}) should strengthen goal progress and "
-                f"collision/discomfort penalties while keeping dense shaping."
-            )
-        lines.append(
-            "Prefer combining elite safety terms with efficient progress shaping; "
-            "avoid near-constant rewards."
+        lower_ids = ", ".join(c.candidate_id for c in lower[:4]) if lower else "(none)"
+        note = (
+            f"Gen{generation} scores[{', '.join(score_bits)}]. "
+            f"Best={best.candidate_id} score={best.score}; "
+            f"Worst={worst.candidate_id} score={worst.score}. "
+            f"Underperformers ({lower_ids}): strengthen goal progress and "
+            f"collision/discomfort penalties while keeping dense shaping. "
+            f"Prefer combining elite safety terms with efficient progress; "
+            f"avoid near-constant rewards."
         )
-        return " ".join(lines)
+        if not self.reflection.strip():
+            return note
+        parts = [p.strip() for p in self.reflection.split(" || ") if p.strip()]
+        parts.append(note)
+        # Bound prompt size: keep the most recent notes.
+        return " || ".join(parts[-3:])
 
     # ------------------------------------------------------------------ run
 
@@ -717,7 +727,7 @@ class StageIEvolver:
             population = self.initialize_population()
         ranked = self.score_population(population)
         self.global_best = ranked[0]
-        self.reflection = self._build_reflection(ranked)
+        self.reflection = self._build_reflection(ranked, generation=0)
         self.history.append(
             GenerationRecord(
                 generation=0,
@@ -753,7 +763,7 @@ class StageIEvolver:
                 )
             if ranked[0].score > self.global_best.score:
                 self.global_best = ranked[0]
-            self.reflection = self._build_reflection(ranked)
+            self.reflection = self._build_reflection(ranked, generation=g)
             self.history.append(
                 GenerationRecord(
                     generation=g,

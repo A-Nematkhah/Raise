@@ -42,6 +42,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="EvoNav Algorithm 1 end-to-end")
     parser.add_argument("--output-dir", type=str, default="results/evonav_run")
     parser.add_argument("--seed", type=int, default=425)
+    parser.add_argument(
+        "--domain",
+        type=str,
+        default="crowdnav",
+        help="Domain pack under crowd_nav.domains (default: crowdnav baseline)",
+    )
     parser.add_argument("--llm-model", type=str, default=None)
     parser.add_argument(
         "--llm",
@@ -129,7 +135,18 @@ def main() -> int:
         "--stage2-train-steps",
         type=int,
         default=50_000,
-        help="K2 env steps per Stage II candidate (paper=8000; default 5e4 for ranking)",
+        help=(
+            "K2 budget per Stage II candidate. Meaning depends on --k2-unit: "
+            "env_steps (default) = env interactions; gradient_steps = A2C updates "
+            "(paper §4.3.2). Paper numeric value 8000."
+        ),
+    )
+    parser.add_argument(
+        "--k2-unit",
+        type=str,
+        default="env_steps",
+        choices=["env_steps", "gradient_steps"],
+        help="How to interpret --stage2-train-steps (default env_steps = prior baseline)",
     )
     parser.add_argument("--stage2-eval-episodes", type=int, default=50)
     parser.add_argument("--stage2-stub", action="store_true")
@@ -144,6 +161,21 @@ def main() -> int:
     parser.add_argument("--stage3-eval-episodes", type=int, default=500)
     parser.add_argument("--stage3-stub", action="store_true")
     parser.add_argument("--no-h-sweep", action="store_true")
+    parser.add_argument(
+        "--no-elitism",
+        action="store_true",
+        help="Disable elite inject / protect-refine (closer to Algorithm 1; default on)",
+    )
+    parser.add_argument(
+        "--final-rank",
+        type=str,
+        default="scalar",
+        choices=["scalar", "llm"],
+        help=(
+            "R2/R3 ranking: scalar=SR-CR-0.5TR (default); "
+            "llm=Alg.1 multi-objective LLM rank (seed falls back to lex metrics)"
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -190,6 +222,7 @@ def main() -> int:
     cfg = EvoNavRunConfig(
         output_dir=args.output_dir,
         seed=args.seed,
+        domain=args.domain,
         llm_provider=args.llm,
         llm_model=args.llm_model,
         score1_mode="smoke" if args.fast else args.score1,
@@ -198,6 +231,7 @@ def main() -> int:
         stage1_generations=args.stage1_generations,
         stage2_rounds=args.stage2_rounds,
         stage2_train_steps=args.stage2_train_steps,
+        stage2_k2_unit=args.k2_unit,
         stage2_eval_episodes=args.stage2_eval_episodes,
         stage2_use_stub=args.stage2_stub or args.fast,
         stage3_rounds=args.stage3_rounds,
@@ -205,6 +239,8 @@ def main() -> int:
         stage3_eval_episodes=args.stage3_eval_episodes,
         stage3_use_stub=args.stage3_stub or args.fast,
         stage3_run_h_sweep=not args.no_h_sweep,
+        elitism=not args.no_elitism,
+        final_rank=args.final_rank,
         device=args.device,
         num_processes=args.num_processes,
         randomization_regime=args.regime,
@@ -229,9 +265,22 @@ def main() -> int:
     if args.human_num is not None:
         cfg.human_num = max(1, int(args.human_num))
 
+    from crowd_nav.domains import available_domains, load_domain
+
+    try:
+        load_domain(cfg.domain)
+    except KeyError as exc:
+        print(str(exc), file=sys.stderr)
+        print(
+            f"Available domains: {', '.join(available_domains())}",
+            file=sys.stderr,
+        )
+        return 2
+
     logging.info(
-        "EvoNav Algorithm 1 → %s (fast=%s, easy=%s, humans=%d, predict=%s, K3=%d)",
+        "EvoNav Algorithm 1 → %s (domain=%s, fast=%s, easy=%s, humans=%d, predict=%s, K3=%d)",
         cfg.output_dir,
+        cfg.domain,
         cfg.fast,
         bool(args.easy),
         cfg.human_num,

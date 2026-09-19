@@ -24,6 +24,9 @@ score1_mode: dataset
 stage1_dataset_path: data/stage1_dataset
 
 # Stage II proxy refinement (Table 5)
+# Paper §4.3.2: K2 = gradient steps. This YAML stores the numeric 8000; set
+# stage2_k2_unit=gradient_steps on the runner for paper-unit fidelity (CLI:
+# --k2-unit gradient_steps). Default pipeline unit remains env_steps.
 K2: 8000
 G2: 16
 E2: 50

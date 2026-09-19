@@ -99,6 +99,8 @@ class Stage3Config:
     human_counts: Tuple[int, ...] = STAGE3_HUMAN_COUNTS
     # Do not LLM-mutate the current best-ever genome (prevents refine regression).
     protect_elite_refine: bool = True
+    # Inject best-ever genome into next population (non-paper elitism).
+    inject_elite: bool = True
 
 
 @dataclass
@@ -653,6 +655,8 @@ class Stage3Runner:
     def _inject_elite(
         self, population: List[RewardCandidate]
     ) -> List[RewardCandidate]:
+        if not bool(getattr(self.config, "inject_elite", True)):
+            return population
         elite = self.best_trained
         if elite is None or not population:
             return population

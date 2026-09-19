@@ -66,7 +66,10 @@ class Stage2Config:
 
     population_size: int = 8
     rounds: int = 16  # G2
+    # When k2_unit=env_steps: env interaction steps. When gradient_steps: K2 updates.
     train_env_steps: int = 50_000  # practical default; paper Table 5 K2=8000
+    # Paper §4.3.2: K2 is gradient steps; historical baseline used env steps.
+    k2_unit: str = "env_steps"  # env_steps | gradient_steps
     eval_episodes: int = 50  # E2
     horizon_steps: int = 100  # T_short
     algo: str = "a2c"
@@ -85,6 +88,8 @@ class Stage2Config:
     device: str = "cpu"
     # Do not LLM-mutate the current best-ever genome (prevents refine regression).
     protect_elite_refine: bool = True
+    # Inject best-ever genome into next population (non-paper elitism).
+    inject_elite: bool = True
 
 
 @dataclass
@@ -194,6 +199,28 @@ class StubPolicyTrainer(PolicyTrainer):
         )
 
 
+def resolve_stage2_env_steps(config: Stage2Config, num_processes: int) -> int:
+    """
+    Map configured K2 budget to env interaction steps.
+
+    - ``env_steps`` (baseline default): ``train_env_steps`` is already env steps.
+    - ``gradient_steps`` (paper §4.3.2): ``train_env_steps`` holds K2 *updates*;
+      env steps = K2 * num_steps * num_processes so that
+      ``num_updates = env_steps // num_steps // num_processes == K2``.
+    """
+    unit = str(getattr(config, "k2_unit", "env_steps")).strip().lower()
+    k2 = max(1, int(config.train_env_steps))
+    nproc = max(1, int(num_processes))
+    nsteps = max(1, int(config.num_steps))
+    if unit in ("env_steps", "env", "environment"):
+        return k2
+    if unit in ("gradient_steps", "gradient", "updates"):
+        return max(k2 * nsteps * nproc, k2)
+    raise ValueError(
+        f"Unknown k2_unit={config.k2_unit!r}; use env_steps or gradient_steps"
+    )
+
+
 def _stage2_train_argv(
     config: Stage2Config, candidate_id: str, round_index: int
 ) -> list:
@@ -201,6 +228,7 @@ def _stage2_train_argv(
         config.output_root, f"r{round_index:02d}_{candidate_id}"
     )
     nproc = resolve_num_processes(config.num_processes)
+    env_steps = resolve_stage2_env_steps(config, nproc)
     # A2C.update() always feeds a single mini-batch; SRNN uses
     # nenv // num_mini_batch, so these must match (same as train.py).
     if str(config.algo).lower() == "a2c":
@@ -216,7 +244,7 @@ def _stage2_train_argv(
         "--algo",
         config.algo,
         "--num-env-steps",
-        str(int(config.train_env_steps)),
+        str(int(env_steps)),
         "--num-processes",
         str(nproc),
         "--num-steps",
@@ -420,6 +448,8 @@ class RealPolicyTrainer(PolicyTrainer):
         console.status(
             f"training {candidate.candidate_id} round={round_index} "
             f"algo={config.algo} K2={config.train_env_steps} "
+            f"k2_unit={getattr(config, 'k2_unit', 'env_steps')} "
+            f"env_steps={algo_args.num_env_steps} "
             f"updates={num_updates} nproc={algo_args.num_processes}",
             stage="Stage II",
         )
@@ -976,6 +1006,8 @@ class Stage2Runner:
         self, population: List[RewardCandidate]
     ) -> List[RewardCandidate]:
         """Keep best-ever genome in the next round population (elitism)."""
+        if not bool(getattr(self.config, "inject_elite", True)):
+            return population
         elite = self.best_trained
         if elite is None or not population:
             return population

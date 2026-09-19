@@ -7,10 +7,13 @@ Reward ranks use cumulative sum(reward_fn.compute(state)) — never env-logged
 reward scalars. ``make_smoke_score_fn`` remains only as an opt-in fast-test
 fixture (``--score1 smoke`` / ``fast`` profile).
 
-Padding policy (baseline lock):
+Padding policy (baseline lock + Figure 3 fidelity):
   After a trajectory's real last frame, cumulative reward is **frozen** (no
-  further ``compute`` on repeated terminal states). Rule nav-length for
-  Success uses steps-so-far ``f + 1``, not the episode's final length.
+  further ``compute`` on repeated terminal states). For Success rule
+  tie-breaks, ``nav_length = min(f + 1, traj.length)``: no leak of a longer
+  episode's *future* length into early frames, but once a short Success has
+  ended its length stays short so Figure 3 (Success short ≻ Success long)
+  can differentiate at later frames.
 """
 
 from __future__ import annotations
@@ -145,8 +148,9 @@ def _scenario_frame_correlations(
             d_goal = dist_to_goal(
                 state.robot.px, state.robot.py, state.robot.gx, state.robot.gy
             )
-            # Steps elapsed up to and including frame f (no final-length leak).
-            nav_so_far = float(f + 1)
+            # Steps so far, capped at real traj length (Figure 3 short≻long
+            # after a short Success ends; no future-length leak while running).
+            nav_so_far = float(min(f + 1, int(traj.length)))
             rule_scores.append(
                 rule_preference_score(
                     categories[i], nav_length=nav_so_far, dist_goal=d_goal

@@ -1,8 +1,16 @@
 """
 Navigation fitness helpers for Stage II / III selection.
 
-Scalar used throughout EvoNav proxy/full ranking:
+**Deviation from EvoNav Algorithm 1 (arXiv:2605.11859):**
+Paper produces final rankings R2 / R3 via *LLM evaluation* of multi-objective
+metrics M(r) (Alg. 1 lines 20 and 30). This baseline instead uses a fixed
+engineering scalar for elite selection and best-trained tracking:
+
     SR - CR - 0.5 * TR
+
+NT, PL, ITR, and SD are logged on ProxyMetrics but are not part of this scalar.
+Treat any claim of paper-faithful R2/R3 ranking as false unless an LLM
+final-rank path is enabled and documented.
 """
 
 from __future__ import annotations
@@ -13,6 +21,7 @@ from crowd_nav.reward_search.evolver import RewardCandidate
 
 
 def navigation_scalar(sr: float, cr: float, tr: float) -> float:
+    """Baseline elite scalar (not the paper's LLM multi-objective rank)."""
     return float(sr) - float(cr) - 0.5 * float(tr)
 
 

@@ -157,9 +157,8 @@ def test_cumulative_reward_freezes_on_padding():
     assert reward.compute_calls == 2
 
 
-def test_success_rule_nav_length_is_steps_so_far_not_final():
-    """Bug #2: Success rule score must vary across frames (no final-length leak)."""
-    # Two success trajs of different final lengths in one scenario.
+def test_success_rule_nav_length_capped_at_traj_length():
+    """Figure 3: after short Success ends, nav_length stays short (no f+1 growth on pads)."""
     short = _traj(
         "s0",
         "short",
@@ -181,47 +180,103 @@ def test_success_rule_nav_length_is_steps_so_far_not_final():
     assert short.length == 3
     assert long.length == 5
 
-    # Pre-fix behavior would use final nav_length for every f → constant
-    # Success rule score across frames for a given traj.
-    final_short = rule_preference_score(
-        TrajectoryCategory.SUCCESS,
-        nav_length=float(short.nav_length),
-        dist_goal=0.0,
+    # At late frame index, short is capped at length 3; long still grows with f+1.
+    f_late = 4
+    short_nav = float(min(f_late + 1, short.length))
+    long_nav = float(min(f_late + 1, long.length))
+    assert short_nav == 3.0
+    assert long_nav == 5.0
+    short_rule = rule_preference_score(
+        TrajectoryCategory.SUCCESS, nav_length=short_nav, dist_goal=0.0
     )
-    final_scores = [
-        rule_preference_score(
-            TrajectoryCategory.SUCCESS,
-            nav_length=float(short.nav_length),
-            dist_goal=0.0,
-        )
-        for _f in range(5)
-    ]
-    assert all(s == final_short for s in final_scores)
+    long_rule = rule_preference_score(
+        TrajectoryCategory.SUCCESS, nav_length=long_nav, dist_goal=0.0
+    )
+    assert short_rule > long_rule
 
-    # Post-fix: steps-so-far f+1 varies across frames.
-    so_far_scores = [
-        rule_preference_score(
-            TrajectoryCategory.SUCCESS,
-            nav_length=float(f + 1),
-            dist_goal=0.0,
-        )
-        for f in range(5)
-    ]
-    assert len(set(so_far_scores)) == 5
-    # Shorter elapsed ⇒ higher preference among Success.
-    assert so_far_scores[0] > so_far_scores[-1]
+    # Early frames: both still running → same steps-so-far (no final-length leak).
+    f_early = 1
+    assert min(f_early + 1, short.length) == min(f_early + 1, long.length) == 2
 
-    # Integration: scenario correlations path uses so-far lengths (not finals).
     reward = _ElapsedStepsReward()
     corrs, n_pairs, n_deg = _scenario_frame_correlations([short, long], reward)
     assert n_pairs >= 1
-    # Cumulative must freeze after each traj's real end (no pad compute).
-    # short length 2 compute calls (reset between? one traj at a time)
-    # Re-run cumulative check on short with elapsed reward:
     r2 = _ElapsedStepsReward()
     totals = _cumulative_reward(r2, short, max_frame=4)
     assert r2._step == short.length
     assert totals[short.length - 1] == totals[-1]
+
+
+def test_score1_prefers_reward_that_ranks_short_success_above_long():
+    """
+    Two rewards agree on Success≻timeout≻collision but disagree on short vs long Success.
+    With min(f+1, len), Score1 must separate them (plain f+1 cannot).
+    """
+
+    class _ShortSuccessPrefer(RewardFunction):
+        """Higher cumulative on short Success; lower on long Success."""
+
+        def reset(self) -> None:
+            return None
+
+        def compute(self, state: RewardState) -> float:
+            if state.collision:
+                return -100.0
+            if state.timeout:
+                return -10.0
+            if state.reaching_goal:
+                # Prefer finishing early: bonus inverse to time.
+                return 50.0 - float(state.global_time)
+            return 0.1
+
+    class _LongSuccessPrefer(RewardFunction):
+        def reset(self) -> None:
+            return None
+
+        def compute(self, state: RewardState) -> float:
+            if state.collision:
+                return -100.0
+            if state.timeout:
+                return -10.0
+            if state.reaching_goal:
+                return 10.0 + float(state.global_time)
+            return 0.1
+
+    sid = "s_fig3"
+    short = _traj(
+        sid,
+        "short",
+        "success",
+        [(2.0, 0.0, 0.25), (0.1, 0.0, 0.5)],
+    )
+    long = _traj(
+        sid,
+        "long",
+        "success",
+        [
+            (5.0, 0.0, 0.25),
+            (4.0, 0.0, 0.5),
+            (3.0, 0.0, 0.75),
+            (2.0, 0.0, 1.0),
+            (0.1, 0.0, 1.25),
+        ],
+    )
+    timeout = _traj(
+        sid,
+        "to",
+        "timeout",
+        [(3.0, 0.0, 0.25), (3.0, 0.0, 0.5), (3.0, 0.0, 0.75)],
+    )
+    collide = _traj(
+        sid,
+        "col",
+        "collision",
+        [(1.0, 0.0, 0.25), (0.5, 0.0, 0.5)],
+    )
+    ds = {sid: [short, long, timeout, collide]}
+    s_short = float(score1_for_dataset(ds, _ShortSuccessPrefer()))
+    s_long = float(score1_for_dataset(ds, _LongSuccessPrefer()))
+    assert s_short > s_long
 
 
 def test_degenerate_fraction_flagged_for_constant_reward():
