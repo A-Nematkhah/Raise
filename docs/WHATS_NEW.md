@@ -61,4 +61,19 @@ success/collision/timeout و ORCA/SF/noise/random؛ میانگین یکتایی 
 
 ---
 
+## Surrogate + Active Learning — اسکلت و پلن فنی (۲۰۲۶-۰۹-۲۰)
+
+**قبل:** فقط در brainstorm بود؛ مسیر کد و قرارداد فیچر/برچسب مشخص نبود.
+
+**بعد:** دو بستهٔ اسکلت با stub و سند فنی اضافه شد:
+
+- `crowd_nav/reward_search/surrogate/` + `PLAN.md`
+- `crowd_nav/reward_search/active_learning/` + `PLAN.md`
+- `data/surrogate_dataset/`, `data/active_learning/`, `artifacts/surrogate/`
+- CLI stub: `scripts/bootstrap_surrogate.py`, `scripts/run_active_learning_step.py`
+
+منطق هنوز `NotImplementedError` است؛ ترتیب کار: اول Surrogate v1، بعد AL.
+
+---
+
 *ادامهٔ تغییرات بعدی از همین‌جا اضافه شود.*
