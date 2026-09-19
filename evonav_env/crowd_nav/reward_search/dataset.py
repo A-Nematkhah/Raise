@@ -311,3 +311,40 @@ def build_synthetic_scenario(
         else:
             out.append(t)
     return out
+
+
+def split_stage1_dataset(
+    dataset: Stage1Dataset,
+    *,
+    holdout_fraction: float = 0.3,
+    seed: int = 425,
+) -> Tuple[Stage1Dataset, Stage1Dataset]:
+    """
+    Split by **scenario id** (keeps within-scenario traj groups intact).
+
+    With fewer than 2 scenarios, returns ``(dataset, {})`` — no holdout.
+    Always keeps at least one scenario in train when a holdout is created.
+    """
+    import random
+
+    if not dataset:
+        return {}, {}
+    frac = float(holdout_fraction)
+    if frac <= 0.0:
+        return dict(dataset), {}
+    if frac >= 1.0:
+        raise ValueError("holdout_fraction must be in [0, 1)")
+
+    ids = sorted(str(k) for k in dataset.keys())
+    if len(ids) < 2:
+        return dict(dataset), {}
+
+    rng = random.Random(int(seed))
+    shuffled = ids[:]
+    rng.shuffle(shuffled)
+    n_hold = max(1, int(round(len(shuffled) * frac)))
+    n_hold = min(n_hold, len(shuffled) - 1)
+    hold_ids = set(shuffled[:n_hold])
+    train = {k: list(v) for k, v in dataset.items() if str(k) not in hold_ids}
+    holdout = {k: list(v) for k, v in dataset.items() if str(k) in hold_ids}
+    return train, holdout

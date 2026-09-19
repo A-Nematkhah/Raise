@@ -28,11 +28,15 @@ def make_score_fn(
     *,
     mode: str = "dataset",
     dataset_path: Optional[str] = None,
+    holdout_fraction: float = 0.3,
+    split_seed: int = 425,
 ) -> Tuple[Callable[..., Any], Optional[Any]]:
     """
     Build Stage I ``score_fn`` for CrowdNav.
 
     Returns ``(score_fn, dataset_or_None)``. Dataset is ``None`` for smoke mode.
+    Dataset mode uses train/holdout split + degenerate hard-reject (see
+    ``make_score1_fn``).
     """
     key = str(mode).strip().lower()
     if key == "smoke":
@@ -57,6 +61,16 @@ def make_score_fn(
         )
     dataset = load_stage1_dataset(path)
     logger.info(
-        "Loaded Stage I dataset from %s (%d scenarios)", path, len(dataset)
+        "Loaded Stage I dataset from %s (%d scenarios; holdout_fraction=%.2f)",
+        path,
+        len(dataset),
+        float(holdout_fraction),
     )
-    return make_score1_fn(dataset), dataset
+    return (
+        make_score1_fn(
+            dataset,
+            holdout_fraction=float(holdout_fraction),
+            split_seed=int(split_seed),
+        ),
+        dataset,
+    )

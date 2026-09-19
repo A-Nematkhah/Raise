@@ -280,7 +280,7 @@ def test_score1_prefers_reward_that_ranks_short_success_above_long():
 
 
 def test_degenerate_fraction_flagged_for_constant_reward():
-    """Bug #3: constant reward across trajs → high degenerate_fraction, not silent."""
+    """Constant reward → high degenerate_fraction and hard-reject (-inf)."""
     sid = "s_deg"
     # Same-category Success trajs so rule ranks can still vary via nav-so-far,
     # but constant reward → Spearman NaN on reward side.
@@ -292,21 +292,13 @@ def test_degenerate_fraction_flagged_for_constant_reward():
         [(3.0, 0.0, 0.25), (2.0, 0.0, 0.5), (1.0, 0.0, 0.75), (0.1, 0.0, 1.0)],
     )
     ds = {sid: [t_a, t_b]}
-    # Constant reward → all cumulatives identical ranks → Spearman NaN every frame.
-    # If every frame is degenerate, score1 raises (no finite scenario means).
-    try:
-        result = score1_for_dataset(ds, _ConstantReward())
-    except ValueError as exc:
-        assert "no scoreable" in str(exc)
-        # Still verify frame-level counters via the lower helper.
-        corrs, n_pairs, n_deg = _scenario_frame_correlations(
-            [t_a, t_b], _ConstantReward()
-        )
-        assert corrs == []
-        assert n_pairs >= 1
-        assert n_deg == n_pairs
-        return
-
+    result = score1_for_dataset(ds, _ConstantReward())
     assert isinstance(result, Score1Result)
     assert result.n_pairs >= 1
     assert result.degenerate_fraction >= 0.5
+    assert result.rejected is True
+    assert result.score == float("-inf")
+    corrs, n_pairs, n_deg = _scenario_frame_correlations([t_a, t_b], _ConstantReward())
+    assert corrs == []
+    assert n_pairs >= 1
+    assert n_deg == n_pairs

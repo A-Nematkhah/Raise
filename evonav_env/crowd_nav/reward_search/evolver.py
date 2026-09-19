@@ -28,6 +28,7 @@ from crowd_nav.reward_search.llm import (
     normalize_to_compute_reward,
     split_reward_function_sources,
 )
+from crowd_nav.reward_search.scoring import Score1Result, format_score1_failure_hints
 from crowd_nav.reward_search import console
 from crowd_nav.reward_search.prompts import (
     D1_SYSTEM_PROMPT,
@@ -464,13 +465,35 @@ class StageIEvolver:
                 meta["score1_n_degenerate"] = int(
                     getattr(raw, "n_degenerate", 0) or 0
                 )
-                if float(raw.degenerate_fraction) >= 0.5:
+                if isinstance(raw, Score1Result):
+                    hints = format_score1_failure_hints(raw)
+                    if hints:
+                        meta["score1_failure_hints"] = hints
+                    if raw.scenario_scores:
+                        meta["score1_scenario_scores"] = dict(raw.scenario_scores)
+                if getattr(raw, "rejected", False):
+                    meta["score1_rejected"] = True
+                    meta["score1_reject_reason"] = getattr(raw, "reject_reason", None)
+                    value = float("-inf")
+                    console.warn(
+                        f"{cand.candidate_id}: Score1 hard-reject "
+                        f"({getattr(raw, 'reject_reason', 'unknown')}; "
+                        f"degen={float(raw.degenerate_fraction):.2%})",
+                        stage="Stage I",
+                    )
+                elif float(raw.degenerate_fraction) >= 0.5:
                     console.warn(
                         f"{cand.candidate_id}: high Score1 degeneracy "
                         f"({float(raw.degenerate_fraction):.2%} of pairs "
                         f"had undefined Spearman)",
                         stage="Stage I",
                     )
+                if getattr(raw, "holdout_score", None) is not None:
+                    meta["score1_holdout"] = float(raw.holdout_score)
+                if getattr(raw, "train_score", None) is not None:
+                    meta["score1_train"] = float(raw.train_score)
+                if getattr(raw, "raw_score", None) is not None:
+                    meta["score1_raw"] = float(raw.raw_score)
             else:
                 value = float(raw)
             scored.append(replace(cand, score=value, metadata=meta))
@@ -521,6 +544,11 @@ class StageIEvolver:
             f"Weakness focus: improve analytical Score1 relative to elites. "
             f"Global reflection: {reflection}"
         )
+        parent_hints = (parent.metadata or {}).get("score1_failure_hints")
+        if parent_hints:
+            weakness = (
+                f"{weakness}\nScore1 diagnostics for this parent: {parent_hints}"
+            )
         prompt = format_d2_mutation(
             parent.code,
             weakness,
@@ -707,6 +735,20 @@ class StageIEvolver:
             f"Prefer combining elite safety terms with efficient progress; "
             f"avoid near-constant rewards."
         )
+        diag_bits = []
+        for c in (worst, *(lower[:2])):
+            hints = (c.metadata or {}).get("score1_failure_hints")
+            if hints:
+                diag_bits.append(f"{c.candidate_id}: {hints}")
+        if diag_bits:
+            # Deduplicate while preserving order.
+            seen = set()
+            uniq = []
+            for b in diag_bits:
+                if b not in seen:
+                    seen.add(b)
+                    uniq.append(b)
+            note = note + " Diagnostics: " + " | ".join(uniq[:3])
         if not self.reflection.strip():
             return note
         parts = [p.strip() for p in self.reflection.split(" || ") if p.strip()]
