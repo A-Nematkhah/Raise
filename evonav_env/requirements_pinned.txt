@@ -25,5 +25,9 @@ tqdm==4.66.1
 # EvoNav Algorithm 1 (optional — only for --llm groq)
 groq>=1.0.0
 
+# Surrogate v1 (Stage II short metric predictor)
+scikit-learn>=1.2.0,<1.6
+joblib>=1.2.0
+
 # Development / CI
 pytest>=7.0.0

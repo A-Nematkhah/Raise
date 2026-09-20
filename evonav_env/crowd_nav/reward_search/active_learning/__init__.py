@@ -1,10 +1,17 @@
 """
 Active learning package (targeted data / label acquisition).
 
-See ``PLAN.md``. Depends on surrogate uncertainty + Stage I collector hooks.
-Do not enable in the main pipeline until surrogate bootstrap v1 exists.
+See ``PLAN.md`` (locked v1). Depends on Surrogate v1 uncertainty + SR/CR/TR API.
+Do not enable in the main pipeline until deliberately wired.
 """
 
 from __future__ import annotations
 
-__all__: list[str] = []
+from crowd_nav.reward_search.active_learning.loop import run_active_learning_step
+from crowd_nav.reward_search.active_learning.query import QueryItem, score_queries
+
+__all__ = [
+    "QueryItem",
+    "score_queries",
+    "run_active_learning_step",
+]

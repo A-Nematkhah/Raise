@@ -1,21 +1,40 @@
-# Surrogate — Technical Plan
+# Surrogate — Technical Plan (LOCKED v1)
 
-**Status:** skeleton only (stubs raise `NotImplementedError`).  
+**Status:** implementation in progress (contract locked 2026-09-20).  
 **Package:** `crowd_nav.reward_search.surrogate`  
 **Data root:** `evonav_env/data/surrogate_dataset/`  
 **Artifact root:** `evonav_env/artifacts/surrogate/`  
-**Depends on:** Stage I dataset + Score1 (`scoring.py`), optional Stage II trainer via Domain Pack.
+**Depends on:** Stage I Score1 (`scoring.py`) + Domain Pack Stage II trainer.  
+**Sibling:** Active Learning consumes this API later — **out of scope for v1**.
 
-This document is the implementation contract for the first working version. Active Learning consumes this API but lives in a sibling package.
+This document is the **locked** implementation contract for Surrogate v1.  
+Do not silently change schema / targets without bumping `FEATURE_SCHEMA_VERSION` / `LABEL_SCHEMA_VERSION` and a `docs/WHATS_NEW.md` entry.
+
+---
+
+## 0. Locked decisions (2026-09-20)
+
+| # | Decision | Locked choice |
+|---|----------|---------------|
+| L1 | Role | Cheap predictor of **Stage II short** proxy metrics — **not** paper Stage III / K3 claims |
+| L2 | Primary train targets | **`SR`, `CR`, `TR`** (multi-output). Not the engineering scalar |
+| L3 | `scalar` field | Still **written** into labels as `SR - CR - 0.5*TR` for logging / back-compat; **not** the fit target |
+| L4 | Ranking policy at predict time | Derive later from \(\hat{SR},\hat{CR},\hat{TR}\) (lex / thresholds). Do **not** train on LLM R2 rank ids |
+| L5 | Model | `sklearn` + `joblib`; ensemble of `RandomForestRegressor` (default 5 bags) |
+| L6 | Uncertainty | Mean of per-target ensemble std → `SurrogatePrediction.uncertainty ≥ 0` |
+| L7 | Pipeline gate | **Deferred** — no `EvoNavPipeline` wiring in v1 |
+| L8 | Active Learning | **After** v1 green; do not implement in this pass |
+| L9 | `--fast` | Stub Stage II + smoke Score1; `n_candidates ≤ 4`; no GPU |
+| L10 | Deps | Add `scikit-learn` + `joblib` to pinned requirements |
 
 ---
 
 ## 1. Goal
 
-Train a **cheap regressor/classifier** that maps inexpensive features of a reward candidate to **expensive proxy outcomes** (primarily short Stage II metrics), so Algorithm 1 / AMFRS can:
+Train a **cheap regressor** that maps inexpensive features of a reward candidate to **Stage II short outcomes** so Algorithm 1 / later AMFRS can:
 
 - drop hopeless candidates before long Stage II/III;
-- rank promotion priority;
+- rank promotion priority from predicted metrics;
 - expose **uncertainty** that Active Learning will query.
 
 The surrogate is **not** a substitute for paper-claim Stage III numbers. Final tables still come from real PPO / H-sweep.
@@ -31,11 +50,11 @@ For candidate \(c\):
 u(c) = U\bigl(f_\theta, x(c)\bigr)
 \]
 
-- \(x(c)\): feature vector (Score1 diagnostics, code/behavior fingerprints, optional short-rollout stats).
-- \(y(c)\): label vector from a **labeling budget** (v1 default = Stage II short train+eval metrics).
-- \(u(c)\): scalar uncertainty (ensemble std, distance to train set, or predictive variance).
+- \(x(c)\): feature vector (Score1 diagnostics, code/behavior fingerprints).
+- \(y(c)\): label vector from labeling budget `stage2_short` — full proxy metrics; **fit on `SR,CR,TR`**.
+- \(u(c)\): scalar uncertainty (ensemble std).
 
-**Decision hook (pipeline later):**
+**Decision hook (pipeline later — not v1):**
 
 ```text
 if u(c) high           -> defer / enqueue Active Learning
@@ -44,11 +63,14 @@ elif ŷ strong           -> promote toward Stage II/III
 else                    -> keep in normal evolution path
 ```
 
+Weak/strong may use lex on \((\hat{SR},-\hat{CR},-\hat{TR})\) or per-metric thresholds — configurable later.
+
 ---
 
 ## 3. Features \(x(c)\) — schema v1
 
-Implement in `features.extract_candidate_features`.
+Implement in `features.extract_candidate_features`.  
+`FEATURE_SCHEMA_VERSION = "1"`.
 
 | Key | Type | Source | Notes |
 |-----|------|--------|-------|
@@ -56,7 +78,7 @@ Implement in `features.extract_candidate_features`.
 | `candidate_id` | str | candidate | logging only; **do not** train on raw id |
 | `code_hash` | str | SHA256 of normalized code | collision check / dedup |
 | `code_len` | int | len(code) | cheap complexity proxy |
-| `score1` | float | Score1Result.score | after gates (−inf → missing / reject flag) |
+| `score1` | float | Score1Result.score | after gates (−inf → train as NaN + rejected flag) |
 | `score1_raw` | float? | raw_score | before reject clamp |
 | `score1_holdout` | float? | holdout_score | |
 | `score1_train` | float? | train_score | |
@@ -64,6 +86,7 @@ Implement in `features.extract_candidate_features`.
 | `score1_rejected` | bool | rejected | |
 | `score1_reject_reason` | str? | | |
 | `score1_worst_k` | list[{sid, rho}] | from scenario_scores | top-3 worst |
+| `score1_worst_mean` | float? | mean rho of worst_k | **trainable** numeric |
 | `behavior_fingerprint` | list[float] | reward on fixed smoke states | length = n_smoke |
 | `label_budget` | str | e.g. `stage2_short` | which y protocol was used when labeling |
 
@@ -71,19 +94,24 @@ Implement in `features.extract_candidate_features`.
 
 - All values JSON-serializable.
 - Missing optional fields → `null`.
-- Rejected Score1 candidates may still be labeled once for negative examples, or skipped (config flag `label_rejected`).
+- Rejected Score1 candidates may still be labeled once for negative examples (`label_rejected=True` default in bootstrap).
+
+**Trainable columns (model vectorizer):**  
+`code_len`, `score1` (finite or NaN), `score1_raw`, `score1_holdout`, `score1_train`, `score1_degen`, `score1_rejected` (0/1), `score1_worst_mean`, `behavior_fingerprint[*]`.
 
 ---
 
 ## 4. Labels \(y(c)\) — schema v1
 
+`LABEL_SCHEMA_VERSION = "1"`.  
 Default labeling protocol: **`stage2_short`**.
 
 | Key | Type | Meaning |
 |-----|------|---------|
-| `SR`, `CR`, `TR`, `NT`, `PL`, `ITR`, `SD` | float | last Stage II proxy metrics |
-| `scalar` | float | `SR - CR - 0.5*TR` (engineering target for v1) |
-| `env_steps` | int | actual env steps used |
+| `example_id` | str | same as features row |
+| `SR`, `CR`, `TR`, `NT`, `PL`, `ITR`, `SD` | float | Stage II proxy metrics |
+| `scalar` | float | `SR - CR - 0.5*TR` (**log only**; not fit target) |
+| `env_steps` | int | actual env steps used (0 for stub) |
 | `k2_unit` | str | `env_steps` \| `gradient_steps` |
 | `train_steps_config` | int | configured K2 |
 | `eval_episodes` | int | E2 used |
@@ -91,10 +119,8 @@ Default labeling protocol: **`stage2_short`**.
 | `seed` | int | | 
 | `ok` | bool | trainer finished without crash |
 
-Optional later protocol `stage3_short` (subset of candidates): same metric keys + `stage=stage3`.
-
-**Primary regression target for v1:** `scalar`.  
-Secondary (multi-output later): `SR`, `CR`, `TR`.
+**Primary regression targets for v1:** `SR`, `CR`, `TR`.  
+Stored but not fit: `NT`, `PL`, `ITR`, `SD`, `scalar`.
 
 ---
 
@@ -104,20 +130,20 @@ Implement `bootstrap.run_bootstrap` + CLI `scripts/bootstrap_surrogate.py`.
 
 ### Steps (in order)
 
-1. **Ensure Stage I dataset** exists at `stage1_dataset_path` (fail with message to run collector; do not silently collect M=100 inside bootstrap unless `--collect-stage1`).
+1. **Ensure Stage I dataset** exists at `stage1_dataset_path` when not `--fast` / smoke (fail with message to run collector; do not silently collect M=100 unless `--collect-stage1` — optional, not required in v1).
 2. **Idempotency:** if `model_dir/metrics.json` exists and `force=False` and manifest fingerprint matches current feature schema → return early.
 3. **Build label population** (`n_candidates`):
    - always include seed / D5 reward if valid;
-   - fill with LLM Gen0 (`--llm`) or scripted diverse rewards when `--llm seed`;
+   - fill with LLM Gen0 (`--llm`) or `SeedVariantLLMClient` when `--llm seed`;
    - sandbox-validate; skip invalids; dedupe by `code_hash`.
 4. **For each candidate:**
-   - run Score1 via `make_score1_fn`;
+   - run Score1 via domain `make_score_fn` (smoke under `--fast`);
    - `x = extract_candidate_features(...)`;
    - train+eval Stage II short via Domain Pack trainer (`use_stub` for `--fast`);
-   - `y = metrics dict`;
+   - `y = metrics dict` (+ `scalar`);
    - `dataset_io.append_example`.
-5. **Fit** `SurrogateModel` on all rows with train/val split (e.g. 80/20, grouped by `code_hash`).
-6. **Save** model + `metrics.json` (val RMSE / MAE on `scalar`, Spearman of ranks) + update dataset `manifest.json`.
+5. **Fit** `SurrogateModel` on all rows with train/val split (e.g. 80/20, grouped by `code_hash` when possible).
+6. **Save** model + `metrics.json` (per-target val RMSE / MAE + Spearman of ranks for each of SR/CR/TR) + update dataset `manifest.json`.
 
 ### Suggested CLI
 
@@ -126,14 +152,14 @@ python scripts/bootstrap_surrogate.py \
   --stage1-dataset data/stage1_dataset \
   --n-candidates 60 \
   --stage2-train-steps 8000 \
-  --k2-unit env_steps \
+  --k2-unit gradient_steps \
   --out data/surrogate_dataset \
   --model-out artifacts/surrogate \
   --llm seed \
   --device cpu
 ```
 
-`--fast`: stub trainer, `n_candidates<=4`, tiny steps (for tests).
+`--fast`: stub trainer, smoke Score1, `n_candidates<=4`, tiny steps (for tests).
 
 ### Resume
 
@@ -149,37 +175,39 @@ python scripts/bootstrap_surrogate.py \
 data/surrogate_dataset/
   features.jsonl      # one JSON object per line
   labels.jsonl        # aligned by example_id
-  manifest.json       # n, schema_version, budgets, created_at, git_commit?
+  manifest.json       # n, schema versions, budgets, created_at
 
 artifacts/surrogate/
-  model.joblib        # or model.pkl
+  model.joblib
   metrics.json
   feature_columns.json
-  config.json         # hyperparams, target_keys
+  config.json         # hyperparams, target_keys=["SR","CR","TR"]
 ```
 
-Both trees are local artifacts; prefer gitignoring large model blobs if needed later.
+Gitignore large `*.joblib` under `artifacts/surrogate/` if needed; keep `metrics.json` / `config.json` optional.
 
 ---
 
-## 7. Model v1 (keep simple)
+## 7. Model v1 (locked)
 
-- **Library:** `sklearn` pipeline (or LightGBM if already easy to vendor). Prefer sklearn for fewer deps.
-- **Model:** `HistGradientBoostingRegressor` or `RandomForestRegressor` on `scalar`.
-- **Uncertainty v1:** std across an ensemble of 5 forests / bootstrap bags, **or** absolute residual magnitude from a holdout calibrator. Expose as `SurrogatePrediction.uncertainty`.
+- **Library:** `sklearn` + `joblib`.
+- **Model:** ensemble of `n_estimators_bags` (default **5**) `RandomForestRegressor` wrappers; each bag predicts all three targets (one multi-output RF or three single-output RFs — implementation may use `MultiOutputRegressor`).
+- **Targets:** `("SR", "CR", "TR")`.
+- **Uncertainty:** mean of per-target std across bags.
 - **Do not** deep-learn transformers over code in v1.
 
-API: `SurrogateModel.fit / predict / save / load` in `model.py`.
+API: `SurrogateModel.fit / predict / save / load` in `model.py`.  
+`SurrogatePrediction.y_hat` must include at least `SR`, `CR`, `TR` (floats).
 
 ---
 
 ## 8. Pipeline integration (after bootstrap works)
 
-**Do not block tomorrow’s first PR on this.** Second PR:
+**Out of scope for v1 first PR.** Second PR:
 
 - `EvoNavRunConfig.surrogate_model_dir: Optional[str]`
-- After Stage I (or after each Stage II round): call `predict`; write `surrogate_preds.json` under run output.
-- Gate Stage III population: drop bottom fraction by ŷ if `u` below threshold.
+- After Stage I (or after each Stage II round): call `predict`; write `surrogate_preds.json`.
+- Gate Stage III population: drop bottom fraction by predicted quality if `u` below threshold.
 
 Manifest fields: `surrogate_enabled`, `surrogate_metrics`, `n_dropped_by_surrogate`.
 
@@ -191,17 +219,17 @@ Manifest fields: `surrogate_enabled`, `surrogate_metrics`, `n_dropped_by_surroga
 |------|--------|
 | `test_feature_schema_serializable` | extract on fake candidate → json roundtrip |
 | `test_dataset_io_roundtrip` | append + load_table length match |
-| `test_bootstrap_fast_stub` | `--fast` writes model + metrics without GPU |
-| `test_predict_shape` | loaded model returns finite scalar + uncertainty≥0 |
+| `test_bootstrap_fast_stub` | `--fast` / `run_bootstrap(use_stub=True)` writes model + metrics without GPU |
+| `test_predict_shape` | loaded model returns finite `SR/CR/TR` + `uncertainty≥0` |
 
 ---
 
 ## 10. Acceptance criteria for “done v1”
 
-1. One command bootstrap produces non-empty jsonl + loadable model.  
-2. Val Spearman(rank ŷ, rank y) reported in `metrics.json` (even if low).  
+1. One command bootstrap (`--fast` or real) produces non-empty jsonl + loadable model.  
+2. Val Spearman(rank \(\hat{y}_k\), rank \(y_k\)) reported in `metrics.json` for each of SR/CR/TR (even if low).  
 3. Stubs replaced; `NotImplementedError` gone on happy path.  
-4. No change to paper Stage III claim path unless flag explicitly set.  
+4. No change to paper Stage III claim path.  
 5. Entry noted in `docs/WHATS_NEW.md`.
 
 ---
@@ -210,17 +238,22 @@ Manifest fields: `surrogate_enabled`, `surrogate_metrics`, `n_dropped_by_surroga
 
 - Predicting full paper K3=1e7 outcomes accurately.
 - Replacing Score1.
-- Joint training with Active Learning loop (AL only **consumes** uncertainty later).
+- Training on LLM R2/R3 rank positions.
+- Changing global `selection.navigation_scalar` / pipeline `final_rank`.
+- Joint training with Active Learning loop.
 - Multi-domain packs beyond CrowdNav.
+- Wiring surrogate gates into `EvoNavPipeline`.
 
 ---
 
-## 12. Suggested implementation order (tomorrow)
+## 12. Implementation order (this pass)
 
-1. `dataset_io` + empty manifest writer  
-2. `features` (Score1 + smoke fingerprint + code_hash)  
-3. `model` sklearn fit/save/load  
-4. `bootstrap` with stub Stage II  
-5. CLI script + pytest `--fast`  
-6. Real Stage II labeling pass on a small `n_candidates`  
-7. (Later) pipeline gate + WHATS_NEW entry  
+1. Lock this document ← **done**  
+2. `dataset_io` + empty manifest writer  
+3. `features` (Score1 + smoke fingerprint + code_hash)  
+4. `model` sklearn multi-output SR/CR/TR + uncertainty  
+5. `bootstrap` with stub Stage II + CLI `--fast`  
+6. pytest suite §9  
+7. `docs/WHATS_NEW.md` entry  
+8. (Later) real Stage II labeling on small `n_candidates`  
+9. (Later) pipeline gate + AL  

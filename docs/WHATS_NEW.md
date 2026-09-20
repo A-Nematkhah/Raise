@@ -76,4 +76,49 @@ success/collision/timeout و ORCA/SF/noise/random؛ میانگین یکتایی 
 
 ---
 
+## Surrogate v1 — قفل قرارداد + پیاده‌سازی bootstrap (۲۰۲۶-۰۹-۲۰)
+
+**قبل:** اسکلت با `NotImplementedError`؛ target پیشنهادی پلن اولیه `scalar` بود؛ به pipeline وصل نبود.
+
+**بعد (قفل‌شده):**
+
+- `PLAN.md` با تصمیم‌های L1–L10 قفل شد: هدف آموزش **`SR, CR, TR`** (نه scalar)؛
+  `scalar` فقط در لیبل برای لاگ/سازگاری نوشته می‌شود.
+- پیاده‌سازی: `dataset_io`, `features`, `model` (ensemble RF + uncertainty)،
+  `bootstrap.run_bootstrap`, CLI واقعی `scripts/bootstrap_surrogate.py`.
+- تست‌ها: `crowd_nav/reward_search/tests/test_surrogate.py` (شامل `--fast` / stub).
+- وابستگی: `scikit-learn` + `joblib` در `requirements_pinned.txt`.
+- **هنوز** به `EvoNavPipeline` وصل نیست؛ Active Learning همچنان بعد از این است.
+
+اجرای سریع wiring:
+
+```bash
+cd evonav_env
+python scripts/bootstrap_surrogate.py --fast --force --out data/surrogate_dataset --model-out artifacts/surrogate
+```
+
+---
+
+## Active Learning v1 — روی Surrogate (۲۰۲۶-۰۹-۲۰)
+
+**قبل:** فقط stub + `PLAN.md`؛ بدون صف پایدار یا acquire واقعی.
+
+**بعد:**
+
+- `query.score_queries` با وزن‌های uncertainty / disagreement / borderline / diversity
+- صف jsonl پایدار (`queue` / `done` / `steps` / `manifest`)
+- `acquire`: `stage2_label` کامل (reuse `label_and_append_candidate`)؛
+  `stage1_scenario` امن به‌صورت request در `stage1_extra/` (بدون دست‌زدن به npz مقاله)
+- `loop.run_active_learning_step` + CLI `scripts/run_active_learning_step.py`
+  (بدون مدل → exit 2 / `Surrogate model required`؛ `--force-refit` مدل را دوباره fit می‌کند)
+- تست‌ها: `tests/test_active_learning.py`
+- هنوز به `EvoNavPipeline` وصل نیست (opt-in بعدی)
+
+```bash
+python scripts/run_active_learning_step.py --surrogate artifacts/surrogate --fast \
+  --candidates results/<run>/stage1_population.json --force-refit
+```
+
+---
+
 *ادامهٔ تغییرات بعدی از همین‌جا اضافه شود.*

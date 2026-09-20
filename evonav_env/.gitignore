@@ -23,6 +23,16 @@ dist/
 # Local run artifacts (regenerate via scripts/)
 results/
 data/stage1_dataset/
+data/surrogate_dataset/*.jsonl
+data/surrogate_dataset/manifest.json
+data/active_learning/queue.jsonl
+data/active_learning/done.jsonl
+data/active_learning/steps.jsonl
+data/active_learning/manifest.json
+data/active_learning/stage1_extra/
+artifacts/surrogate/**
+!artifacts/surrogate/.gitkeep
+!data/active_learning/.gitkeep
 .pip_cache/
 .tmp/
 
