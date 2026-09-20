@@ -330,11 +330,13 @@ def _collect_dataset_impl(
         sid = f"scenario_{j:03d}"
         trajs: List[TrajectoryRecord] = []
         for t_idx, (policy_name, noise, is_random) in enumerate(schedule):
-            # Same scenario layout (case_counter=j, thisSeed=base_seed); diversify
-            # stochastic behaviors with a per-trajectory RNG stream.
+            # Same scenario layout (case_counter=j, thisSeed=base_seed).
+            # IMPORTANT: env.reset() reseeds np.random from scenario only — so
+            # diversify stochastic rollouts *after* reset, otherwise every
+            # random traj in a scenario is bit-identical.
             traj_seed = int(base_seed) + int(j) * 10007 + int(t_idx) * 97
-            np.random.seed(traj_seed)
             _reset_scenario(env, scenario_id=j, base_seed=base_seed)
+            np.random.seed(traj_seed)
             if not is_random:
                 _set_robot_policy(env, cfg, policy_name)
             behavior = (

@@ -187,6 +187,43 @@ def main() -> int:
             "seed falls back to lex); scalar=SR-CR-0.5TR engineering baseline"
         ),
     )
+    parser.add_argument(
+        "--surrogate",
+        type=str,
+        default=None,
+        help=(
+            "Path to fitted surrogate dir (must contain model.joblib). "
+            "Enables Stage I predict + optional Stage III gate."
+        ),
+    )
+    parser.add_argument(
+        "--no-surrogate-gate",
+        action="store_true",
+        help="With --surrogate, still predict but do not drop candidates before Stage III",
+    )
+    parser.add_argument(
+        "--surrogate-drop-fraction",
+        type=float,
+        default=0.25,
+        help="Fraction of Stage II pop to drop when confident-weak (default 0.25)",
+    )
+    parser.add_argument(
+        "--active-learning",
+        action="store_true",
+        help="After Stage I, run one AL step (requires --surrogate with a fitted model)",
+    )
+    parser.add_argument(
+        "--al-max-queries",
+        type=int,
+        default=3,
+        help="Max AL acquire queries after Stage I (default 3)",
+    )
+    parser.add_argument(
+        "--surrogate-dataset",
+        type=str,
+        default="data/surrogate_dataset",
+        help="Surrogate label jsonl root for AL append/refit",
+    )
 
     args = parser.parse_args()
 
@@ -252,6 +289,12 @@ def main() -> int:
         stage3_run_h_sweep=not args.no_h_sweep,
         elitism=bool(args.elitism),
         final_rank=args.final_rank,
+        surrogate_model_dir=args.surrogate,
+        surrogate_dataset=args.surrogate_dataset,
+        surrogate_gate_stage3=not bool(args.no_surrogate_gate),
+        surrogate_drop_fraction=float(args.surrogate_drop_fraction),
+        active_learning=bool(args.active_learning),
+        active_learning_max_queries=int(args.al_max_queries),
         device=args.device,
         num_processes=args.num_processes,
         randomization_regime=args.regime,

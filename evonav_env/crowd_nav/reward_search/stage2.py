@@ -40,6 +40,7 @@ from crowd_nav.reward_search.parallelism import (
     default_num_mini_batch,
     resolve_num_processes,
 )
+from crowd_nav.reward_search.proxy_consistency import genome_key
 from crowd_nav.reward_search.prompts import (
     D3_SYSTEM_PROMPT,
     format_d3_refinement,
@@ -142,10 +143,29 @@ def _stable_code_hash(code: str) -> int:
     return int(hashlib.md5(code.encode("utf-8")).hexdigest(), 16) % 10_000
 
 
+def _next_revision_id(candidate_id: str, *, stage_tag: str = "v2") -> str:
+    """
+    Tag a successful refine as ``*_v{n}`` with a monotonically increasing n.
+
+    Previously always forced ``_v2``, so later refinements of the same lineage
+    collided on one id and broke ``pick_candidate_by_ranking``.
+    """
+    m = re.search(r"_v(\d+)$", candidate_id)
+    if m:
+        return f"{candidate_id[: m.start()]}_v{int(m.group(1)) + 1}"
+    # Prefer stage-default first suffix (v2 for Stage II, v3 for Stage III).
+    n = 2 if stage_tag == "v2" else 3 if stage_tag == "v3" else 2
+    return f"{candidate_id}_v{n}"
+
+
 def _v2_candidate_id(candidate_id: str) -> str:
-    """Tag a successfully refined Stage-II revision as ``*_v2``."""
-    base = re.sub(r"_v\d+$", "", candidate_id)
-    return f"{base}_v2"
+    """Tag a successfully refined Stage-II revision (incrementing ``_vN``)."""
+    return _next_revision_id(candidate_id, stage_tag="v2")
+
+
+def _unique_trained_snapshot_id(candidate_id: str, *, round_index: int, snap_index: int) -> str:
+    """Disambiguate trained snapshots that share a genome id across rounds."""
+    return f"{candidate_id}__r{int(round_index)}_s{int(snap_index)}"
 
 
 # ---------------------------------------------------------------------------
@@ -739,14 +759,21 @@ class Stage2Runner:
         checkpoint_path: Optional[str] = None,
     ) -> RewardCandidate:
         """Freeze the genome that produced ``metrics`` (before any LLM refine)."""
+        source_id = str(candidate.candidate_id)
+        snap_index = len(self.trained_snapshots)
         snapshot = replace(
             candidate,
+            candidate_id=_unique_trained_snapshot_id(
+                source_id, round_index=round_index, snap_index=snap_index
+            ),
             metadata={
                 **(candidate.metadata or {}),
                 "last_metrics": metrics.as_dict(),
                 "checkpoint_path": checkpoint_path,
                 "trained_round": int(round_index),
                 "trained_snapshot": True,
+                "source_candidate_id": source_id,
+                "genome_key": genome_key(candidate.code),
             },
         )
         self.trained_snapshots.append(snapshot)
@@ -882,6 +909,8 @@ class Stage2Runner:
                             "last_metrics": metrics.as_dict(),
                             "repair_attempted": True,
                             "repair_succeeded": True,
+                            "parent_genome_key": genome_key(candidate.code),
+                            "parent_id": candidate.candidate_id,
                         },
                     )
                 else:
@@ -951,6 +980,7 @@ class Stage2Runner:
                 "refine_kept_previous": False,
                 "parent_metrics": metrics.as_dict(),
                 "parent_id": candidate.candidate_id,
+                "parent_genome_key": genome_key(candidate.code),
             },
         )
 

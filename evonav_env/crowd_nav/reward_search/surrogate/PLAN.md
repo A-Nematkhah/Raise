@@ -22,8 +22,8 @@ Do not silently change schema / targets without bumping `FEATURE_SCHEMA_VERSION`
 | L4 | Ranking policy at predict time | Derive later from \(\hat{SR},\hat{CR},\hat{TR}\) (lex / thresholds). Do **not** train on LLM R2 rank ids |
 | L5 | Model | `sklearn` + `joblib`; ensemble of `RandomForestRegressor` (default 5 bags) |
 | L6 | Uncertainty | Mean of per-target ensemble std → `SurrogatePrediction.uncertainty ≥ 0` |
-| L7 | Pipeline gate | **Deferred** — no `EvoNavPipeline` wiring in v1 |
-| L8 | Active Learning | **After** v1 green; do not implement in this pass |
+| L7 | Pipeline gate | **Wired (opt-in)** via `--surrogate` / `EvoNavRunConfig.surrogate_*` — see `surrogate/gate.py` |
+| L8 | Active Learning | **Wired (opt-in)** `--active-learning` after Stage I when surrogate model exists |
 | L9 | `--fast` | Stub Stage II + smoke Score1; `n_candidates ≤ 4`; no GPU |
 | L10 | Deps | Add `scikit-learn` + `joblib` to pinned requirements |
 

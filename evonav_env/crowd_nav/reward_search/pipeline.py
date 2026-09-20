@@ -40,6 +40,11 @@ from crowd_nav.reward_search.ranking import (
     produce_final_ranking,
 )
 from crowd_nav.reward_search.proxy_consistency import compute_proxy_consistency
+from crowd_nav.reward_search.surrogate.gate import (
+    gate_population,
+    predict_population,
+    surrogate_model_ready,
+)
 from crowd_nav.reward_search.stage2 import (
     Stage2Config,
     Stage2Runner,
@@ -90,6 +95,18 @@ class EvoNavRunConfig:
     # Paper-faithful defaults (Alg. 1 has no elitism; R2/R3 via LLM eval).
     elitism: bool = False
     final_rank: str = "llm"
+
+    # Surrogate / Active Learning (opt-in; off unless model dir set / flags).
+    surrogate_model_dir: Optional[str] = None
+    surrogate_dataset: str = "data/surrogate_dataset"
+    surrogate_gate_stage3: bool = True
+    surrogate_drop_fraction: float = 0.25
+    surrogate_max_uncertainty_to_drop: float = 0.15
+    surrogate_min_keep: int = 2
+    active_learning: bool = False
+    active_learning_queue: str = "data/active_learning"
+    active_learning_max_queries: int = 3
+    active_learning_refit_every: int = 20
 
     device: str = "cuda"
     # None → auto (min(16, cpu-1)); set low on 4GB GPUs to avoid OOM.
@@ -296,6 +313,7 @@ class EvoNavPipeline:
             n_crossover=n_crossover,
             n_mutation=n_mutation,
             n_random=n_random,
+            keep_runtime_elite=bool(cfg.elitism),
         )
         evolver = StageIEvolver(
             llm,
@@ -335,6 +353,73 @@ class EvoNavPipeline:
             f"Stage I complete - best={best_s1.candidate_id} score={best_s1.score}",
             stage="pipeline",
         )
+
+        surrogate_preds_s1: Optional[List[Dict[str, Any]]] = None
+        al_summary: Optional[Dict[str, Any]] = None
+        if surrogate_model_ready(cfg.surrogate_model_dir):
+            console.status(
+                f"Surrogate predict after Stage I ({cfg.surrogate_model_dir})",
+                stage="pipeline",
+            )
+            try:
+                surrogate_preds_s1, _model = predict_population(
+                    stage1_pop,
+                    str(cfg.surrogate_model_dir),
+                    score_fn=self._score_fn(),
+                )
+                write_json(
+                    os.path.join(cfg.output_dir, "surrogate_preds_stage1.json"),
+                    {"predictions": surrogate_preds_s1},
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Surrogate Stage I predict failed: %s", exc)
+                console.warn(f"Surrogate predict skipped: {exc}", stage="pipeline")
+                surrogate_preds_s1 = None
+
+            if bool(cfg.active_learning):
+                from crowd_nav.reward_search.active_learning.loop import (
+                    run_active_learning_step,
+                )
+
+                console.status("Active learning step after Stage I", stage="pipeline")
+                al_summary = run_active_learning_step(
+                    surrogate_model_dir=str(cfg.surrogate_model_dir),
+                    queue_root=str(cfg.active_learning_queue),
+                    max_queries=int(cfg.active_learning_max_queries),
+                    refit_every=int(cfg.active_learning_refit_every),
+                    candidates=list(stage1_pop),
+                    surrogate_dataset=str(cfg.surrogate_dataset),
+                    use_stub=bool(cfg.stage2_use_stub or cfg.fast),
+                    seed=int(cfg.seed),
+                    stage1_dataset_path=str(cfg.stage1_dataset_path),
+                )
+                write_json(
+                    os.path.join(cfg.output_dir, "active_learning_step.json"),
+                    {k: v for k, v in al_summary.items() if k != "executed"},
+                )
+                if al_summary.get("status") == "error":
+                    console.warn(
+                        f"Active learning: {al_summary.get('message')}",
+                        stage="pipeline",
+                    )
+                else:
+                    console.status(
+                        f"AL enqueued={al_summary.get('n_enqueued')} "
+                        f"executed={al_summary.get('n_executed')} "
+                        f"refit={al_summary.get('refit')}",
+                        stage="pipeline",
+                    )
+        elif cfg.surrogate_model_dir:
+            console.warn(
+                f"Surrogate dir set but no model.joblib at {cfg.surrogate_model_dir}; "
+                "skipping surrogate/AL",
+                stage="pipeline",
+            )
+        elif cfg.active_learning:
+            console.warn(
+                "active_learning=True but surrogate_model_dir unset/missing; skipping AL",
+                stage="pipeline",
+            )
 
         # ----- Stage II -----
         s2_cfg = Stage2Config(
@@ -410,6 +495,48 @@ class EvoNavPipeline:
             stage="pipeline",
         )
 
+        # ----- Surrogate gate before Stage III -----
+        stage3_input_pop = list(stage2_pop)
+        surrogate_gate_report: Optional[Dict[str, Any]] = None
+        surrogate_preds_s2: Optional[List[Dict[str, Any]]] = None
+        if (
+            surrogate_model_ready(cfg.surrogate_model_dir)
+            and bool(cfg.surrogate_gate_stage3)
+        ):
+            try:
+                surrogate_preds_s2, _m2 = predict_population(
+                    stage3_input_pop,
+                    str(cfg.surrogate_model_dir),
+                    score_fn=self._score_fn(),
+                )
+                write_json(
+                    os.path.join(cfg.output_dir, "surrogate_preds_stage2.json"),
+                    {"predictions": surrogate_preds_s2},
+                )
+                stage3_input_pop, surrogate_gate_report = gate_population(
+                    stage3_input_pop,
+                    surrogate_preds_s2,
+                    drop_fraction=float(cfg.surrogate_drop_fraction),
+                    max_uncertainty_to_drop=float(
+                        cfg.surrogate_max_uncertainty_to_drop
+                    ),
+                    min_keep=int(cfg.surrogate_min_keep),
+                )
+                write_json(
+                    os.path.join(cfg.output_dir, "surrogate_gate_stage3.json"),
+                    surrogate_gate_report,
+                )
+                console.status(
+                    f"Surrogate Stage III gate: kept={surrogate_gate_report['n_kept']} "
+                    f"dropped={surrogate_gate_report['n_dropped']}",
+                    stage="pipeline",
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Surrogate Stage III gate failed: %s", exc)
+                console.warn(f"Surrogate gate skipped: {exc}", stage="pipeline")
+                stage3_input_pop = list(stage2_pop)
+                surrogate_gate_report = {"enabled": False, "error": str(exc)}
+
         # ----- Stage III -----
         # H-sweep only at H <= training crowd size (obs / Policy width).
         # Paper set {5,10,15,20} when human_num=20; with --human-num 5 → {5}.
@@ -429,7 +556,7 @@ class EvoNavPipeline:
         else:
             human_counts = (h_train,)
         s3_cfg = Stage3Config(
-            population_size=len(stage2_pop),
+            population_size=len(stage3_input_pop),
             rounds=cfg.stage3_rounds,
             train_env_steps=cfg.stage3_train_steps,
             eval_episodes=cfg.stage3_eval_episodes,
@@ -459,7 +586,7 @@ class EvoNavPipeline:
         if self.checkpoint_store is not None:
             s3_runner.checkpoint_store = self.checkpoint_store
             s3_runner.checkpoint_seed = int(cfg.seed)
-        stage3_pop = s3_runner.run(stage2_pop, run_h_sweep=cfg.stage3_run_h_sweep)
+        stage3_pop = s3_runner.run(stage3_input_pop, run_h_sweep=cfg.stage3_run_h_sweep)
         rank_pool_s3 = list(s3_runner.trained_snapshots) or list(stage3_pop)
         r3_rank = produce_final_ranking(
             rank_pool_s3, mode=cfg.final_rank, llm=llm
@@ -524,6 +651,24 @@ class EvoNavPipeline:
         manifest["elitism"] = bool(cfg.elitism)
         manifest["stage2_k2_unit"] = str(cfg.stage2_k2_unit)
         manifest["final_rank"] = str(cfg.final_rank)
+        manifest["surrogate"] = {
+            "model_dir": cfg.surrogate_model_dir,
+            "enabled": surrogate_model_ready(cfg.surrogate_model_dir),
+            "gate_stage3": bool(cfg.surrogate_gate_stage3),
+            "n_preds_stage1": (
+                len(surrogate_preds_s1) if surrogate_preds_s1 is not None else 0
+            ),
+            "n_preds_stage2": (
+                len(surrogate_preds_s2) if surrogate_preds_s2 is not None else 0
+            ),
+            "gate": surrogate_gate_report,
+            "active_learning": bool(cfg.active_learning),
+            "active_learning_summary": (
+                None
+                if al_summary is None
+                else {k: v for k, v in al_summary.items() if k != "executed"}
+            ),
+        }
 
         # §4.3.4 proxy consistency (Spearman + top-k on genome fingerprints).
         consistency = compute_proxy_consistency(
@@ -547,6 +692,14 @@ class EvoNavPipeline:
                 .get("spearman", {})
                 .get("rho")
             ),
+            "stage2_vs_stage3_lineage_rho": (
+                consistency.get("stage2_vs_stage3_lineage", {})
+                .get("spearman", {})
+                .get("rho")
+            ),
+            "stage2_vs_stage3_preferred": consistency.get(
+                "stage2_vs_stage3_preferred"
+            ),
             "stage1_vs_stage2_top_k": (
                 consistency.get("stage1_vs_stage2", {})
                 .get("top_k", {})
@@ -560,10 +713,12 @@ class EvoNavPipeline:
         }
         s12 = consistency.get("stage1_vs_stage2", {}).get("spearman", {})
         s23 = consistency.get("stage2_vs_stage3", {}).get("spearman", {})
+        s23l = consistency.get("stage2_vs_stage3_lineage", {}).get("spearman", {})
         console.status(
             f"proxy consistency ρ12={s12.get('rho')} "
             f"(n={s12.get('n_overlap')}) ρ23={s23.get('rho')} "
-            f"(n={s23.get('n_overlap')})",
+            f"(n={s23.get('n_overlap')}) ρ23_lineage={s23l.get('rho')} "
+            f"(n={s23l.get('n_overlap')})",
             stage="pipeline",
         )
 

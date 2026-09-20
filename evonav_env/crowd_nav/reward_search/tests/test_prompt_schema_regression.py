@@ -38,6 +38,7 @@ _MATH_SNIPPETS = (
     "math module is not importable",
     "** 0.5",
     "getattr, hasattr, or __import__",
+    "state.robot.px[0]",
 )
 
 

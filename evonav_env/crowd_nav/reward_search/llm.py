@@ -11,6 +11,7 @@ Primary API for EvoNav Stage I:
 
 from __future__ import annotations
 
+import ast
 import os
 import re
 import time
@@ -537,11 +538,13 @@ def normalize_to_compute_reward(code: str, target_name: str = "compute_reward") 
     Renames common paper aliases (cal_reward, *_v2, seed_reward_func) and
     upgrades a single-arg ``(state)`` signature to ``(state, memory)`` so
     older completions still validate under the episode-memory contract.
+    Also strips redundant ``[0]``/``[1]``/``[-1]`` on known scalar RewardState
+    fields (LLMs often treat ``state.robot.px`` like a batched tensor).
     """
     text = code.strip()
     match = re.search(r"^def\s+(\w+)\s*\(", text, re.MULTILINE)
     if not match:
-        return text
+        return strip_redundant_scalar_subscripts(text)
     name = match.group(1)
     if name != target_name:
         text = re.sub(
@@ -557,7 +560,7 @@ def normalize_to_compute_reward(code: str, target_name: str = "compute_reward") 
         re.MULTILINE,
     )
     if not sig:
-        return text
+        return strip_redundant_scalar_subscripts(text)
     raw_args = [a.strip() for a in sig.group(1).split(",") if a.strip()]
     arg_names = [a.split(":")[0].split("=")[0].strip() for a in raw_args]
     if arg_names == ["state"]:
@@ -568,4 +571,79 @@ def normalize_to_compute_reward(code: str, target_name: str = "compute_reward") 
             count=1,
             flags=re.MULTILINE,
         )
-    return text
+    return strip_redundant_scalar_subscripts(text)
+
+
+# Scalar RewardState / HumanObservable / RobotRewardState fields — never arrays.
+_SCALAR_FIELD_ATTRS = frozenset(
+    {
+        "px",
+        "py",
+        "vx",
+        "vy",
+        "radius",
+        "gx",
+        "gy",
+        "v_pref",
+        "dmin",
+        "discomfort_dist",
+        "time_step",
+        "global_time",
+        "time_limit",
+        "collision",
+        "reaching_goal",
+        "timeout",
+    }
+)
+
+
+def _is_trivial_int_index(slice_node: ast.AST) -> bool:
+    """True for ``[0]``, ``[1]``, ``[-1]`` (common LLM tensor-habits)."""
+    if isinstance(slice_node, ast.Constant) and isinstance(slice_node.value, int):
+        return slice_node.value in (0, 1, -1)
+    if (
+        isinstance(slice_node, ast.UnaryOp)
+        and isinstance(slice_node.op, ast.USub)
+        and isinstance(slice_node.operand, ast.Constant)
+        and isinstance(slice_node.operand.value, int)
+        and slice_node.operand.value == 1
+    ):
+        return True
+    return False
+
+
+class _StripScalarSubscripts(ast.NodeTransformer):
+    """Rewrite ``state.robot.px[0]`` → ``state.robot.px`` (and nested repeats)."""
+
+    def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
+        node = self.generic_visit(node)
+        assert isinstance(node, ast.Subscript)
+        if not isinstance(node.value, ast.Attribute):
+            return node
+        if node.value.attr not in _SCALAR_FIELD_ATTRS:
+            return node
+        if not _is_trivial_int_index(node.slice):
+            return node
+        return node.value
+
+
+def strip_redundant_scalar_subscripts(code: str) -> str:
+    """
+    Drop ``[0]``/``[1]``/``[-1]`` on known float/bool RewardState fields.
+
+    Does **not** touch ``state.action[...]`` (action may be a tuple/ActionXY).
+    On parse failure, returns ``code`` unchanged.
+    """
+    text = (code or "").strip()
+    if not text:
+        return text
+    try:
+        tree = ast.parse(text, mode="exec")
+    except SyntaxError:
+        return text
+    new_tree = _StripScalarSubscripts().visit(tree)
+    ast.fix_missing_locations(new_tree)
+    try:
+        return ast.unparse(new_tree)
+    except Exception:  # noqa: BLE001 — keep original if unparse fails
+        return text

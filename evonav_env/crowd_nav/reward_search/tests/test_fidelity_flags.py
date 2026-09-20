@@ -68,3 +68,17 @@ def test_pick_candidate_by_ranking_best_first():
     best = pick_candidate_by_ranking(ranking, pop)
     assert best is not None
     assert best.candidate_id == "y"
+
+
+def test_pick_candidate_by_ranking_duplicate_ids_prefers_better_metrics():
+    """Regression: dict-by-id used to keep the *last* snapshot for an id."""
+    weak = _cand("same", 0.10)
+    strong = _cand("same", 0.90)
+    # Pool order: strong first, weak last (old bug returned weak).
+    ranking = {"ranking": ["same"]}
+    best = pick_candidate_by_ranking(ranking, [strong, weak])
+    assert best is not None
+    assert best.metadata["last_metrics"]["SR"] == 0.90
+    best2 = pick_candidate_by_ranking(ranking, [weak, strong])
+    assert best2 is not None
+    assert best2.metadata["last_metrics"]["SR"] == 0.90

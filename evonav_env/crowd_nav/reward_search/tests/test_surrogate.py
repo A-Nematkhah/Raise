@@ -142,3 +142,48 @@ def test_bootstrap_fast_stub(tmp_path):
     pred = loaded.predict(feats[0])
     assert math.isfinite(pred.y_hat["SR"])
     assert pred.uncertainty >= 0.0
+
+
+def test_bootstrap_population_uses_stage1_gen0(monkeypatch):
+    """Bootstrap must call StageIEvolver.initialize_population (same as main run)."""
+    from crowd_nav.reward_search.evolver import StageIEvolver
+    from crowd_nav.reward_search.llm import SeedVariantLLMClient
+    from crowd_nav.reward_search.prompts import D1_SYSTEM_PROMPT, D5_SEED_FUNCTION
+    from crowd_nav.reward_search.sandbox.validator import RewardValidator
+    from crowd_nav.reward_search.surrogate import bootstrap as boot_mod
+
+    seen: list[str] = []
+    called = {"init": 0}
+
+    class RecordingSeed(SeedVariantLLMClient):
+        def complete(self, prompt: str, *, max_tokens=None) -> str:
+            seen.append(prompt)
+            return super().complete(prompt, max_tokens=max_tokens)
+
+    real_init = StageIEvolver.initialize_population
+
+    def _wrap(self):
+        called["init"] += 1
+        return real_init(self)
+
+    monkeypatch.setattr(StageIEvolver, "initialize_population", _wrap)
+    monkeypatch.setattr(
+        "crowd_nav.reward_search.llm.make_llm_client",
+        lambda *a, **k: RecordingSeed(),
+    )
+
+    population = boot_mod._build_population(
+        n_candidates=3,
+        llm_provider="seed",
+        seed=7,
+    )
+    assert called["init"] == 1
+    assert len(population) >= 1
+    assert all(c.valid for c in population)
+    assert seen, "expected Gen0 LLM prompts"
+    joined = "\n".join(seen)
+    assert "generate a reward variant" not in joined
+    assert D1_SYSTEM_PROMPT[:40] in joined
+    assert "Seed function" in joined
+    # Sanity: seed-only path still validates like Stage I
+    RewardValidator().validate_code(D5_SEED_FUNCTION)

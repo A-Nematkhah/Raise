@@ -82,6 +82,9 @@ class StageIConfig:
     max_invalid_replacements: int = 16
     func_name: str = "compute_reward"
     include_external_knowledge: bool = True
+    # When True: carry top-1 into next gen and steal one slot from random/mut/xover
+    # (engineering elitism). Paper-faithful default is False → exact 2/4/2.
+    keep_runtime_elite: bool = False
 
 
 @dataclass
@@ -641,21 +644,24 @@ class StageIEvolver:
         generated_crossover = cfg.n_crossover
         generated_mutation = cfg.n_mutation
         generated_random = cfg.n_random
-        if generated_random > 0:
-            generated_random -= 1
-        elif generated_mutation > 0:
-            generated_mutation -= 1
-        elif generated_crossover > 0:
-            generated_crossover -= 1
-        else:
-            raise ValueError("At least one next-generation bucket must be positive.")
+        keep_elite = bool(getattr(cfg, "keep_runtime_elite", False))
+        if keep_elite:
+            if generated_random > 0:
+                generated_random -= 1
+            elif generated_mutation > 0:
+                generated_mutation -= 1
+            elif generated_crossover > 0:
+                generated_crossover -= 1
+            else:
+                raise ValueError("At least one next-generation bucket must be positive.")
         # Lower performers: bottom half (paper: mutate using their weakness).
         lower = list(ranked[len(ranked) // 2 :])
         if not lower:
             lower = list(ranked[-1:])
 
         next_pop: List[RewardCandidate] = []
-        next_pop.append(top_a)
+        if keep_elite:
+            next_pop.append(top_a)
 
         # Crossover from top-2.
         for i in range(generated_crossover):

@@ -76,6 +76,7 @@ Constraints (CRITICAL):
 - Hyperparameters: All tuning parameters (e.g., weights, constants) must be defined as local variables inside the function body. Do not add them as function arguments beyond (state, memory).
 - Signature: Define exactly one function: def {func_name}(state, memory): ... that returns a finite float.
 - Sandbox: No import statements, no classes, while loops, or reflection builtins (getattr, hasattr, __import__, eval, type, ...). Access state fields only via dot notation (state.robot.px, state.dmin, state.humans, ...). Iterate humans with `for human in state.humans:` — do not index HumanObservable like a sequence (no human[0]).
+- Scalars are plain floats/bools: never write ``state.robot.px[0]``, ``state.dmin[0]``, ``human.vx[0]``, etc. Use ``state.robot.px`` directly.
 - Output Format: Your response must contain only the Python function within a single code block. Do not include any explanatory text or print statements.
 {seed_block}
 {reflection_block}
@@ -101,6 +102,7 @@ RewardState access (dot notation only — never getattr/hasattr/__import__):
 - state.humans — loop with `for human in state.humans:` then human.px, human.py, human.vx, human.vy, human.radius (never human[0] / sequence indexing)
 - state.dmin, state.discomfort_dist, state.collision, state.reaching_goal, state.timeout
 - state.action, state.time_step, state.global_time, state.time_limit
+- Scalars are floats/bools — never index them (no state.robot.px[0], state.dmin[0], human.px[0])
 - memory: plain dict for episode-local state (e.g. memory['prev_dist']); cleared on episode reset
 - Math: math module is not importable; use ** 0.5 for square roots. Do not use getattr, hasattr, or __import__.
 """
@@ -307,6 +309,7 @@ Constraints (CRITICAL):
 - Define exactly {n} top-level functions. Name them ``{func_name}_v1``, ``{func_name}_v2``, ... ``{func_name}_v{n}`` (each takes (state, memory) and returns a finite float).
 - Do **not** use import statements (math is not importable — prefer ** 0.5), classes, while loops, or reflection builtins (getattr, hasattr, __import__, eval, type, ...).
 - Access RewardState only via dot notation (state.robot.px, state.dmin, state.humans, ...); use memory for cross-step state.
+- Scalars are plain floats/bools: never write ``state.robot.px[0]`` / ``state.dmin[0]`` / ``human.vx[0]``.
 - Output Format: return **only** Python code in a single fenced code block. No prose outside the block.
 {seed_block}
 {reflection_block}
@@ -431,6 +434,8 @@ def format_d3_repair(
         "human.px/py/vx/vy/radius (never index HumanObservable like human[0])\n"
         "- state.dmin, state.discomfort_dist (TOP-LEVEL), "
         "state.collision, state.reaching_goal, state.timeout\n"
+        "- Scalars are floats/bools: never index them "
+        "(no state.robot.px[0], state.dmin[0], human.vx[0])\n"
         "- NO state.history, NO state.prev_state, NO state.obstacle_dist\n"
         "- math module is not importable: do NOT write `import math` or "
         "`__import__`; use ** 0.5 for square roots "

@@ -28,12 +28,27 @@ def pick_candidate_by_ranking(
     ranking: Dict[str, Any],
     pool: Sequence[RewardCandidate],
 ) -> Optional[RewardCandidate]:
-    """Return the first ranked id that exists in ``pool`` (best-first)."""
-    by_id = {c.candidate_id: c for c in pool}
+    """
+    Return the first ranked id's match in ``pool`` (best-first).
+
+    If several pool entries share the same ``candidate_id`` (legacy trained
+    snapshots before unique snap ids), prefer the highest navigation scalar
+    among that id so a later weak retrain cannot overwrite an earlier elite.
+    """
+    from collections import defaultdict
+
+    from crowd_nav.reward_search.selection import candidate_nav_scalar
+
+    by_id: Dict[str, List[RewardCandidate]] = defaultdict(list)
+    for c in pool:
+        by_id[str(c.candidate_id)].append(c)
     for cid in ranking.get("ranking") or []:
-        hit = by_id.get(str(cid))
-        if hit is not None:
-            return hit
+        hits = by_id.get(str(cid)) or []
+        if not hits:
+            continue
+        if len(hits) == 1:
+            return hits[0]
+        return max(hits, key=candidate_nav_scalar)
     return None
 
 

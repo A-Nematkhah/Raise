@@ -166,7 +166,8 @@ def test_llm_error_keeps_previous():
 
 def test_v2_id_helper():
     assert _v2_candidate_id("c3") == "c3_v2"
-    assert _v2_candidate_id("c3_v2") == "c3_v2"
+    assert _v2_candidate_id("c3_v2") == "c3_v3"
+    assert _v2_candidate_id("c3_v3") == "c3_v4"
 
 
 def test_table5_defaults():

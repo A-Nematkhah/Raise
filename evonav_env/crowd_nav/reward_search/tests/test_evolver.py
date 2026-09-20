@@ -56,6 +56,35 @@ def test_extract_and_normalize_code():
     assert "cal_reward" not in norm
 
 
+def test_strip_scalar_subscripts_and_validate():
+    from crowd_nav.reward_search.llm import strip_redundant_scalar_subscripts
+    from crowd_nav.reward_search.sandbox.validator import RewardValidator
+
+    bad = (
+        "def compute_reward(state, memory):\n"
+        "    dx = state.robot.px[0] - state.robot.gx[0]\n"
+        "    dy = state.robot.py[0] - state.robot.gy[0]\n"
+        "    dist = (dx * dx + dy * dy) ** 0.5\n"
+        "    if state.dmin[0] < 0.2:\n"
+        "        return float(-1.0)\n"
+        "    return float(-dist)\n"
+    )
+    fixed = strip_redundant_scalar_subscripts(bad)
+    assert "px[0]" not in fixed
+    assert "dmin[0]" not in fixed
+    assert "state.robot.px" in fixed
+    # action[0] must remain indexable (tuple / ActionXY)
+    with_action = (
+        "def compute_reward(state, memory):\n"
+        "    return float(state.action[0] + state.robot.vx[0])\n"
+    )
+    fixed_action = normalize_to_compute_reward(with_action)
+    assert "state.action[0]" in fixed_action
+    assert "vx[0]" not in fixed_action
+    RewardValidator().validate_code(bad)
+    RewardValidator().validate_code(with_action)
+
+
 def test_prompt_templates_contain_appendix_anchors():
     assert "expert in reinforcement learning" in D1_SYSTEM_PROMPT
     user = format_d1_initial(reflection="keep exploring")
@@ -215,7 +244,11 @@ def test_mutation_uses_lower_performer_and_crossover_uses_top2():
     evolver = StageIEvolver(
         client,
         score_fn=_score_by_smoke,
-        config=StageIConfig(population_size=8, generations=1),
+        config=StageIConfig(
+            population_size=8,
+            generations=1,
+            keep_runtime_elite=True,
+        ),
     )
     evolver.run()
     gen1 = evolver.history[1].population
@@ -231,3 +264,27 @@ def test_mutation_uses_lower_performer_and_crossover_uses_top2():
             assert len(c.parent_ids) == 2
         if c.origin == "mutation":
             assert len(c.parent_ids) == 1
+
+
+def test_next_generation_exact_242_without_runtime_elite():
+    batch_body = "\n\n".join(_valid_code(float(i)) for i in range(8, 0, -1))
+    completions = [batch_body]
+    completions += [_valid_code(100.0)] * 2
+    completions += [_valid_code(50.0)] * 4
+    completions += [_valid_code(10.0)] * 2
+    client = ScriptedLLMClient(completions)
+    evolver = StageIEvolver(
+        client,
+        score_fn=_score_by_smoke,
+        config=StageIConfig(
+            population_size=8,
+            generations=1,
+            keep_runtime_elite=False,
+        ),
+    )
+    evolver.run()
+    gen1 = evolver.history[1].population
+    assert sum(1 for c in gen1 if c.origin == "crossover") == 2
+    assert sum(1 for c in gen1 if c.origin == "mutation") == 4
+    assert sum(1 for c in gen1 if c.origin == "random") == 2
+    assert len(gen1) == 8

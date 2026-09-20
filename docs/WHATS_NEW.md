@@ -121,4 +121,19 @@ python scripts/run_active_learning_step.py --surrogate artifacts/surrogate --fas
 
 ---
 
+## اتصال Surrogate / AL به Pipeline (۲۰۲۶-۰۹-۲۰)
+
+**قبل:** Surrogate و AL فقط CLI جدا بودند؛ `run_evonav` از آن‌ها استفاده نمی‌کرد.
+
+**بعد:** opt-in در `EvoNavPipeline` / `run_evonav.py`:
+
+- `--surrogate DIR`: بعد از Stage I پیش‌بینی و `surrogate_preds_stage1.json`
+- قبل از Stage III: دوباره predict + `gate` (حذف confident-weak؛ `--no-surrogate-gate` خاموشش می‌کند)
+- `--active-learning`: یک گام AL بعد از Stage I (نیاز به مدل)
+- خلاصه در `manifest.json` → کلید `surrogate`
+
+پیش‌فرض بدون فلگ: رفتار Algorithm 1 قبلی بدون تغییر.
+
+---
+
 *ادامهٔ تغییرات بعدی از همین‌جا اضافه شود.*

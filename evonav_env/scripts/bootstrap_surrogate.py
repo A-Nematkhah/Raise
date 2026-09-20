@@ -32,10 +32,22 @@ def main() -> int:
     )
     parser.add_argument("--llm", default="seed", help="LLM provider (seed|groq|...)")
     parser.add_argument("--device", default="cpu")
+    parser.add_argument(
+        "--num-processes",
+        type=int,
+        default=1,
+        help="Stage II ShmemVecEnv workers (default 1 to avoid RAM OOM on Windows)",
+    )
     parser.add_argument("--fast", action="store_true", help="stub trainer + smoke Score1")
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--seed", type=int, default=425)
     args = parser.parse_args()
+
+    # Windows spawn workers re-import Config → get_args() reads sys.argv.
+    # Isolate bootstrap flags (same pattern as run_evonav / run_stage3_smoke).
+    sys.argv = [sys.argv[0], "--seed", str(args.seed)]
+    if str(args.device).lower() != "cuda":
+        sys.argv.append("--no-cuda")
 
     from crowd_nav.reward_search.surrogate.bootstrap import run_bootstrap
 
@@ -51,6 +63,7 @@ def main() -> int:
         force=bool(args.force),
         llm_provider=str(args.llm),
         device=str(args.device),
+        num_processes=int(args.num_processes),
     )
     print(json.dumps({k: result[k] for k in ("status", "out_dir", "model_dir", "n") if k in result}, indent=2))
     if result.get("status") == "ok":

@@ -52,75 +52,58 @@ def _stage1_dataset_ready(path: str) -> bool:
     return os.path.isfile(npz)
 
 
+def _stage1_config_like_pipeline(n_candidates: int) -> "StageIConfig":
+    """Match ``EvoNavPipeline`` Stage-I size split (Gen0 uses ``population_size`` only)."""
+    from crowd_nav.reward_search.evolver import StageIConfig
+
+    n = max(1, int(n_candidates))
+    n_crossover = min(2, n)
+    n_mutation = min(4, max(0, n - n_crossover))
+    n_random = n - n_crossover - n_mutation
+    return StageIConfig(
+        population_size=n,
+        generations=1,
+        n_crossover=n_crossover,
+        n_mutation=n_mutation,
+        n_random=n_random,
+        # Same Gen0 path as main run; larger N needs a proportionally larger regen budget.
+        max_invalid_replacements=max(16, n * 2),
+    )
+
+
 def _build_population(
     *,
     n_candidates: int,
     llm_provider: str,
     seed: int,
 ) -> List[RewardCandidate]:
-    from crowd_nav.reward_search.llm import (
-        extract_python_code,
-        make_llm_client,
-        normalize_to_compute_reward,
-    )
-    from crowd_nav.reward_search.prompts import D5_SEED_FUNCTION
-    from crowd_nav.reward_search.sandbox.errors import RewardSandboxError
-    from crowd_nav.reward_search.sandbox.validator import RewardValidator
-
-    validator = RewardValidator()
-    population: List[RewardCandidate] = []
-    seen_hashes: set[str] = set()
-
-    def _try_add(candidate_id: str, code: str, origin: str) -> bool:
-        try:
-            normalized = normalize_to_compute_reward(code)
-            reward_fn = validator.validate_code(normalized)
-        except RewardSandboxError as exc:
-            logger.warning("skip invalid candidate %s: %s", candidate_id, exc)
-            return False
-        digest = code_sha256(normalized)
-        if digest in seen_hashes:
-            return False
-        seen_hashes.add(digest)
-        population.append(
-            RewardCandidate(
-                candidate_id=candidate_id,
-                code=normalized,
-                reward_fn=reward_fn,
-                valid=True,
-                origin=origin,
-            )
-        )
-        return True
-
-    _try_add("seed_d5", D5_SEED_FUNCTION, "seed")
+    """
+    Build bootstrap candidates with the **exact** Stage-I Gen0 path used by
+    ``EvoNavPipeline`` / ``StageIEvolver.initialize_population`` (same prompts,
+    validator, batch+regen). Not a parallel prompt reimplementation.
+    """
+    del seed  # reserved for Stage-II / model fit; Gen0 LLM has its own sampling.
+    from crowd_nav.reward_search.evolver import StageIEvolver
+    from crowd_nav.reward_search.llm import make_llm_client
+    from crowd_nav.reward_search.scoring import make_smoke_score_fn
 
     llm = make_llm_client(llm_provider)
-    attempts = 0
-    max_attempts = max(n_candidates * 4, 8)
-    while len(population) < n_candidates and attempts < max_attempts:
-        attempts += 1
-        raw = llm.complete("generate a reward variant")
-        try:
-            code = extract_python_code(raw)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("LLM extract failed: %s", exc)
-            continue
-        cid = f"gen_{len(population):04d}"
-        _try_add(cid, code, "llm")
-
-    if len(population) < 1:
-        raise RuntimeError("bootstrap population is empty — seed/LLM produced no valid rewards")
-    if len(population) < n_candidates:
+    evolver = StageIEvolver(
+        llm,
+        score_fn=make_smoke_score_fn(),  # Gen0 only — Score1 not used here
+        config=_stage1_config_like_pipeline(n_candidates),
+    )
+    population = evolver.initialize_population()
+    valid = [c for c in population if c.valid and c.reward_fn is not None]
+    if len(valid) < 1:
+        raise RuntimeError("bootstrap population is empty — Stage-I Gen0 produced no valid rewards")
+    if len(valid) < n_candidates:
         logger.warning(
-            "only %d/%d unique valid candidates after %d attempts",
-            len(population),
+            "Stage-I Gen0 returned %d/%d valid candidates",
+            len(valid),
             n_candidates,
-            attempts,
         )
-    # Deterministic order; seed reserved for trainers / model.
-    del seed
-    return population[:n_candidates]
+    return valid[:n_candidates]
 
 
 def _labels_from_metrics(
@@ -251,9 +234,13 @@ def run_bootstrap(
     llm_provider: str = "seed",
     device: str = "cpu",
     label_rejected: bool = True,
+    num_processes: int = 1,
 ) -> dict[str, Any]:
     """
     End-to-end surrogate bootstrap (idempotent unless ``force``).
+
+    ``num_processes`` defaults to 1 — Windows + GST + CUDA with the Stage II
+    default (up to 16 workers) can OOM the host / kill the IDE.
 
     See ``PLAN.md`` §5.
     """
@@ -310,6 +297,7 @@ def run_bootstrap(
                 os.remove(path)
         known_ids = set()
 
+    nproc = 1 if use_stub else max(1, int(num_processes))
     stage2_cfg = Stage2Config(
         train_env_steps=int(stage2_train_steps),
         k2_unit=str(k2_unit),
@@ -318,7 +306,7 @@ def run_bootstrap(
         seed=int(seed),
         device=str(device),
         output_root=os.path.join(model_dir, "_stage2_runs"),
-        num_processes=1 if use_stub else None,
+        num_processes=nproc,
     )
 
     labeled = 0
@@ -371,6 +359,7 @@ def run_bootstrap(
         "stage2_train_steps": int(stage2_train_steps),
         "k2_unit": str(k2_unit),
         "llm_provider": str(llm_provider),
+        "num_processes": int(nproc),
         "seed": int(seed),
         "created_at": _utc_now(),
         "model_dir": model_dir,

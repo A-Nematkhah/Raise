@@ -97,29 +97,36 @@ Part A pad freeze + degeneracy reporting remain closed. Success-tier nav-length 
 | Knob | Paper | Code | Notes |
 |------|-------|------|-------|
 | N, G1 | 8, 10 | 8, 10 | Faithful |
-| M, N_traj | 100, 10 | collector defaults | Mix is ours |
-| Operators | unspecified split | runtime elite + 2/4/1 | Deviation |
+| M, N_traj | 100, 10 | collector defaults | Mix is ours (ORCA/SF/noise/random). Re-collect after 2026-09 seed fix so random trajs are not bit-duplicates. |
+| Operators | 2/4/2 style | default **exact 2/4/2**; opt-in `--elitism` keeps top-1 (steals one random → 2/4/1) | Runtime elite is behind `--elitism` |
 | Score1 | Eq. 1 | `scoring.py` | Structure faithful; Success tier see deviations |
 
 ### Stage II
 
 | Knob | Paper | Code | Notes |
 |------|-------|------|-------|
-| K2 | 8000 **gradient** steps | env steps (8k or 50k) | Major unit deviation |
-| Final R2 | LLM multi-objective | nav scalar | Deviation |
-| Elitism | — | on by default | Deviation |
+| K2 | 8000 **gradient** steps | default **8000 gradient_steps** (`k2_unit`) | Env-steps realized = K2 × num_steps × num_processes (see cost note) |
+| Final R2 | LLM multi-objective | default `final_rank=llm` (fallback multiobjective_lex) | `--final-rank scalar` is engineering opt-in |
+| Elitism | — | default **off**; `--elitism` enables inject/protect | Faithful default |
 
 ### Stage III
 
 | Knob | Paper | Code | Notes |
 |------|-------|------|-------|
 | K3 | 1e7 **env** steps | 5e5 / 1e7 | Unit OK; default scaled |
-| Final R3 | LLM multi-objective | nav scalar | Deviation |
+| Final R3 | LLM multi-objective | default `final_rank=llm` | Same as R2 |
 | H-sweep | {5,10,15,20} | yes (clipped) | Faithful structure |
 
 ### Elitism (explicitly non-paper)
 
-Stage I `global_best`; pipeline handoff; Stage II/III `_inject_elite` + `protect_elite_refine`. Useful engineering; **not** Algorithm 1.
+Opt-in `--elitism`: Stage I runtime keep-top-1; Stage I→II `_include_global_best`; Stage II/III `_inject_elite` + `protect_elite_refine`. **Default off** (matches Algorithm 1).
+
+### K2 wall-clock / env-step cost (planning)
+
+With `k2_unit=gradient_steps`, each Stage II train does roughly
+`K2 × num_steps × num_processes` env steps (default `num_steps=5`).
+Example: K2=8000, 16 processes → ~640k env steps **per train**; 8×16=128 trains → ~82M env steps (~⅓ of one Stage III K3=1e7×24 if scaled that way).
+`num_processes` is machine-dependent when left auto — prefer explicit `--num-processes` for reproducible budgets (bootstrap defaults to 1).
 
 ---
 

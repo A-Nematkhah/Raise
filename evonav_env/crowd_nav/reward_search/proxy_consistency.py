@@ -49,6 +49,37 @@ def scores_from_trained(
     return out
 
 
+def scores_from_trained_lineage(
+    stage3: Sequence[RewardCandidate],
+    stage2_scores: Mapping[str, float],
+) -> Tuple[Dict[str, float], Dict[str, float]]:
+    """
+    Align Stage III scores to Stage II parent genomes when refine changed the code.
+
+    Returns ``(s2_aligned, s3_aligned)`` keyed by parent genome (or self genome
+    when ``parent_genome_key`` is absent). This keeps ρ(II,III) defined after
+    successful D.3 refine instead of requiring exact code fingerprint overlap.
+    """
+    s2_out: Dict[str, float] = {}
+    s3_out: Dict[str, float] = {}
+    for c in stage3:
+        parent_key = str((c.metadata or {}).get("parent_genome_key") or "").strip()
+        self_key = genome_key(c.code)
+        key = parent_key if parent_key and parent_key in stage2_scores else self_key
+        if key not in stage2_scores and key != self_key:
+            # Parent unknown — fall back to self if Stage II also has it.
+            if self_key not in stage2_scores:
+                continue
+            key = self_key
+        if key not in stage2_scores:
+            continue
+        sc3 = candidate_nav_scalar(c)
+        if key not in s3_out or sc3 > s3_out[key]:
+            s3_out[key] = sc3
+            s2_out[key] = float(stage2_scores[key])
+    return s2_out, s3_out
+
+
 def _aligned_score_vectors(
     a: Mapping[str, float],
     b: Mapping[str, float],
@@ -150,9 +181,31 @@ def compute_proxy_consistency(
         report["stage2_vs_stage3"] = {
             "spearman": spearman_rank_correlation(s2, s3),
             "top_k": top_k_preservation(s2, s3, k=top_k),
+            "note": (
+                "Exact code-fingerprint overlap. Often empty when D.3 refine "
+                "succeeds (Stage III trains post-refine genomes never scored in II)."
+            ),
+        }
+        s2_lin, s3_lin = scores_from_trained_lineage(stage3, s2)
+        report["stage2_vs_stage3_lineage"] = {
+            "spearman": spearman_rank_correlation(s2_lin, s3_lin),
+            "top_k": top_k_preservation(s2_lin, s3_lin, k=top_k),
+            "n_lineage_pairs": len(s2_lin),
+            "note": (
+                "Stage III score vs Stage II parent-genome score "
+                "(uses metadata.parent_genome_key after refine)."
+            ),
         }
         report["stage1_vs_stage3"] = {
             "spearman": spearman_rank_correlation(s1, s3),
             "top_k": top_k_preservation(s1, s3, k=top_k),
         }
+        # Prefer lineage ρ in the summary when exact overlap is unusable.
+        exact = report["stage2_vs_stage3"]["spearman"]
+        lineage = report["stage2_vs_stage3_lineage"]["spearman"]
+        report["stage2_vs_stage3_preferred"] = (
+            "lineage"
+            if (not exact.get("usable")) and lineage.get("usable")
+            else "exact"
+        )
     return report

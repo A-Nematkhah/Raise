@@ -84,6 +84,35 @@ def test_pipeline_fast(tmp_path):
     final = json.loads((out / "final_candidate.json").read_text(encoding="utf-8"))
     assert "compute_reward" in final["code"]
     assert final["valid"] is True
+    man = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
+    assert man.get("surrogate", {}).get("enabled") is False
+
+
+def test_pipeline_fast_with_surrogate(tmp_path):
+    from crowd_nav.reward_search.surrogate.gate import surrogate_model_ready
+
+    model_dir = "artifacts/surrogate"
+    if not surrogate_model_ready(model_dir):
+        import pytest
+
+        pytest.skip("no local artifacts/surrogate/model.joblib — run bootstrap --fast first")
+
+    out = tmp_path / "run_surr"
+    cfg = EvoNavRunConfig(output_dir=str(out))
+    cfg.apply_fast_profile()
+    cfg.surrogate_model_dir = model_dir
+    cfg.surrogate_gate_stage3 = True
+    cfg.surrogate_drop_fraction = 0.5
+    cfg.surrogate_min_keep = 1
+    cfg.active_learning = False
+    arts = EvoNavPipeline(cfg).run()
+    assert arts.best_stage3 is not None
+    assert (out / "surrogate_preds_stage1.json").is_file()
+    assert (out / "surrogate_preds_stage2.json").is_file()
+    assert (out / "surrogate_gate_stage3.json").is_file()
+    man = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
+    assert man["surrogate"]["enabled"] is True
+    assert man["surrogate"]["gate"] is not None
 
 
 def test_write_json_roundtrip(tmp_path):

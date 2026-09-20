@@ -80,4 +80,31 @@ def test_compute_proxy_consistency_report_shape():
     report = compute_proxy_consistency(stage1=s1, stage2=s2, stage3=s3, top_k=2)
     assert "stage1_vs_stage2" in report
     assert "stage2_vs_stage3" in report
+    assert "stage2_vs_stage3_lineage" in report
     assert report["stage1_vs_stage2"]["spearman"]["usable"] is True
+
+
+def test_lineage_consistency_when_refine_changes_code():
+    """Exact fingerprint overlap can be empty after refine; lineage should work."""
+    parent_codes = [
+        "def compute_reward(state, memory):\n    return 0.0\n",
+        "def compute_reward(state, memory):\n    return 1.0\n",
+        "def compute_reward(state, memory):\n    return 2.0\n",
+    ]
+    child_codes = [
+        "def compute_reward(state, memory):\n    return 10.0\n",
+        "def compute_reward(state, memory):\n    return 11.0\n",
+        "def compute_reward(state, memory):\n    return 12.0\n",
+    ]
+    s2 = [_c(parent_codes[i], sr=0.2 * (i + 1)) for i in range(3)]
+    s3 = []
+    for i in range(3):
+        c = _c(child_codes[i], sr=0.3 * (i + 1))
+        c.metadata["parent_genome_key"] = genome_key(parent_codes[i])
+        s3.append(c)
+    report = compute_proxy_consistency(stage1=s2, stage2=s2, stage3=s3, top_k=2)
+    exact = report["stage2_vs_stage3"]["spearman"]
+    lineage = report["stage2_vs_stage3_lineage"]["spearman"]
+    assert exact["usable"] is False or exact["n_overlap"] == 0
+    assert lineage["usable"] is True
+    assert report["stage2_vs_stage3_preferred"] == "lineage"

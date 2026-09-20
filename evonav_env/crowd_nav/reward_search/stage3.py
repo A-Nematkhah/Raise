@@ -144,10 +144,21 @@ def _stable_code_hash(code: str) -> int:
     return int(hashlib.md5(code.encode("utf-8")).hexdigest(), 16) % 10_000
 
 
+def _next_revision_id(candidate_id: str, *, stage_tag: str = "v3") -> str:
+    m = re.search(r"_v(\d+)$", candidate_id)
+    if m:
+        return f"{candidate_id[: m.start()]}_v{int(m.group(1)) + 1}"
+    n = 3 if stage_tag == "v3" else 2
+    return f"{candidate_id}_v{n}"
+
+
 def _v3_candidate_id(candidate_id: str) -> str:
-    """Tag a successfully refined Stage-III revision as ``*_v3``."""
-    base = re.sub(r"_v\d+$", "", candidate_id)
-    return f"{base}_v3"
+    """Tag a successfully refined Stage-III revision (incrementing ``_vN``)."""
+    return _next_revision_id(candidate_id, stage_tag="v3")
+
+
+def _unique_trained_snapshot_id(candidate_id: str, *, round_index: int, snap_index: int) -> str:
+    return f"{candidate_id}__r{int(round_index)}_s{int(snap_index)}"
 
 
 def _resolve_horizon(config: Stage3Config, env_config) -> int:
@@ -611,18 +622,28 @@ class Stage3Runner:
         round_index: int,
     ) -> RewardCandidate:
         """Freeze the genome that produced ``bundle.metrics`` (pre-refine)."""
+        from crowd_nav.reward_search.proxy_consistency import genome_key
+
+        source_id = str(candidate.candidate_id)
+        snap_index = len(self.trained_snapshots)
         snapshot = replace(
             candidate,
+            candidate_id=_unique_trained_snapshot_id(
+                source_id, round_index=round_index, snap_index=snap_index
+            ),
             metadata={
                 **(candidate.metadata or {}),
                 "last_metrics": bundle.metrics.as_dict(),
                 "checkpoint_path": bundle.checkpoint_path,
                 "trained_round": int(round_index),
                 "trained_snapshot": True,
+                "source_candidate_id": source_id,
+                "genome_key": genome_key(candidate.code),
             },
         )
         self.trained_snapshots.append(snapshot)
-        self.last_bundles[candidate.candidate_id] = bundle
+        self.last_bundles[source_id] = bundle
+        self.last_bundles[snapshot.candidate_id] = bundle
         score = bundle.metrics.scalar_score()
         prev = (
             candidate_nav_scalar(self.best_trained)
@@ -798,6 +819,8 @@ class Stage3Runner:
             )
 
         # New code is untested — do not attach parent train metrics as its own.
+        from crowd_nav.reward_search.proxy_consistency import genome_key
+
         parent_md = {
             k: v
             for k, v in (candidate.metadata or {}).items()
@@ -826,6 +849,7 @@ class Stage3Runner:
                 "refine_kept_previous": False,
                 "parent_metrics": metrics.as_dict(),
                 "parent_id": candidate.candidate_id,
+                "parent_genome_key": genome_key(candidate.code),
             },
         )
 

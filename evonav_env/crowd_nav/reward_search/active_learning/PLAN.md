@@ -19,7 +19,7 @@ Depends on Surrogate v1 being green. Pipeline flag `--active-learning` is **out 
 | A3 | No model on disk | Loop returns `status=error` / CLI exit **2** with `Surrogate model required` |
 | A4 | Weights default | `u=0.45`, `disagree=0.35`, `borderline=0.15`, `diversity=0.15` |
 | A5 | Refit | After `refit_every` completed `stage2_label`s (or `--force-refit`), re-fit on full `surrogate_dataset` |
-| A6 | Pipeline | Not wired into `EvoNavPipeline` yet |
+| A6 | Pipeline | Opt-in via `EvoNavPipeline` + `--active-learning` (requires `--surrogate`) |
 
 ---
 

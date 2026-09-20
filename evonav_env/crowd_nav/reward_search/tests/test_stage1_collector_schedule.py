@@ -28,6 +28,13 @@ def test_default_schedule_has_unique_non_random_slots():
     assert ("social_force", 0.0) in non_random
 
 
+def test_traj_seeds_are_unique_per_slot():
+    """Per-trajectory seeds must differ so post-reset RNG can diversify randoms."""
+    base = 425
+    seeds = {base + j * 10007 + t * 97 for j in range(3) for t in range(10)}
+    assert len(seeds) == 30
+
+
 def test_truncated_schedule_covers_clean_and_random():
     mod = _load_collect_module()
     schedule = mod.build_stage1_traj_schedule(4, (0.25, 0.55))
