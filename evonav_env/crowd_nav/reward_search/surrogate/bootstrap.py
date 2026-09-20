@@ -211,6 +211,13 @@ def label_and_append_candidate(
     )
     append_example(out_dir, features=features, labels=labels, example_id=eid)
     known.add(eid)
+    # Keep Stage II metrics on the live candidate so R2 / proxy_consistency
+    # / best_stage2 see SR/CR/TR (closed-loop has no separate Stage2Runner).
+    md = dict(candidate.metadata or {})
+    md["last_metrics"] = metrics.as_dict()
+    md["last_stage2_ok"] = bool(ok)
+    md["last_stage2_example_id"] = eid
+    candidate.metadata = md
     return {
         "status": "ok" if ok else "failed",
         "example_id": eid,

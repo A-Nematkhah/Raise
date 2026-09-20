@@ -21,6 +21,9 @@ from typing import List, Optional, Sequence
 class LLMClient(ABC):
     """Minimal text-completion interface (sister-project compatible)."""
 
+    # Used by produce_final_ranking to decide LLM vs lex fallback.
+    provider: str = ""
+
     @abstractmethod
     def complete(self, prompt: str, *, max_tokens: Optional[int] = None) -> str:
         raise NotImplementedError
@@ -38,6 +41,8 @@ class CompletionTruncatedError(RuntimeError):
 
 class ScriptedLLMClient(LLMClient):
     """Deterministic stand-in: returns pre-canned completions in order."""
+
+    provider = "scripted"
 
     def __init__(self, completions: Sequence[str]) -> None:
         if not completions:
@@ -73,6 +78,7 @@ class GroqLLMClient(LLMClient):
     Requires optional dependency: ``pip install groq``.
     """
 
+    provider = "groq"
     DEFAULT_MODEL = "openai/gpt-oss-120b"
 
     def __init__(
@@ -232,6 +238,7 @@ class VLLMLLMClient(LLMClient):
     otherwise urllib JSON.
     """
 
+    provider = "vllm"
     DEFAULT_MODEL = "gpt-oss-120b"
     DEFAULT_BASE_URL = "http://127.0.0.1:8000/v1"
 
@@ -360,6 +367,7 @@ class OllamaLLMClient(VLLMLLMClient):
     generous headroom for thinking tokens before the code fence.
     """
 
+    provider = "ollama"
     DEFAULT_MODEL = "qwen3.5:4b"
     DEFAULT_BASE_URL = "http://localhost:11434/v1"
 
@@ -383,6 +391,8 @@ class SeedVariantLLMClient(LLMClient):
     Used for dry-runs / ``--llm seed`` so Algorithm 1 can execute without
     an API key or a huge scripted completion list.
     """
+
+    provider = "seed"
 
     def __init__(self, base_code: Optional[str] = None) -> None:
         from crowd_nav.reward_search.prompts import D5_SEED_FUNCTION

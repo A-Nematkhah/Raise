@@ -1,0 +1,5 @@
+{
+  "n_scenarios": 100,
+  "format": "npz",
+  "path": "stage1_dataset.npz"
+}

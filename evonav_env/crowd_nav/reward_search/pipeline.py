@@ -108,6 +108,16 @@ class EvoNavRunConfig:
     active_learning_max_queries: int = 3
     active_learning_refit_every: int = 20
 
+    # Closed-loop multi-fidelity (innovation; opt-in --closed-loop).
+    closed_loop: bool = False
+    closed_loop_no_al: bool = False
+    closed_loop_al_max_per_epoch: int = 4
+    closed_loop_min_labels_for_gate: int = 24
+    closed_loop_k2: int = 4_000
+    closed_loop_final_stage2_rounds: int = 0
+    closed_loop_refit_every_new_labels: int = 8
+    closed_loop_min_stage2_per_gen: int = 4
+
     device: str = "cuda"
     # None → auto (min(16, cpu-1)); set low on 4GB GPUs to avoid OOM.
     num_processes: Optional[int] = None
@@ -228,6 +238,152 @@ class EvoNavPipeline:
         )
         return ranked[0]
 
+    def _run_closed_loop_branch(
+        self,
+        cfg: EvoNavRunConfig,
+        *,
+        llm: Any,
+        pack: Any,
+        regime: str,
+        predict_method: str,
+    ):
+        """Innovation path: interleaved Score1 ↔ Stage II short ↔ Surrogate+AL."""
+        from crowd_nav.reward_search.closed_loop import ClosedLoopConfig, ClosedLoopRunner
+
+        console.banner("Closed-loop multi-fidelity (innovation)")
+        cl_cfg = ClosedLoopConfig(
+            population_size=int(cfg.stage1_population),
+            generations=int(cfg.stage1_generations),
+            min_labels_for_gate=int(cfg.closed_loop_min_labels_for_gate),
+            stage2_train_steps=int(cfg.closed_loop_k2),
+            k2_unit=str(cfg.stage2_k2_unit),
+            drop_fraction=float(cfg.surrogate_drop_fraction),
+            max_uncertainty_to_drop=float(cfg.surrogate_max_uncertainty_to_drop),
+            min_keep=int(cfg.surrogate_min_keep),
+            al_enabled=not bool(cfg.closed_loop_no_al),
+            al_max_per_epoch=int(cfg.closed_loop_al_max_per_epoch),
+            final_stage2_rounds=int(cfg.closed_loop_final_stage2_rounds),
+            refit_every_new_labels=int(cfg.closed_loop_refit_every_new_labels),
+            min_stage2_per_gen=int(cfg.closed_loop_min_stage2_per_gen),
+            surrogate_model_dir=str(cfg.surrogate_model_dir or "artifacts/surrogate"),
+            surrogate_dataset=str(cfg.surrogate_dataset),
+            al_root=str(cfg.active_learning_queue),
+            stage1_dataset_path=str(cfg.stage1_dataset_path),
+            seed=int(cfg.seed),
+            device=str(cfg.device),
+            num_processes=1 if cfg.num_processes is None else max(1, int(cfg.num_processes)),
+            use_stub=bool(cfg.stage2_use_stub or cfg.fast),
+            llm_provider=str(cfg.llm_provider),
+            output_dir=str(cfg.output_dir),
+            keep_runtime_elite=bool(cfg.elitism),
+            human_num=max(1, int(cfg.human_num)),
+            predict_method=str(predict_method),
+            randomization_regime=str(regime),
+            horizon_steps=max(1, int(cfg.stage2_horizon)),
+        )
+        if cfg.fast:
+            cl_cfg.apply_fast_profile()
+            cl_cfg.output_dir = str(cfg.output_dir)
+            cl_cfg.surrogate_model_dir = str(
+                cfg.surrogate_model_dir or "artifacts/surrogate"
+            )
+            cl_cfg.surrogate_dataset = str(cfg.surrogate_dataset)
+
+        cl_result = ClosedLoopRunner(
+            cl_cfg,
+            llm=llm,
+            score_fn=self._score_fn(),
+            trainer=make_stage2_trainer_for_domain(
+                pack, use_stub=bool(cfg.stage2_use_stub or cfg.fast)
+            ),
+            validator=self.validator,
+        ).run()
+
+        stage1_pop = list(cl_result.population)
+        best_s1 = max(
+            stage1_pop,
+            key=lambda c: float("-inf") if c.score is None else float(c.score),
+        )
+        write_json(
+            os.path.join(cfg.output_dir, "stage1_population.json"),
+            {
+                "mode": "closed_loop_v1",
+                "ranking": [c.candidate_id for c in stage1_pop],
+                "population": [candidate_to_dict(c) for c in stage1_pop],
+            },
+        )
+        write_json(
+            os.path.join(cfg.output_dir, "best_stage1.json"),
+            candidate_to_dict(best_s1),
+        )
+
+        stage2_pop = list(stage1_pop)
+        s2_runner = None
+        if int(cfg.closed_loop_final_stage2_rounds) > 0:
+            s2_cfg = Stage2Config(
+                population_size=len(stage2_pop),
+                rounds=int(cfg.closed_loop_final_stage2_rounds),
+                train_env_steps=cfg.stage2_train_steps,
+                k2_unit=str(cfg.stage2_k2_unit),
+                eval_episodes=cfg.stage2_eval_episodes,
+                horizon_steps=cfg.stage2_horizon,
+                seed=cfg.seed,
+                device=cfg.device,
+                num_processes=cfg.num_processes,
+                human_num=int(cfg.human_num),
+                output_root=os.path.join(cfg.output_dir, "stage2_train"),
+                randomization_regime=regime,
+                predict_method=predict_method,
+                env_name=env_name_for_predict_method(predict_method),
+                protect_elite_refine=bool(cfg.elitism),
+                inject_elite=bool(cfg.elitism),
+            )
+            s2_trainer = make_stage2_trainer_for_domain(
+                pack, use_stub=cfg.stage2_use_stub
+            )
+            s2_runner = Stage2Runner(
+                llm, s2_trainer, validator=self.validator, config=s2_cfg
+            )
+            stage2_pop = s2_runner.run(stage2_pop)
+
+        rank_pool_s2 = (
+            list(s2_runner.trained_snapshots)
+            if s2_runner is not None and s2_runner.trained_snapshots
+            else list(stage2_pop)
+        )
+        r2_rank = produce_final_ranking(rank_pool_s2, mode=cfg.final_rank, llm=llm)
+        best_s2 = pick_candidate_by_ranking(r2_rank, rank_pool_s2)
+        if best_s2 is None:
+            best_s2 = stage2_pop[0] if stage2_pop else best_s1
+        write_json(
+            os.path.join(cfg.output_dir, "stage2_population.json"),
+            {
+                "mode": "closed_loop_v1",
+                "population": [candidate_to_dict(c) for c in stage2_pop],
+                "best_trained_id": best_s2.candidate_id if best_s2 else None,
+                "final_ranking_R2": r2_rank,
+                "closed_loop": cl_result.manifest,
+            },
+        )
+        write_json(
+            os.path.join(cfg.output_dir, "best_stage2.json"),
+            candidate_to_dict(best_s2),
+        )
+        console.status(
+            f"Closed-loop complete - best_s2={best_s2.candidate_id} "
+            f"epochs={cl_result.manifest.get('n_epochs')} "
+            f"labels={cl_result.n_labeled_total}",
+            stage="pipeline",
+        )
+        return (
+            stage1_pop,
+            best_s1,
+            stage2_pop,
+            best_s2,
+            r2_rank,
+            dict(cl_result.manifest),
+        )
+
     def run(self) -> EvoNavArtifacts:
         import time
 
@@ -302,198 +458,206 @@ class EvoNavPipeline:
         with open(os.path.join(cfg.output_dir, "seed_reward.py"), "w", encoding="utf-8") as f:
             f.write(seed_code)
 
-        # ----- Stage I -----
-        n = cfg.stage1_population
-        n_crossover = min(2, n)
-        n_mutation = min(4, max(0, n - n_crossover))
-        n_random = n - n_crossover - n_mutation
-        s1_cfg = StageIConfig(
-            population_size=n,
-            generations=cfg.stage1_generations,
-            n_crossover=n_crossover,
-            n_mutation=n_mutation,
-            n_random=n_random,
-            keep_runtime_elite=bool(cfg.elitism),
-        )
-        evolver = StageIEvolver(
-            llm,
-            score_fn=self._score_fn(),
-            validator=self.validator,
-            config=s1_cfg,
-            rejection_log_path=os.path.join(cfg.output_dir, "stage1_rejections.jsonl"),
-        )
-        stage1_pop = evolver.run()
-        if evolver.global_best is None:
-            raise RuntimeError("Stage I did not produce a global best candidate.")
-        best_s1 = evolver.global_best
-        if bool(cfg.elitism):
-            stage1_pop = self._include_global_best(stage1_pop, best_s1)
-        write_json(
-            os.path.join(cfg.output_dir, "stage1_population.json"),
-            {
-                "ranking": [c.candidate_id for c in stage1_pop],
-                "population": [candidate_to_dict(c) for c in stage1_pop],
-                "history": [
-                    {
-                        "generation": h.generation,
-                        "ranking": h.ranking,
-                        "best_id": h.best_id,
-                        "best_score": h.best_score,
-                        "reflection": h.reflection,
-                    }
-                    for h in evolver.history
-                ],
-            },
-        )
-        write_json(
-            os.path.join(cfg.output_dir, "best_stage1.json"),
-            candidate_to_dict(best_s1),
-        )
-        console.status(
-            f"Stage I complete - best={best_s1.candidate_id} score={best_s1.score}",
-            stage="pipeline",
-        )
-
+        closed_loop_summary: Optional[Dict[str, Any]] = None
         surrogate_preds_s1: Optional[List[Dict[str, Any]]] = None
         al_summary: Optional[Dict[str, Any]] = None
-        if surrogate_model_ready(cfg.surrogate_model_dir):
+        s2_runner = None
+
+        if bool(cfg.closed_loop):
+            stage1_pop, best_s1, stage2_pop, best_s2, r2_rank, closed_loop_summary = (
+                self._run_closed_loop_branch(cfg, llm=llm, pack=pack, regime=regime, predict_method=predict_method)
+            )
+        else:
+            # ----- Stage I -----
+            n = cfg.stage1_population
+            n_crossover = min(2, n)
+            n_mutation = min(4, max(0, n - n_crossover))
+            n_random = n - n_crossover - n_mutation
+            s1_cfg = StageIConfig(
+                population_size=n,
+                generations=cfg.stage1_generations,
+                n_crossover=n_crossover,
+                n_mutation=n_mutation,
+                n_random=n_random,
+                keep_runtime_elite=bool(cfg.elitism),
+            )
+            evolver = StageIEvolver(
+                llm,
+                score_fn=self._score_fn(),
+                validator=self.validator,
+                config=s1_cfg,
+                rejection_log_path=os.path.join(cfg.output_dir, "stage1_rejections.jsonl"),
+            )
+            stage1_pop = evolver.run()
+            if evolver.global_best is None:
+                raise RuntimeError("Stage I did not produce a global best candidate.")
+            best_s1 = evolver.global_best
+            if bool(cfg.elitism):
+                stage1_pop = self._include_global_best(stage1_pop, best_s1)
+            write_json(
+                os.path.join(cfg.output_dir, "stage1_population.json"),
+                {
+                    "ranking": [c.candidate_id for c in stage1_pop],
+                    "population": [candidate_to_dict(c) for c in stage1_pop],
+                    "history": [
+                        {
+                            "generation": h.generation,
+                            "ranking": h.ranking,
+                            "best_id": h.best_id,
+                            "best_score": h.best_score,
+                            "reflection": h.reflection,
+                        }
+                        for h in evolver.history
+                    ],
+                },
+            )
+            write_json(
+                os.path.join(cfg.output_dir, "best_stage1.json"),
+                candidate_to_dict(best_s1),
+            )
             console.status(
-                f"Surrogate predict after Stage I ({cfg.surrogate_model_dir})",
+                f"Stage I complete - best={best_s1.candidate_id} score={best_s1.score}",
                 stage="pipeline",
             )
-            try:
-                surrogate_preds_s1, _model = predict_population(
-                    stage1_pop,
-                    str(cfg.surrogate_model_dir),
-                    score_fn=self._score_fn(),
-                )
-                write_json(
-                    os.path.join(cfg.output_dir, "surrogate_preds_stage1.json"),
-                    {"predictions": surrogate_preds_s1},
-                )
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("Surrogate Stage I predict failed: %s", exc)
-                console.warn(f"Surrogate predict skipped: {exc}", stage="pipeline")
-                surrogate_preds_s1 = None
 
-            if bool(cfg.active_learning):
-                from crowd_nav.reward_search.active_learning.loop import (
-                    run_active_learning_step,
+            if surrogate_model_ready(cfg.surrogate_model_dir):
+                console.status(
+                    f"Surrogate predict after Stage I ({cfg.surrogate_model_dir})",
+                    stage="pipeline",
                 )
-
-                console.status("Active learning step after Stage I", stage="pipeline")
-                al_summary = run_active_learning_step(
-                    surrogate_model_dir=str(cfg.surrogate_model_dir),
-                    queue_root=str(cfg.active_learning_queue),
-                    max_queries=int(cfg.active_learning_max_queries),
-                    refit_every=int(cfg.active_learning_refit_every),
-                    candidates=list(stage1_pop),
-                    surrogate_dataset=str(cfg.surrogate_dataset),
-                    use_stub=bool(cfg.stage2_use_stub or cfg.fast),
-                    seed=int(cfg.seed),
-                    stage1_dataset_path=str(cfg.stage1_dataset_path),
-                )
-                write_json(
-                    os.path.join(cfg.output_dir, "active_learning_step.json"),
-                    {k: v for k, v in al_summary.items() if k != "executed"},
-                )
-                if al_summary.get("status") == "error":
-                    console.warn(
-                        f"Active learning: {al_summary.get('message')}",
-                        stage="pipeline",
+                try:
+                    surrogate_preds_s1, _model = predict_population(
+                        stage1_pop,
+                        str(cfg.surrogate_model_dir),
+                        score_fn=self._score_fn(),
                     )
-                else:
-                    console.status(
-                        f"AL enqueued={al_summary.get('n_enqueued')} "
-                        f"executed={al_summary.get('n_executed')} "
-                        f"refit={al_summary.get('refit')}",
-                        stage="pipeline",
+                    write_json(
+                        os.path.join(cfg.output_dir, "surrogate_preds_stage1.json"),
+                        {"predictions": surrogate_preds_s1},
                     )
-        elif cfg.surrogate_model_dir:
-            console.warn(
-                f"Surrogate dir set but no model.joblib at {cfg.surrogate_model_dir}; "
-                "skipping surrogate/AL",
-                stage="pipeline",
-            )
-        elif cfg.active_learning:
-            console.warn(
-                "active_learning=True but surrogate_model_dir unset/missing; skipping AL",
-                stage="pipeline",
-            )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("Surrogate Stage I predict failed: %s", exc)
+                    console.warn(f"Surrogate predict skipped: {exc}", stage="pipeline")
+                    surrogate_preds_s1 = None
 
-        # ----- Stage II -----
-        s2_cfg = Stage2Config(
-            population_size=len(stage1_pop),
-            rounds=cfg.stage2_rounds,
-            train_env_steps=cfg.stage2_train_steps,
-            k2_unit=str(cfg.stage2_k2_unit),
-            eval_episodes=cfg.stage2_eval_episodes,
-            horizon_steps=cfg.stage2_horizon,
-            seed=cfg.seed,
-            device=cfg.device,
-            num_processes=cfg.num_processes,
-            human_num=int(cfg.human_num),
-            output_root=os.path.join(cfg.output_dir, "stage2_train"),
-            randomization_regime=regime,
-            predict_method=predict_method,
-            env_name=env_name_for_predict_method(predict_method),
-            protect_elite_refine=bool(cfg.elitism),
-            inject_elite=bool(cfg.elitism),
-        )
-        if cfg.stage2_use_stub:
+                if bool(cfg.active_learning):
+                    from crowd_nav.reward_search.active_learning.loop import (
+                        run_active_learning_step,
+                    )
+
+                    console.status("Active learning step after Stage I", stage="pipeline")
+                    al_summary = run_active_learning_step(
+                        surrogate_model_dir=str(cfg.surrogate_model_dir),
+                        queue_root=str(cfg.active_learning_queue),
+                        max_queries=int(cfg.active_learning_max_queries),
+                        refit_every=int(cfg.active_learning_refit_every),
+                        candidates=list(stage1_pop),
+                        surrogate_dataset=str(cfg.surrogate_dataset),
+                        use_stub=bool(cfg.stage2_use_stub or cfg.fast),
+                        seed=int(cfg.seed),
+                        stage1_dataset_path=str(cfg.stage1_dataset_path),
+                    )
+                    write_json(
+                        os.path.join(cfg.output_dir, "active_learning_step.json"),
+                        {k: v for k, v in al_summary.items() if k != "executed"},
+                    )
+                    if al_summary.get("status") == "error":
+                        console.warn(
+                            f"Active learning: {al_summary.get('message')}",
+                            stage="pipeline",
+                        )
+                    else:
+                        console.status(
+                            f"AL enqueued={al_summary.get('n_enqueued')} "
+                            f"executed={al_summary.get('n_executed')} "
+                            f"refit={al_summary.get('refit')}",
+                            stage="pipeline",
+                        )
+            elif cfg.surrogate_model_dir:
+                console.warn(
+                    f"Surrogate dir set but no model.joblib at {cfg.surrogate_model_dir}; "
+                    "skipping surrogate/AL",
+                    stage="pipeline",
+                )
+            elif cfg.active_learning:
+                console.warn(
+                    "active_learning=True but surrogate_model_dir unset/missing; skipping AL",
+                    stage="pipeline",
+                )
+
+            # ----- Stage II -----
+            s2_cfg = Stage2Config(
+                population_size=len(stage1_pop),
+                rounds=cfg.stage2_rounds,
+                train_env_steps=cfg.stage2_train_steps,
+                k2_unit=str(cfg.stage2_k2_unit),
+                eval_episodes=cfg.stage2_eval_episodes,
+                horizon_steps=cfg.stage2_horizon,
+                seed=cfg.seed,
+                device=cfg.device,
+                num_processes=cfg.num_processes,
+                human_num=int(cfg.human_num),
+                output_root=os.path.join(cfg.output_dir, "stage2_train"),
+                randomization_regime=regime,
+                predict_method=predict_method,
+                env_name=env_name_for_predict_method(predict_method),
+                protect_elite_refine=bool(cfg.elitism),
+                inject_elite=bool(cfg.elitism),
+            )
+            if cfg.stage2_use_stub:
+                console.status(
+                    "Stage II using domain StubPolicyTrainer (via adapter)",
+                    stage="pipeline",
+                )
+            s2_trainer = make_stage2_trainer_for_domain(
+                pack, use_stub=cfg.stage2_use_stub
+            )
+            s2_runner = Stage2Runner(
+                llm, s2_trainer, validator=self.validator, config=s2_cfg
+            )
+            if self.checkpoint_store is not None:
+                s2_runner.checkpoint_store = self.checkpoint_store
+                s2_runner.checkpoint_seed = int(cfg.seed)
+            stage2_pop = s2_runner.run(stage1_pop)
+            rank_pool_s2 = list(s2_runner.trained_snapshots) or list(stage2_pop)
+            r2_rank = produce_final_ranking(
+                rank_pool_s2, mode=cfg.final_rank, llm=llm
+            )
+            best_s2 = pick_candidate_by_ranking(r2_rank, rank_pool_s2)
+            if best_s2 is None:
+                best_s2 = s2_runner.best_trained or self._best_by_ever_metrics(
+                    stage2_pop, s2_runner.history, s2_runner.trained_snapshots
+                )
+            write_json(
+                os.path.join(cfg.output_dir, "stage2_population.json"),
+                {
+                    "population": [candidate_to_dict(c) for c in stage2_pop],
+                    "best_trained_id": (
+                        best_s2.candidate_id if best_s2 is not None else None
+                    ),
+                    "final_ranking_R2": r2_rank,
+                    "history": [
+                        {
+                            "round_index": r.round_index,
+                            "candidate_id": r.candidate_id,
+                            "metrics": r.metrics.as_dict(),
+                            "refined": r.refined,
+                            "kept_previous": r.kept_previous,
+                        }
+                        for r in s2_runner.history
+                    ],
+                },
+            )
+            write_json(
+                os.path.join(cfg.output_dir, "best_stage2.json"),
+                candidate_to_dict(best_s2),
+            )
             console.status(
-                "Stage II using domain StubPolicyTrainer (via adapter)",
+                f"Stage II complete - best={best_s2.candidate_id} "
+                f"scalar={candidate_nav_scalar(best_s2):.3f} "
+                f"R2_mode={r2_rank.get('mode')}",
                 stage="pipeline",
             )
-        s2_trainer = make_stage2_trainer_for_domain(
-            pack, use_stub=cfg.stage2_use_stub
-        )
-        s2_runner = Stage2Runner(
-            llm, s2_trainer, validator=self.validator, config=s2_cfg
-        )
-        if self.checkpoint_store is not None:
-            s2_runner.checkpoint_store = self.checkpoint_store
-            s2_runner.checkpoint_seed = int(cfg.seed)
-        stage2_pop = s2_runner.run(stage1_pop)
-        rank_pool_s2 = list(s2_runner.trained_snapshots) or list(stage2_pop)
-        r2_rank = produce_final_ranking(
-            rank_pool_s2, mode=cfg.final_rank, llm=llm
-        )
-        best_s2 = pick_candidate_by_ranking(r2_rank, rank_pool_s2)
-        if best_s2 is None:
-            best_s2 = s2_runner.best_trained or self._best_by_ever_metrics(
-                stage2_pop, s2_runner.history, s2_runner.trained_snapshots
-            )
-        write_json(
-            os.path.join(cfg.output_dir, "stage2_population.json"),
-            {
-                "population": [candidate_to_dict(c) for c in stage2_pop],
-                "best_trained_id": (
-                    best_s2.candidate_id if best_s2 is not None else None
-                ),
-                "final_ranking_R2": r2_rank,
-                "history": [
-                    {
-                        "round_index": r.round_index,
-                        "candidate_id": r.candidate_id,
-                        "metrics": r.metrics.as_dict(),
-                        "refined": r.refined,
-                        "kept_previous": r.kept_previous,
-                    }
-                    for r in s2_runner.history
-                ],
-            },
-        )
-        write_json(
-            os.path.join(cfg.output_dir, "best_stage2.json"),
-            candidate_to_dict(best_s2),
-        )
-        console.status(
-            f"Stage II complete - best={best_s2.candidate_id} "
-            f"scalar={candidate_nav_scalar(best_s2):.3f} "
-            f"R2_mode={r2_rank.get('mode')}",
-            stage="pipeline",
-        )
 
         # ----- Surrogate gate before Stage III -----
         stage3_input_pop = list(stage2_pop)
@@ -555,6 +719,10 @@ class EvoNavPipeline:
                 )
         else:
             human_counts = (h_train,)
+        # Closed-loop / Windows: unset nproc must not auto-scale to cpu-1 (OOM).
+        stage3_nproc = cfg.num_processes
+        if stage3_nproc is None and bool(cfg.closed_loop):
+            stage3_nproc = 1
         s3_cfg = Stage3Config(
             population_size=len(stage3_input_pop),
             rounds=cfg.stage3_rounds,
@@ -562,7 +730,7 @@ class EvoNavPipeline:
             eval_episodes=cfg.stage3_eval_episodes,
             seed=cfg.seed,
             device=cfg.device,
-            num_processes=cfg.num_processes,
+            num_processes=stage3_nproc,
             train_human_num=h_train,
             output_root=os.path.join(cfg.output_dir, "stage3_train"),
             human_counts=human_counts,
@@ -668,13 +836,26 @@ class EvoNavPipeline:
                 if al_summary is None
                 else {k: v for k, v in al_summary.items() if k != "executed"}
             ),
+            "closed_loop": bool(cfg.closed_loop),
+            "closed_loop_summary": closed_loop_summary,
         }
 
         # §4.3.4 proxy consistency (Spearman + top-k on genome fingerprints).
+        # Closed-loop with final_stage2_rounds=0 leaves s2_runner=None; use pop.
+        stage2_for_consistency = (
+            list(s2_runner.trained_snapshots)
+            if s2_runner is not None and s2_runner.trained_snapshots
+            else list(stage2_pop)
+        )
+        stage3_for_consistency = (
+            list(s3_runner.trained_snapshots)
+            if s3_runner is not None and s3_runner.trained_snapshots
+            else list(stage3_pop)
+        )
         consistency = compute_proxy_consistency(
             stage1=stage1_pop,
-            stage2=list(s2_runner.trained_snapshots) or stage2_pop,
-            stage3=list(s3_runner.trained_snapshots) or stage3_pop,
+            stage2=stage2_for_consistency,
+            stage3=stage3_for_consistency,
             top_k=min(3, max(1, len(stage1_pop))),
         )
         write_json(
@@ -731,6 +912,7 @@ class EvoNavPipeline:
             best_stage1=best_s1,
             best_stage2=best_s2,
             best_stage3=best_s3,
+            closed_loop=bool(cfg.closed_loop),
         )
 
         return EvoNavArtifacts(

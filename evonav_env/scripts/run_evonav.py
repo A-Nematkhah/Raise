@@ -65,7 +65,9 @@ def main() -> int:
     parser.add_argument(
         "--verbose",
         action="store_true",
-        help="Extra DEBUG-level terminal detail (sandbox previews, etc.)",
+        help=(
+            "DEBUG for crowd_nav/crowd_sim only (HTTP/Groq request dumps stay quiet)"
+        ),
     )
     parser.add_argument(
         "--score1",
@@ -224,6 +226,49 @@ def main() -> int:
         default="data/surrogate_dataset",
         help="Surrogate label jsonl root for AL append/refit",
     )
+    parser.add_argument(
+        "--closed-loop",
+        action="store_true",
+        help=(
+            "Innovation path: Gen epochs with Score1 → Surrogate gate → "
+            "in-loop AL → Stage II short labels → refit (not paper Alg.1 linear)"
+        ),
+    )
+    parser.add_argument(
+        "--closed-loop-no-al",
+        action="store_true",
+        help="With --closed-loop, disable in-loop active learning picks",
+    )
+    parser.add_argument(
+        "--closed-loop-al-max",
+        type=int,
+        default=4,
+        help="Max AL stage2_label picks per closed-loop epoch (default 4)",
+    )
+    parser.add_argument(
+        "--closed-loop-k2",
+        type=int,
+        default=4000,
+        help="Stage II short budget inside closed-loop epochs (default 4000)",
+    )
+    parser.add_argument(
+        "--closed-loop-min-labels-gate",
+        type=int,
+        default=24,
+        help="Soft Surrogate gate until this many labels exist (default 24)",
+    )
+    parser.add_argument(
+        "--closed-loop-refit-every",
+        type=int,
+        default=8,
+        help="Refit Surrogate after this many new Stage II labels (default 8)",
+    )
+    parser.add_argument(
+        "--closed-loop-min-stage2",
+        type=int,
+        default=4,
+        help="Min candidates to Stage II-label per closed-loop epoch (default 4)",
+    )
 
     args = parser.parse_args()
 
@@ -256,14 +301,9 @@ def main() -> int:
     # Protect Config.get_args() class-body from our CLI flags.
     sys.argv = [sys.argv[0], "--no-cuda" if args.device == "cpu" else "--seed", str(args.seed)]
 
-    logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
-        format="%(asctime)s %(levelname)s %(message)s",
-        datefmt="%H:%M:%S",
-    )
     from crowd_nav.reward_search import console as _console
 
-    _console.set_verbose(bool(args.verbose))
+    _console.configure_run_logging(verbose=bool(args.verbose))
 
     import crowd_sim  # noqa: F401
 
@@ -295,6 +335,13 @@ def main() -> int:
         surrogate_drop_fraction=float(args.surrogate_drop_fraction),
         active_learning=bool(args.active_learning),
         active_learning_max_queries=int(args.al_max_queries),
+        closed_loop=bool(args.closed_loop),
+        closed_loop_no_al=bool(args.closed_loop_no_al),
+        closed_loop_al_max_per_epoch=int(args.closed_loop_al_max),
+        closed_loop_min_labels_for_gate=int(args.closed_loop_min_labels_gate),
+        closed_loop_k2=int(args.closed_loop_k2),
+        closed_loop_refit_every_new_labels=int(args.closed_loop_refit_every),
+        closed_loop_min_stage2_per_gen=int(args.closed_loop_min_stage2),
         device=args.device,
         num_processes=args.num_processes,
         randomization_regime=args.regime,

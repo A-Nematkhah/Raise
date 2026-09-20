@@ -1,0 +1,7 @@
+{
+  "feature_schema_version": "1",
+  "mode": "closed_loop_v1",
+  "n_examples": 2,
+  "closed_loop_output": "results/closed_loop_log_check",
+  "generations": 1
+}

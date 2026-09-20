@@ -136,4 +136,101 @@ python scripts/run_active_learning_step.py --surrogate artifacts/surrogate --fas
 
 ---
 
+## Surrogate bootstrap هم‌تراز Gen0 + پایداری ویندوز (۲۰۲۶-۰۹-۲۰)
+
+**قبل:** `bootstrap_surrogate.py` جمعیت را با پرامپت خام (`generate a reward variant`)
+می‌ساخت؛ با ران اصلی یکی نبود و Groq اغلب `import math` می‌داد. فلگ‌های CLI روی
+`sys.argv` می‌ماندند و workerهای Stage II روی ویندوز `get_args()` را با همان argv
+می‌دیدند → crash / BrokenPipe. `num_processes` هم تا ۱۶ می‌رفت و RAM را خالی می‌کرد.
+
+**بعد:**
+
+- `_build_population` مستقیماً `StageIEvolver.initialize_population` (همان Gen0
+  pipeline) را صدا می‌زند — همان D1 batch + regen + validator.
+- بعد از parse، argv مثل `run_evonav` ایزوله می‌شود.
+- پیش‌فرض `--num-processes 1` (قابل افزایش)؛ مناسب RTX کوچک / ویندوز.
+- نرمال‌سازی کد: حذف `[0]`/`[1]`/`[-1]` از فیلدهای اسکالر RewardState
+  (`state.robot.px[0]` و مشابه) قبل از sandbox؛ پرامپت D1/D2 هم صریح‌تر شد.
+
+```powershell
+python scripts/bootstrap_surrogate.py --force --n-candidates 50 `
+  --stage2-train-steps 4000 --k2-unit gradient_steps --llm groq `
+  --device cuda --num-processes 1
+```
+
+---
+
+## اصلاح انتخاب best + snapshot یکتا (۲۰۲۶-۰۹-۲۰)
+
+**قبل:** `pick_candidate_by_ranking` با dict روی `candidate_id` آخرین snapshot همان
+id را برمی‌گرداند؛ refine همیشه `*_v2` می‌ساخت و snapshotهای چند round روی یک id
+می‌افتادند. نتیجه: `best_stage2.json` / `best_stage3.json` می‌توانست بدتر از رتبهٔ
+اول R2/R3 باشد.
+
+**بعد:**
+
+- هر trained snapshot id یکتا دارد: `{id}__r{round}_s{index}`.
+- پسوند refine افزایشی است (`_v2` → `_v3` → …).
+- اگر هنوز id تکراری در pool باشد، بین آن‌ها بالاترین navigation scalar انتخاب می‌شود.
+
+---
+
+## Collect Stage I — seed بعد از reset (۲۰۲۶-۰۹-۲۰)
+
+**قبل:** `np.random.seed(traj_seed)` قبل از `env.reset()` بود؛ reset دوباره RNG را
+از seed سناریو می‌نوشت → دو traj نوع random داخل یک scenario بیت‌به‌بیت یکی بودند.
+
+**بعد:** اول `_reset_scenario` (layout ثابت سناریو)، بعد `np.random.seed(traj_seed)`
+برای نویز/random. دیتاستهای قدیمی نیاز به recollect دارند تا این fix اعمال شود.
+
+---
+
+## Proxy consistency با lineage بعد از refine (۲۰۲۶-۰۹-۲۰)
+
+**قبل:** Spearman II↔III فقط روی fingerprint کد مشترک بود؛ بعد از D.3 موفق، overlap
+تقریباً خالی می‌شد و ρ اغلب `null` / غیرقابل‌استفاده می‌ماند.
+
+**بعد:** روی refine، `parent_genome_key` ذخیره می‌شود و گزارش
+`stage2_vs_stage3_lineage` امتیاز Stage III را با امتیاز Stage II والد هم‌تراز
+می‌کند. در `manifest` هم `stage2_vs_stage3_lineage_rho` و
+`stage2_vs_stage3_preferred` آمده است.
+
+---
+
+## Stage I دقیقاً ۲/۴/۲ مگر `--elitism` (۲۰۲۶-۰۹-۲۰)
+
+**قبل:** نسل بعد همیشه top-1 را نگه می‌داشت و یک اسلات از random می‌دزدید → عملاً
+۲/۴/۱؛ فلگ `--elitism` روی این رفتار Stage I اثر نداشت.
+
+**بعد:** پیش‌فرض `keep_runtime_elite=False` → دقیقاً ۲ crossover / ۴ mutation /
+۲ random. با `--elitism` همان keep-top-1 قبلی (و inject/protect در II/III) روشن
+می‌شود. `BASELINE_REPORT.md` Part C با این defaults هم‌تراز شد و یادداشت هزینهٔ
+K2×num_processes اضافه شد.
+
+---
+
+## Closed-loop multi-fidelity (نوآوری) — ۲۰۲۶-۰۹-۲۰
+
+**قبل:** مسیر خطی Alg.1 (همهٔ Stage I، بعد همهٔ Stage II). Surrogate/AL فقط
+opt-in جدا بعد از Stage I یا قبل از Stage III بودند و به Genهای بعدی Stage I
+فیدبک نمی‌دادند.
+
+**بعد:** فلگ `--closed-loop` یک حلقهٔ نسل‌به‌نسل روشن می‌کند:
+
+1. Gen0: Score1 → Stage II کوتاه روی همه → fit Surrogate  
+2. Gen≥1: Score1 → Surrogate gate → **AL داخل حلقه** (uncertain/disagree) →
+   Stage II روی survivors∪AL → refit  
+3. اختیاری بعداً polish Stage II + Stage III  
+
+بسته: `crowd_nav/reward_search/closed_loop/` + `PLAN.md`. بدون فلگ رفتار قبلی
+دست‌نخورده می‌ماند.
+
+```powershell
+python scripts/run_evonav.py --fast --closed-loop --allow-seed-llm `
+  --output-dir results/closed_loop_fast --surrogate artifacts/surrogate `
+  --surrogate-dataset data/surrogate_dataset
+```
+
+---
+
 *ادامهٔ تغییرات بعدی از همین‌جا اضافه شود.*

@@ -1,0 +1,11 @@
+{
+  "target_keys": [
+    "SR",
+    "CR",
+    "TR"
+  ],
+  "n_bags": 3,
+  "rf_estimators": 64,
+  "random_seed": 425,
+  "model_id": "surrogate_rf_v1"
+}

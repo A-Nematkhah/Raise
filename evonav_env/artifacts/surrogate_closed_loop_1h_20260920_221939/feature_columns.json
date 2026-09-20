@@ -1,0 +1,20 @@
+{
+  "columns": [
+    "code_len",
+    "score1",
+    "score1_raw",
+    "score1_holdout",
+    "score1_train",
+    "score1_degen",
+    "score1_rejected",
+    "score1_worst_mean",
+    "fp_0",
+    "fp_1",
+    "fp_2",
+    "fp_3",
+    "fp_4",
+    "fp_5",
+    "fp_6",
+    "fp_7"
+  ]
+}

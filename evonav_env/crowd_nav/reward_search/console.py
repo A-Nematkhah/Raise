@@ -43,6 +43,52 @@ def is_interactive() -> bool:
         return False
 
 
+def configure_run_logging(*, verbose: bool = False) -> None:
+    """
+    Readable default logs: INFO for EvoNav, quiet HTTP/SDK noise.
+
+    ``--verbose`` turns on DEBUG for ``crowd_nav`` / ``crowd_sim`` only —
+    not httpx/groq full request dumps (those made 1h runs unreadable).
+    """
+    import logging
+    import warnings
+
+    root_level = logging.INFO
+    logging.basicConfig(
+        level=root_level,
+        format="%(asctime)s %(levelname)s %(message)s",
+        datefmt="%H:%M:%S",
+        force=True,
+    )
+    set_verbose(bool(verbose))
+    pkg_level = logging.DEBUG if verbose else logging.INFO
+    for name in ("crowd_nav", "crowd_sim", "rl"):
+        logging.getLogger(name).setLevel(pkg_level)
+
+    # Third-party chatter (Groq/httpx dump entire prompts at DEBUG).
+    for name in (
+        "httpx",
+        "httpcore",
+        "groq",
+        "openai",
+        "urllib3",
+        "asyncio",
+        "matplotlib",
+        "PIL",
+        "filelock",
+    ):
+        logging.getLogger(name).setLevel(logging.WARNING)
+
+    warnings.filterwarnings(
+        "ignore",
+        message="Box bound precision lowered by casting to float32",
+    )
+    warnings.filterwarnings(
+        "ignore",
+        message="An input array is constant; the correlation coefficient is not defined",
+    )
+
+
 def status(message: str, *, stage: Optional[str] = None) -> None:
     """Short consistent status line (INFO)."""
     prefix = f"[{stage}] " if stage else ""
@@ -264,9 +310,21 @@ def final_run_summary(
     best_stage1: Optional[Any] = None,
     best_stage2: Optional[Any] = None,
     best_stage3: Optional[Any] = None,
+    closed_loop: bool = False,
 ) -> None:
     banner("EvoNav Algorithm 1 - finished")
     status(f"Total wall-clock: {format_seconds(wall_seconds)}")
+    if closed_loop:
+        status("mode: closed_loop_v1 (innovation)")
+        try:
+            from crowd_nav.reward_search.closed_loop.report import (
+                build_closed_loop_report,
+            )
+
+            for line in build_closed_loop_report(output_dir).strip().splitlines():
+                status(line, stage="closed-loop")
+        except Exception as exc:  # noqa: BLE001
+            warn(f"closed-loop report unavailable: {exc}", stage="pipeline")
     for label, cand in (
         ("Stage I best", best_stage1),
         ("Stage II best", best_stage2),
@@ -289,10 +347,16 @@ def final_run_summary(
             extra = f"  Score1={_fmt_score(score)}"
         status(f"{label}: {getattr(cand, 'candidate_id', '?')}{extra}")
     status(f"Artifacts: {os.path.abspath(output_dir)}")
-    status(
-        "Key files: manifest.json, final_candidate.json, "
-        "best_stage1.json, best_stage2.json, best_stage3.json"
-    )
+    if closed_loop:
+        status(
+            "Key files: closed_loop/REPORT.txt, closed_loop/epochs.jsonl, "
+            "manifest.json, best_stage3.json"
+        )
+    else:
+        status(
+            "Key files: manifest.json, final_candidate.json, "
+            "best_stage1.json, best_stage2.json, best_stage3.json"
+        )
 
 
 def _fmt_score(value: Any) -> str:

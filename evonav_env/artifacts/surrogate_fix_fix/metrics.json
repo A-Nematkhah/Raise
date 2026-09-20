@@ -1,0 +1,29 @@
+{
+  "n_total": 2,
+  "n_train": 1,
+  "n_val": 1,
+  "target_keys": [
+    "SR",
+    "CR",
+    "TR"
+  ],
+  "n_bags": 3,
+  "model_id": "surrogate_rf_v1",
+  "per_target": {
+    "SR": {
+      "mae": 0.08500000000000074,
+      "rmse": 0.08500000000000074,
+      "spearman": null
+    },
+    "CR": {
+      "mae": 0.07599999999999979,
+      "rmse": 0.07599999999999979,
+      "spearman": null
+    },
+    "TR": {
+      "mae": 0.008999999999999952,
+      "rmse": 0.008999999999999952,
+      "spearman": null
+    }
+  }
+}

@@ -1,0 +1,42 @@
+#!/usr/bin/env python
+"""Print a readable closed-loop REPORT for an existing run directory.
+
+Usage (from evonav_env/):
+  python scripts/print_closed_loop_report.py results/closed_loop_1h_20260920_221939
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import sys
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "output_dir",
+        help="Run output dir containing closed_loop/epochs.jsonl",
+    )
+    args = parser.parse_args()
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if root not in sys.path:
+        sys.path.insert(0, root)
+
+    from crowd_nav.reward_search.closed_loop.report import (
+        build_closed_loop_report,
+        write_closed_loop_report,
+    )
+
+    out = args.output_dir
+    if not os.path.isdir(out):
+        print(f"not a directory: {out}", file=sys.stderr)
+        return 2
+    path = write_closed_loop_report(out)
+    print(build_closed_loop_report(out), end="")
+    print(f"(wrote {path})", file=sys.stderr)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
