@@ -60,7 +60,12 @@ def test_select_gen0_never_gates():
 
 
 def test_soft_gate_until_min_labels():
-    pop = [_cand("a"), _cand("b"), _cand("c"), _cand("d")]
+    pop = [
+        _cand("a", code="def compute_reward(state, memory):\n    return 1.0\n"),
+        _cand("b", code="def compute_reward(state, memory):\n    return 2.0\n"),
+        _cand("c", code="def compute_reward(state, memory):\n    return 3.0\n"),
+        _cand("d", code="def compute_reward(state, memory):\n    return 4.0\n"),
+    ]
     preds = [
         {"candidate_id": c.candidate_id, "quality": -1.0, "uncertainty": 0.01}
         for c in pop
@@ -134,6 +139,7 @@ def test_al_inside_epoch_hard_gate(monkeypatch):
         al_max_per_epoch=2,
         al_allow_stage1_requests=False,
         al_root="data/active_learning",
+        require_skill=False,
     )
     assert gate.get("enabled") is True
     assert gate.get("soft") is False
@@ -175,9 +181,11 @@ def test_closed_loop_fast_two_epochs(tmp_path):
 
     result = ClosedLoopRunner(cfg).run()
     assert result.n_labeled_total >= 1
-    assert os.path.isfile(os.path.join(model, "model.joblib"))
+    # Isolation nests model under output_dir; use the path the runner actually wrote.
+    assert os.path.isfile(os.path.join(result.model_dir, "model.joblib"))
     epochs = read_epochs(out)
-    assert len(epochs) == 2
+    # generations=2 → Gen0 + 2 evolution steps = 3 scored epochs
+    assert len(epochs) == 3
     assert epochs[0]["gate"].get("soft") is True
     # After Gen0 refit, Gen1 may hard-gate if enough labels
     assert epochs[1]["epoch"] == 1

@@ -1,9 +1,9 @@
 #!/usr/bin/env python
-"""Closed-loop ~1h smoke: Gen0 labels -> Surrogate fit -> Gen>=1 gate+AL -> refit.
+"""RAISE loop ~1h smoke: Gen0 labels -> Surrogate fit -> Gen>=1 gate+AL -> refit.
 
 Exercises the innovation path end-to-end (not paper Alg.1 linear):
-  Score1 -> Surrogate gate -> in-loop AL -> Stage II short -> append -> refit
-  (+ Stage III stub so the pipeline finishes)
+  Score1 -> Surrogate gate -> in-loop AL -> Refine short -> append -> refit
+  (+ Validate stub so the pipeline finishes)
 
 From evonav_env/:
   python scripts/run_closed_loop_1h.py
@@ -45,15 +45,15 @@ def main() -> int:
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     out = f"results/closed_loop_1h_{stamp}"
-    surr_model = f"artifacts/surrogate_closed_loop_1h_{stamp}"
-    surr_data = f"data/surrogate_dataset_closed_loop_1h_{stamp}"
+    surr_model = os.path.join(out, "surrogate_model")
+    surr_data = os.path.join(out, "surrogate_dataset")
     for path in (out, surr_model, surr_data):
         os.makedirs(path, exist_ok=True)
 
     cmd = [
         sys.executable,
         "scripts/run_evonav.py",
-        "--closed-loop",
+        "--RAISE loop",
         "--llm",
         args.llm,
         "--device",
@@ -69,20 +69,20 @@ def main() -> int:
         "4",
         "--stage1-generations",
         "3",
-        "--closed-loop-k2",
+        "--RAISE loop-k2",
         "2000",
         "--k2-unit",
         "gradient_steps",
         # Soft→hard gate after Gen0 (4 labels); AL + gate run on Gen≥1.
-        "--closed-loop-min-labels-gate",
+        "--RAISE loop-min-labels-gate",
         "4",
-        "--closed-loop-al-max",
+        "--RAISE loop-al-max",
         "2",
-        # Allow gate to drop (min 2 Stage II / epoch, not force all 4).
-        "--closed-loop-min-stage2",
+        # Allow gate to drop (min 2 Refine / epoch, not force all 4).
+        "--RAISE loop-min-stage2",
         "2",
         # Refit after Gen1+ as soon as ≥2 new labels land.
-        "--closed-loop-refit-every",
+        "--RAISE loop-refit-every",
         "2",
         "--surrogate",
         surr_model,
@@ -107,13 +107,13 @@ def main() -> int:
         cmd.append("--allow-seed-llm")
     cmd.extend(extra)
 
-    print("=== Closed-loop 1h smoke ===")
+    print("=== RAISE loop 1h smoke ===")
     print(f"output:          {out}")
     print(f"surrogate model: {surr_model}")
     print(f"surrogate data:  {surr_data}")
     print(f"llm:             {args.llm}")
     print(
-        "covers: Gen0 Score1+StageII+fit | Gen>=1 gate+AL+StageII+refit | Stage3 stub"
+        "covers: Gen0 Score1+Refine+fit | Gen>=1 gate+AL+Refine+refit | Validate stub"
     )
     print("logs: INFO only (pass --verbose for crowd_nav DEBUG; HTTP dumps stay quiet)")
     print()
