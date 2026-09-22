@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-Eval-only re-evaluation of an EvoNav Stage III checkpoint (no training).
+Eval-only re-evaluation of an RAISE Stage III checkpoint (no training).
 
 Use this to lock in best-ever policies discovered mid-run (e.g. R0 peak)
 without trusting last-round selection or fixed test_case GIFs.
@@ -8,7 +8,7 @@ without trusting last-round selection or fixed test_case GIFs.
 Examples::
 
     # Re-eval the known R0 peak from run_scaled_h5_gst (SR was ~0.68 @ E=150)
-    python scripts/eval_evonav_checkpoint.py \\
+    python scripts/eval_raise_checkpoint.py \\
         --run-dir results/run_scaled_h5_gst \\
         --candidate-id mut_0060_v2 \\
         --round 0 \\
@@ -16,7 +16,7 @@ Examples::
         --device cuda
 
     # Auto-pick best-ever from stage3 history, then re-eval
-    python scripts/eval_evonav_checkpoint.py \\
+    python scripts/eval_raise_checkpoint.py \\
         --run-dir results/run_scaled_h5_gst \\
         --best-ever \\
         --episodes 150 \\
@@ -140,8 +140,8 @@ def run_eval(
 
     from crowd_nav.reward_search.regime import env_name_for_predict_method
     from crowd_nav.reward_search.reporting import load_candidate_dict, write_json
-    from crowd_nav.reward_search.stage2 import evaluate_proxy_policy
-    from crowd_nav.reward_search.stage3 import (
+    from crowd_nav.reward_search.refine import evaluate_proxy_policy
+    from crowd_nav.reward_search.validate import (
         Stage3Config,
         _make_full_env_config,
         _parse_stage3_algo_args,
@@ -278,12 +278,12 @@ def run_eval(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Eval-only re-evaluation of an EvoNav Stage III checkpoint"
+        description="Eval-only re-evaluation of an RAISE Stage III checkpoint"
     )
     parser.add_argument(
         "--run-dir",
         required=True,
-        help="EvoNav result directory (contains config.json, stage3_train/...)",
+        help="RAISE result directory (contains config.json, stage3_train/...)",
     )
     parser.add_argument(
         "--candidate-id",

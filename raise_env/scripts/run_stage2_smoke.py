@@ -5,7 +5,7 @@ Human-triggered Stage II smoke test against the real A2C trainer.
 This is intentionally slow (real env + policy). For CI / pytest use the stub
 trainer in ``crowd_nav/reward_search/tests/test_stage2.py`` instead.
 
-Example (from ``evonav_env/`` with the project venv active)::
+Example (from ``raise_env/`` with the project venv active)::
 
     python scripts/run_stage2_smoke.py
     python scripts/run_stage2_smoke.py --train-env-steps 200 --eval-episodes 2
@@ -44,11 +44,11 @@ def main() -> int:
 
     # Import crowd_sim registration + Stage II after chdir/path setup.
     import crowd_sim  # noqa: F401
-    from crowd_nav.reward_search.evolver import RewardCandidate
+    from crowd_nav.reward_search.explore import RewardCandidate
     from crowd_nav.reward_search.llm import ScriptedLLMClient
     from crowd_nav.reward_search.prompts import D5_SEED_FUNCTION
     from crowd_nav.reward_search.sandbox import RewardValidator
-    from crowd_nav.reward_search.stage2 import (
+    from crowd_nav.reward_search.refine import (
         RealPolicyTrainer,
         Stage2Config,
         Stage2Runner,

@@ -16,7 +16,7 @@ from crowd_nav.reward_search.active_learning.queue import (
     mark_done,
     pending_items,
 )
-from crowd_nav.reward_search.evolver import RewardCandidate
+from crowd_nav.reward_search.explore import RewardCandidate
 from crowd_nav.reward_search.sandbox.validator import RewardValidator
 from crowd_nav.reward_search.surrogate.model import SurrogatePrediction
 

@@ -8,7 +8,7 @@ import os
 
 import pytest
 
-from crowd_nav.reward_search.evolver import RewardCandidate
+from crowd_nav.reward_search.explore import RewardCandidate
 from crowd_nav.reward_search.prompts import D5_SEED_FUNCTION
 from crowd_nav.reward_search.sandbox.validator import RewardValidator
 from crowd_nav.reward_search.scoring import Score1Result
@@ -146,7 +146,7 @@ def test_bootstrap_fast_stub(tmp_path):
 
 def test_bootstrap_population_uses_stage1_gen0(monkeypatch):
     """Bootstrap must call StageIEvolver.initialize_population (same as main run)."""
-    from crowd_nav.reward_search.evolver import StageIEvolver
+    from crowd_nav.reward_search.explore import StageIEvolver
     from crowd_nav.reward_search.llm import SeedVariantLLMClient
     from crowd_nav.reward_search.prompts import D1_SYSTEM_PROMPT, D5_SEED_FUNCTION
     from crowd_nav.reward_search.sandbox.validator import RewardValidator

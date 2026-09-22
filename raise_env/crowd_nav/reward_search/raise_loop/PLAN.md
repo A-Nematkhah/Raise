@@ -1,8 +1,8 @@
 # Closed-Loop Multi-Fidelity Evolution — Technical Plan (LOCK DRAFT)
 
 **Status:** implementation in progress (innovation path — **not** paper Alg.1 linear).  
-**Package (new):** `crowd_nav.reward_search.closed_loop`  
-**Opt-in CLI:** `--closed-loop` on `run_evonav.py`  
+**Package (new):** `crowd_nav.reward_search.raise_loop`  
+**Opt-in CLI:** `--closed-loop` on `run_raise.py`  
 **Default without flag:** keep current linear Stage I → II → III (unchanged).  
 **Depends on:** Score1, StageIEvolver ops, Stage II short trainer, Surrogate v1 (`dataset_io` / `model` / `gate`), **Active Learning v1** (`query.score_queries` / `acquire` / queue).
 
@@ -86,7 +86,7 @@ AL is **inside** the closed loop, not a separate afterthought.
 ## 3. Module layout
 
 ```text
-crowd_nav/reward_search/closed_loop/
+crowd_nav/reward_search/raise_loop/
   PLAN.md          ← this file
   __init__.py
   config.py        ← ClosedLoopConfig dataclass
@@ -179,7 +179,7 @@ def run_closed_loop(cfg, llm, score_fn, trainer, validator):
 ## 6. Interaction with existing pipeline
 
 ```text
-run_evonav:
+run_raise:
   if not --closed-loop:
       linear Alg.1 path (current)
   else:
@@ -222,7 +222,7 @@ Bootstrap CLI remains for **warm-start** model before loop (`--surrogate DIR` if
 
 1. Package skeleton + `ClosedLoopConfig` + PLAN lock note in `WHATS_NEW.md`
 2. `ClosedLoopRunner` Gen0+1 with stubs (`--fast`)
-3. Wire `--closed-loop` in `run_evonav` / `EvoNavRunConfig`
+3. Wire `--closed-loop` in `run_raise` / `RaiseRunConfig`
 4. Soft/hard gate + uncertain fill
 5. Optional final Stage II + Stage III handoff
 6. Smoke on real stub GPU-less; then short real cuda nproc=1

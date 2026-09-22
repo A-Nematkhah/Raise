@@ -1,5 +1,5 @@
 """
-CrowdNav domain pack — EvoNav Appendix D prompt templates (arXiv:2605.11859).
+CrowdNav domain pack — RAISE Appendix D prompt templates (arXiv:2605.11859).
 
 Canonical home for CrowdNav LLM prompts. ``crowd_nav.reward_search.prompts``
 re-exports this module for backward compatibility.
@@ -134,7 +134,7 @@ Synthesis Task:
 - Return only a single Python fenced code block.
 """
 
-D2_MUTATION_PROMPT = """You are a reward function optimizer. Your task is to perform a targeted mutation on an underperforming parent reward to address a specific weakness identified in the reflection (EvoNav §4.2: mutation addresses individual weaknesses). A prior reflection summarizing Score1 feedback is provided below. Use it to locally improve this weaker parent by small, targeted edits while preserving any useful structure.
+D2_MUTATION_PROMPT = """You are a reward function optimizer. Your task is to perform a targeted mutation on an underperforming parent reward to address a specific weakness identified in the reflection (RAISE §4.2: mutation addresses individual weaknesses). A prior reflection summarizing Score1 feedback is provided below. Use it to locally improve this weaker parent by small, targeted edits while preserving any useful structure.
 Prior Reflection:
 - {reflection}
 Underperforming Parent Code to Mutate:

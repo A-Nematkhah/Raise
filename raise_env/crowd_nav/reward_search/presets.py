@@ -1,5 +1,5 @@
 """
-Named run presets for EvoNav Algorithm 1.
+Named run presets for RAISE.
 
 ``fast`` — stub trainers, tiny budgets (pytest / smoke).
 ``paper`` — Tables 3–6 budgets (K2=8000, G2=16, K3=1e7, …). Only apply via
@@ -12,7 +12,7 @@ import os
 from dataclasses import dataclass
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
-from crowd_nav.reward_search.stage3 import STAGE3_PAPER_STEPS
+from crowd_nav.reward_search.validate import STAGE3_PAPER_STEPS
 
 # Paper Tables 3–6 (authoritative constants; mirrored in configs/paper_scale.yaml).
 PAPER_N = 8
@@ -36,7 +36,7 @@ PAPER_DEFAULT_SEEDS = (425, 426, 427, 428, 429)
 PAPER_SCALE_YAML = os.path.join("configs", "paper_scale.yaml")
 
 METHODOLOGY_SEED_NOTE = (
-    "The EvoNav paper does not state how many random seeds Table 1's "
+    "The RAISE paper does not state how many random seeds Table 1's "
     "mean±std bars used. This report uses {n_seeds} independent full "
     "Algorithm-1 runs (seeds={seeds}) and aggregates final-policy metrics "
     "as mean±std across seeds — not across evaluation episodes within a "
@@ -173,7 +173,7 @@ def load_paper_scale_yaml(path: Optional[str] = None) -> PaperScaleSpec:
 
 def apply_paper_scale(config: Any, spec: Optional[PaperScaleSpec] = None) -> Any:
     """
-    Mutate an ``EvoNavRunConfig`` to paper Tables 3–6 budgets.
+    Mutate an ``RaiseRunConfig`` to paper Tables 3–6 budgets.
 
     Does **not** enable stubs. Distinct from ``apply_fast_profile``.
     """

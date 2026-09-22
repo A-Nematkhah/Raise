@@ -88,12 +88,12 @@ success/collision/timeout و ORCA/SF/noise/random؛ میانگین یکتایی 
   `bootstrap.run_bootstrap`, CLI واقعی `scripts/bootstrap_surrogate.py`.
 - تست‌ها: `crowd_nav/reward_search/tests/test_surrogate.py` (شامل `--fast` / stub).
 - وابستگی: `scikit-learn` + `joblib` در `requirements_pinned.txt`.
-- **هنوز** به `EvoNavPipeline` وصل نیست؛ Active Learning همچنان بعد از این است.
+- **هنوز** به `RaisePipeline` وصل نیست؛ Active Learning همچنان بعد از این است.
 
 اجرای سریع wiring:
 
 ```bash
-cd evonav_env
+cd raise_env
 python scripts/bootstrap_surrogate.py --fast --force --out data/surrogate_dataset --model-out artifacts/surrogate
 ```
 
@@ -112,7 +112,7 @@ python scripts/bootstrap_surrogate.py --fast --force --out data/surrogate_datase
 - `loop.run_active_learning_step` + CLI `scripts/run_active_learning_step.py`
   (بدون مدل → exit 2 / `Surrogate model required`؛ `--force-refit` مدل را دوباره fit می‌کند)
 - تست‌ها: `tests/test_active_learning.py`
-- هنوز به `EvoNavPipeline` وصل نیست (opt-in بعدی)
+- هنوز به `RaisePipeline` وصل نیست (opt-in بعدی)
 
 ```bash
 python scripts/run_active_learning_step.py --surrogate artifacts/surrogate --fast \
@@ -123,9 +123,9 @@ python scripts/run_active_learning_step.py --surrogate artifacts/surrogate --fas
 
 ## اتصال Surrogate / AL به Pipeline (۲۰۲۶-۰۹-۲۰)
 
-**قبل:** Surrogate و AL فقط CLI جدا بودند؛ `run_evonav` از آن‌ها استفاده نمی‌کرد.
+**قبل:** Surrogate و AL فقط CLI جدا بودند؛ `run_raise` از آن‌ها استفاده نمی‌کرد.
 
-**بعد:** opt-in در `EvoNavPipeline` / `run_evonav.py`:
+**بعد:** opt-in در `RaisePipeline` / `run_raise.py`:
 
 - `--surrogate DIR`: بعد از Stage I پیش‌بینی و `surrogate_preds_stage1.json`
 - قبل از Stage III: دوباره predict + `gate` (حذف confident-weak؛ `--no-surrogate-gate` خاموشش می‌کند)
@@ -147,7 +147,7 @@ python scripts/run_active_learning_step.py --surrogate artifacts/surrogate --fas
 
 - `_build_population` مستقیماً `StageIEvolver.initialize_population` (همان Gen0
   pipeline) را صدا می‌زند — همان D1 batch + regen + validator.
-- بعد از parse، argv مثل `run_evonav` ایزوله می‌شود.
+- بعد از parse، argv مثل `run_raise` ایزوله می‌شود.
 - پیش‌فرض `--num-processes 1` (قابل افزایش)؛ مناسب RTX کوچک / ویندوز.
 - نرمال‌سازی کد: حذف `[0]`/`[1]`/`[-1]` از فیلدهای اسکالر RewardState
   (`state.robot.px[0]` و مشابه) قبل از sandbox؛ پرامپت D1/D2 هم صریح‌تر شد.
@@ -222,14 +222,27 @@ opt-in جدا بعد از Stage I یا قبل از Stage III بودند و به 
    Stage II روی survivors∪AL → refit  
 3. اختیاری بعداً polish Stage II + Stage III  
 
-بسته: `crowd_nav/reward_search/closed_loop/` + `PLAN.md`. بدون فلگ رفتار قبلی
+بسته: `crowd_nav/reward_search/raise_loop/` + `PLAN.md`. بدون فلگ رفتار قبلی
 دست‌نخورده می‌ماند.
 
 ```powershell
-python scripts/run_evonav.py --fast --closed-loop --allow-seed-llm `
+python scripts/run_raise.py --fast --closed-loop --allow-seed-llm `
   --output-dir results/closed_loop_fast --surrogate artifacts/surrogate `
   --surrogate-dataset data/surrogate_dataset
 ```
+
+---
+
+## Rename branding → RAISE (۲۰۲۶-۰۹-۲۲)
+
+برندینگ و مسیرهای پروژه یکدست روی **RAISE** شدند:
+
+- پوشهٔ محیط: `raise_env/`
+- CLI: `run_raise.py`, `run_raise_paper_scale.py`, `eval_raise_checkpoint.py`, …
+- API: `RaisePipeline` / `RaiseRunConfig` / `RaiseArtifacts`
+- CI: `.github/workflows/raise-ci.yml`
+- ماژول‌های Stage: `explore` / `refine` / `validate`
+- README ریشه و citationها روی RAISE (arXiv:2605.11859)
 
 ---
 

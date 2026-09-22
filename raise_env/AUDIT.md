@@ -1,4 +1,4 @@
-# AUDIT.md — CrowdNav++ / Evonav environment
+# AUDIT.md — CrowdNav++ / RAISE environment
 
 Source: local copy of [Shuijing725/CrowdNav_Prediction_AttnGraph](https://github.com/Shuijing725/CrowdNav_Prediction_AttnGraph)
 (Liu et al., ICRA 2023). See `NOTICE.md` and `LICENSE`.
@@ -190,7 +190,7 @@ Other Phase-1 awareness items:
 | GPU torch verification | System Python 3.10.11, `torch 2.11.0+cu128`, `torch.cuda.is_available() == True`; NVIDIA driver 610.62, CUDA UMD 13.3, RTX 3050 4GB |
 | Project environment | `.venv` was removed on 2026-09-03 at the user's request; recreate it from `requirements_pinned.txt` before a full isolated run |
 
-Do not mix this venv with the main Evonav project dependencies.
+Do not mix this venv with the main RAISE project dependencies.
 
 ---
 

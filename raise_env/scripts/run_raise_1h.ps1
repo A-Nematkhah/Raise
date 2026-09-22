@@ -1,6 +1,6 @@
 # Closed-loop ~1 hour smoke — thin wrapper around scripts/run_closed_loop_1h.py
 #
-# From evonav_env/:
+# From raise_env/:
 #   powershell -ExecutionPolicy Bypass -File scripts/run_closed_loop_1h.ps1
 #   powershell -ExecutionPolicy Bypass -File scripts/run_closed_loop_1h.ps1 -Llm seed
 

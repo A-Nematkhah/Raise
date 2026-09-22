@@ -222,7 +222,7 @@ def test_collect_stage1_dataset_smoke():
     import importlib.util
     from pathlib import Path
 
-    # .../crowd_nav/reward_search/tests/this_file.py → evonav_env/
+    # .../crowd_nav/reward_search/tests/this_file.py → raise_env/
     root = Path(__file__).resolve().parents[3]
     script = root / "scripts" / "collect_stage1_dataset.py"
     assert script.is_file(), script

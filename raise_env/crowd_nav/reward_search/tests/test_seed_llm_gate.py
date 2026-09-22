@@ -6,17 +6,17 @@ import runpy
 import sys
 from pathlib import Path
 
-_EVONAV_ROOT = Path(__file__).resolve().parents[3]
-_SCRIPTS = _EVONAV_ROOT / "scripts"
+_RAISE_ROOT = Path(__file__).resolve().parents[3]
+_SCRIPTS = _RAISE_ROOT / "scripts"
 
 
 def _run_script(script_name: str, argv: list[str], monkeypatch) -> int:
     """Execute a scripts/*.py main with controlled argv; return exit code."""
     script = _SCRIPTS / script_name
     assert script.is_file(), script
-    monkeypatch.chdir(_EVONAV_ROOT)
-    # Prepend root so `import crowd_nav` works the same as CLI from evonav_env/.
-    root_str = str(_EVONAV_ROOT)
+    monkeypatch.chdir(_RAISE_ROOT)
+    # Prepend root so `import crowd_nav` works the same as CLI from raise_env/.
+    root_str = str(_RAISE_ROOT)
     if root_str not in sys.path:
         sys.path.insert(0, root_str)
     monkeypatch.setattr(sys, "argv", [str(script), *argv])
@@ -29,12 +29,12 @@ def _run_script(script_name: str, argv: list[str], monkeypatch) -> int:
     return 0
 
 
-def test_run_evonav_refuses_seed_without_fast(monkeypatch, capsys):
+def test_run_raise_refuses_seed_without_fast(monkeypatch, capsys):
     """Non-fast + default seed LLM must exit before GST/dataset/simulator."""
-    out_dir = _EVONAV_ROOT / "results" / "_seed_refuse_test"
+    out_dir = _RAISE_ROOT / "results" / "_seed_refuse_test"
     code = _run_script(
-        "run_evonav.py",
-        ["--output-dir", str(out_dir.relative_to(_EVONAV_ROOT))],
+        "run_raise.py",
+        ["--output-dir", str(out_dir.relative_to(_RAISE_ROOT))],
         monkeypatch,
     )
     assert code == 2
@@ -45,19 +45,19 @@ def test_run_evonav_refuses_seed_without_fast(monkeypatch, capsys):
     assert not (out_dir / "config.json").exists()
 
 
-def test_run_evonav_fast_still_allows_seed(monkeypatch):
+def test_run_raise_fast_still_allows_seed(monkeypatch):
     code = _run_script(
-        "run_evonav.py",
+        "run_raise.py",
         ["--fast", "--output-dir", "results/_seed_fast_ok", "--device", "cpu"],
         monkeypatch,
     )
     assert code == 0
-    assert (_EVONAV_ROOT / "results" / "_seed_fast_ok" / "manifest.json").is_file()
+    assert (_RAISE_ROOT / "results" / "_seed_fast_ok" / "manifest.json").is_file()
 
 
 def test_paper_scale_refuses_seed_yaml_default(monkeypatch, capsys):
     code = _run_script(
-        "run_evonav_paper_scale.py",
+        "run_raise_paper_scale.py",
         ["--output-dir", "results/_paper_seed_refuse"],
         monkeypatch,
     )
@@ -69,7 +69,7 @@ def test_paper_scale_refuses_seed_yaml_default(monkeypatch, capsys):
 def test_paper_scale_dry_run_stubs_bypass_seed_gate(monkeypatch):
     """--dry-run-stubs is the paper-scale equivalent of --fast for the seed gate."""
     code = _run_script(
-        "run_evonav_paper_scale.py",
+        "run_raise_paper_scale.py",
         [
             "--dry-run-stubs",
             "--seeds",

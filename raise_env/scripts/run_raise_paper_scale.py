@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-Human-triggered paper-scale EvoNav run (Tables 3–6 budgets).
+Human-triggered paper-scale RAISE run (Tables 3–6 budgets).
 
   K2=8000, G2=16, K3=1e7, G3=3, E3=500, N=8, G1=10, M=100, N_traj=10
 
@@ -12,9 +12,9 @@ This script is **never** invoked by pytest / CI. Refuse to start if ``CI`` is se
 
 Examples::
 
-    python scripts/run_evonav_paper_scale.py
-    python scripts/run_evonav_paper_scale.py --seeds 425,426,427 --device cuda
-    python scripts/run_evonav_paper_scale.py --dry-run-stubs  # wiring only
+    python scripts/run_raise_paper_scale.py
+    python scripts/run_raise_paper_scale.py --seeds 425,426,427 --device cuda
+    python scripts/run_raise_paper_scale.py --dry-run-stubs  # wiring only
 """
 
 from __future__ import annotations
@@ -47,7 +47,7 @@ def main() -> int:
         return 2
 
     parser = argparse.ArgumentParser(
-        description="EvoNav paper-scale multi-seed Algorithm 1 (Tables 3–6)"
+        description="RAISE paper-scale multi-seed Algorithm 1 (Tables 3–6)"
     )
     parser.add_argument(
         "--config",

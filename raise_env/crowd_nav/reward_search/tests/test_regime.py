@@ -80,7 +80,7 @@ def test_assert_gst_skipped_for_predict_none(caplog):
 
 
 def test_stage2_defaults_use_inferred_and_without_random():
-    from crowd_nav.reward_search.stage2 import Stage2Config
+    from crowd_nav.reward_search.refine import Stage2Config
 
     cfg = Stage2Config()
     assert cfg.randomization_regime == "without_random"
@@ -89,7 +89,7 @@ def test_stage2_defaults_use_inferred_and_without_random():
 
 
 def test_stage3_defaults_use_inferred_and_without_random():
-    from crowd_nav.reward_search.stage3 import Stage3Config
+    from crowd_nav.reward_search.validate import Stage3Config
 
     cfg = Stage3Config()
     assert cfg.randomization_regime == "without_random"

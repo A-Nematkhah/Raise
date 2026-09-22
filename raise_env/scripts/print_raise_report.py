@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Print a readable closed-loop REPORT for an existing run directory.
 
-Usage (from evonav_env/):
+Usage (from raise_env/):
   python scripts/print_closed_loop_report.py results/closed_loop_1h_20260920_221939
 """
 
@@ -23,7 +23,7 @@ def main() -> int:
     if root not in sys.path:
         sys.path.insert(0, root)
 
-    from crowd_nav.reward_search.closed_loop.report import (
+    from crowd_nav.reward_search.raise_loop.report import (
         build_closed_loop_report,
         write_closed_loop_report,
     )

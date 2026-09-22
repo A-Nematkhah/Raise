@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from crowd_nav.reward_search.closed_loop.config import ClosedLoopConfig
-from crowd_nav.reward_search.closed_loop.runner import ClosedLoopResult, ClosedLoopRunner
+from crowd_nav.reward_search.raise_loop.config import ClosedLoopConfig
+from crowd_nav.reward_search.raise_loop.runner import ClosedLoopResult, ClosedLoopRunner
 
 __all__ = [
     "ClosedLoopConfig",

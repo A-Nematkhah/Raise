@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Optional, Sequence
 
-from crowd_nav.reward_search.evolver import RewardCandidate
+from crowd_nav.reward_search.explore import RewardCandidate
 
 
 def navigation_scalar(sr: float, cr: float, tr: float) -> float:

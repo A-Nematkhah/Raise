@@ -1,5 +1,5 @@
 """
-EvoNav Stage I analytical rules (Figure 3).
+RAISE Stage I analytical rules (Figure 3).
 
 Six preference categories (best → worst):
   Success + short nav length

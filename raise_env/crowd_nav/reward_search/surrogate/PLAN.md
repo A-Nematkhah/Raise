@@ -2,8 +2,8 @@
 
 **Status:** implementation in progress (contract locked 2026-09-20).  
 **Package:** `crowd_nav.reward_search.surrogate`  
-**Data root:** `evonav_env/data/surrogate_dataset/`  
-**Artifact root:** `evonav_env/artifacts/surrogate/`  
+**Data root:** `raise_env/data/surrogate_dataset/`  
+**Artifact root:** `raise_env/artifacts/surrogate/`  
 **Depends on:** Stage I Score1 (`scoring.py`) + Domain Pack Stage II trainer.  
 **Sibling:** Active Learning consumes this API later — **out of scope for v1**.
 
@@ -22,7 +22,7 @@ Do not silently change schema / targets without bumping `FEATURE_SCHEMA_VERSION`
 | L4 | Ranking policy at predict time | Derive later from \(\hat{SR},\hat{CR},\hat{TR}\) (lex / thresholds). Do **not** train on LLM R2 rank ids |
 | L5 | Model | `sklearn` + `joblib`; ensemble of `RandomForestRegressor` (default 5 bags) |
 | L6 | Uncertainty | Mean of per-target ensemble std → `SurrogatePrediction.uncertainty ≥ 0` |
-| L7 | Pipeline gate | **Wired (opt-in)** via `--surrogate` / `EvoNavRunConfig.surrogate_*` — see `surrogate/gate.py` |
+| L7 | Pipeline gate | **Wired (opt-in)** via `--surrogate` / `RaiseRunConfig.surrogate_*` — see `surrogate/gate.py` |
 | L8 | Active Learning | **Wired (opt-in)** `--active-learning` after Stage I when surrogate model exists |
 | L9 | `--fast` | Stub Stage II + smoke Score1; `n_candidates ≤ 4`; no GPU |
 | L10 | Deps | Add `scikit-learn` + `joblib` to pinned requirements |
@@ -205,7 +205,7 @@ API: `SurrogateModel.fit / predict / save / load` in `model.py`.
 
 **Out of scope for v1 first PR.** Second PR:
 
-- `EvoNavRunConfig.surrogate_model_dir: Optional[str]`
+- `RaiseRunConfig.surrogate_model_dir: Optional[str]`
 - After Stage I (or after each Stage II round): call `predict`; write `surrogate_preds.json`.
 - Gate Stage III population: drop bottom fraction by predicted quality if `u` below threshold.
 
@@ -242,7 +242,7 @@ Manifest fields: `surrogate_enabled`, `surrogate_metrics`, `n_dropped_by_surroga
 - Changing global `selection.navigation_scalar` / pipeline `final_rank`.
 - Joint training with Active Learning loop.
 - Multi-domain packs beyond CrowdNav.
-- Wiring surrogate gates into `EvoNavPipeline`.
+- Wiring surrogate gates into `RaisePipeline`.
 
 ---
 

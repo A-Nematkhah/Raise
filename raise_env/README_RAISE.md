@@ -1,13 +1,14 @@
-# EvoNav Algorithm 1 (this fork)
+# RAISE (this fork)
 
-Extension of CrowdNav++ for reproducing **EvoNav** (arXiv:2605.11859) without AMFRS mechanisms.
+Extension of CrowdNav++ for **RAISE** reward search. Compatible with RAISE
+Algorithm 1 (arXiv:2605.11859); AMFRS mechanisms are not included.
 
 Upstream simulator docs: `README.md` in this directory. Architecture audit: `AUDIT.md`.
 
 ## Install
 
 ```bash
-cd evonav_env
+cd raise_env
 py -3.10 -m venv .venv
 .venv\Scripts\python.exe -m pip install -r requirements_pinned.txt
 .venv\Scripts\python.exe -m pip install git+https://github.com/sybrenstuvel/Python-RVO2.git
@@ -34,7 +35,7 @@ The default Ollama model is the reasoning model `qwen3.5:4b`, which can emit
 
 ```bash
 ollama pull qwen3.5:4b
-python scripts/run_evonav.py --llm ollama --llm-model qwen3.5:4b --output-dir results/ollama_run
+python scripts/run_raise.py --llm ollama --llm-model qwen3.5:4b --output-dir results/ollama_run
 ```
 
 The server URL defaults to `http://localhost:11434/v1`; override it with
@@ -52,10 +53,10 @@ The server URL defaults to `http://localhost:11434/v1`; override it with
 
 | Goal | Command | Hardware | Time |
 |------|---------|----------|------|
-| Wiring smoke | `python scripts/run_evonav.py --fast` | CPU | seconds |
+| Wiring smoke | `python scripts/run_raise.py --fast` | CPU | seconds |
 | Stage I dataset (M=100) | `python scripts/collect_stage1_dataset.py --regime without_random` | CPU | ~tens of min |
-| Local validation | `python scripts/run_evonav.py --llm groq --device cuda --regime without_random --stage1-dataset data/stage1_dataset --stage3-train-steps 500000` | GPU + Groq | hours |
-| Paper scale | `python scripts/run_evonav_paper_scale.py --device cuda --llm groq` | GPU + Groq | days (K3=1e7 × seeds) |
+| Local validation | `python scripts/run_raise.py --llm groq --device cuda --regime without_random --stage1-dataset data/stage1_dataset --stage3-train-steps 500000` | GPU + Groq | hours |
+| Paper scale | `python scripts/run_raise_paper_scale.py --device cuda --llm groq` | GPU + Groq | days (K3=1e7 × seeds) |
 
 Defaults (AUDIT.md §8): `without_random`, Stage II/III `predict_method=inferred`, GST `...-seed_1000/sj`.
 
@@ -67,7 +68,7 @@ Stage I Score1, and Stage II/III trainers are resolved via
 folder without rewriting the pipeline.
 
 - Guide: [`crowd_nav/domains/README.md`](crowd_nav/domains/README.md)
-- CLI: `python scripts/run_evonav.py --domain crowdnav ...`
+- CLI: `python scripts/run_raise.py --domain crowdnav ...`
 
 Do not add stub domains; only register a pack when the real env is ready.
 

@@ -7,15 +7,15 @@ import os
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional
 
-from crowd_nav.reward_search.closed_loop.config import ClosedLoopConfig
-from crowd_nav.reward_search.closed_loop.epoch import select_to_label
-from crowd_nav.reward_search.closed_loop.logging_io import (
+from crowd_nav.reward_search.raise_loop.config import ClosedLoopConfig
+from crowd_nav.reward_search.raise_loop.epoch import select_to_label
+from crowd_nav.reward_search.raise_loop.logging_io import (
     append_al_step,
     append_epoch_record,
     closed_loop_dir,
     write_json,
 )
-from crowd_nav.reward_search.evolver import RewardCandidate, StageIConfig, StageIEvolver
+from crowd_nav.reward_search.explore import RewardCandidate, StageIConfig, StageIEvolver
 from crowd_nav.reward_search.llm import LLMClient, make_llm_client
 from crowd_nav.reward_search.surrogate.bootstrap import label_and_append_candidate
 from crowd_nav.reward_search.surrogate.dataset_io import (
@@ -87,7 +87,7 @@ class ClosedLoopRunner:
     def run(self) -> ClosedLoopResult:
         from crowd_nav.domains import load_domain, make_stage2_trainer_for_domain
         from crowd_nav.reward_search.sandbox.validator import RewardValidator
-        from crowd_nav.reward_search.stage2 import Stage2Config
+        from crowd_nav.reward_search.refine import Stage2Config
 
         cfg = self.cfg
         if cfg.use_stub:
@@ -290,7 +290,7 @@ class ClosedLoopRunner:
                 "n_label_failed": n_fail,
             }
             from crowd_nav.reward_search import console
-            from crowd_nav.reward_search.closed_loop.report import format_epoch_summary
+            from crowd_nav.reward_search.raise_loop.report import format_epoch_summary
 
             append_epoch_record(cfg.output_dir, epoch_rec)
             history.append(epoch_rec)
@@ -336,7 +336,7 @@ class ClosedLoopRunner:
             result_manifest,
         )
         try:
-            from crowd_nav.reward_search.closed_loop.report import write_closed_loop_report
+            from crowd_nav.reward_search.raise_loop.report import write_closed_loop_report
 
             write_closed_loop_report(cfg.output_dir, manifest=result_manifest)
         except Exception as exc:  # noqa: BLE001

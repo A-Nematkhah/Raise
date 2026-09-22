@@ -21,5 +21,5 @@ policies, Social Force (SF), and ORCA) originate from:
 Please also see the upstream `LICENSE` file (MIT) and `README.md` citation
 blocks for related prior work (DS-RNN, Gumbel Social Transformer).
 
-This copy is used as the environment and baseline substrate for the Evonav
+This copy is used as the environment and baseline substrate for the RAISE
 project. Upstream authorship and license terms remain unchanged.

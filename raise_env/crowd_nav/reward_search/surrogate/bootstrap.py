@@ -13,7 +13,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from crowd_nav.reward_search.evolver import RewardCandidate
+from crowd_nav.reward_search.explore import RewardCandidate
 from crowd_nav.reward_search.selection import navigation_scalar
 from crowd_nav.reward_search.surrogate import FEATURE_SCHEMA_VERSION
 from crowd_nav.reward_search.surrogate.dataset_io import (
@@ -53,8 +53,8 @@ def _stage1_dataset_ready(path: str) -> bool:
 
 
 def _stage1_config_like_pipeline(n_candidates: int) -> "StageIConfig":
-    """Match ``EvoNavPipeline`` Stage-I size split (Gen0 uses ``population_size`` only)."""
-    from crowd_nav.reward_search.evolver import StageIConfig
+    """Match ``RaisePipeline`` Stage-I size split (Gen0 uses ``population_size`` only)."""
+    from crowd_nav.reward_search.explore import StageIConfig
 
     n = max(1, int(n_candidates))
     n_crossover = min(2, n)
@@ -79,11 +79,11 @@ def _build_population(
 ) -> List[RewardCandidate]:
     """
     Build bootstrap candidates with the **exact** Stage-I Gen0 path used by
-    ``EvoNavPipeline`` / ``StageIEvolver.initialize_population`` (same prompts,
+    ``RaisePipeline`` / ``StageIEvolver.initialize_population`` (same prompts,
     validator, batch+regen). Not a parallel prompt reimplementation.
     """
     del seed  # reserved for Stage-II / model fit; Gen0 LLM has its own sampling.
-    from crowd_nav.reward_search.evolver import StageIEvolver
+    from crowd_nav.reward_search.explore import StageIEvolver
     from crowd_nav.reward_search.llm import make_llm_client
     from crowd_nav.reward_search.scoring import make_smoke_score_fn
 
@@ -193,7 +193,7 @@ def label_and_append_candidate(
     except Exception as exc:  # noqa: BLE001
         logger.exception("Stage II label failed for %s: %s", candidate.candidate_id, exc)
         ok = False
-        from crowd_nav.reward_search.stage2 import ProxyMetrics
+        from crowd_nav.reward_search.refine import ProxyMetrics
 
         metrics = ProxyMetrics()
     wall = time.perf_counter() - t0
@@ -280,7 +280,7 @@ def run_bootstrap(
         )
 
     from crowd_nav.domains import load_domain, make_stage2_trainer_for_domain
-    from crowd_nav.reward_search.stage2 import Stage2Config
+    from crowd_nav.reward_search.refine import Stage2Config
 
     pack = load_domain("crowdnav")
     score_fn, _dataset = pack.make_score_fn(

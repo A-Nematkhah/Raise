@@ -5,7 +5,7 @@ This directory contains a vendored copy of [OpenAI Baselines](https://github.com
 
 - **Copyright:** OpenAI (2017)
 - **License:** MIT — see `LICENSE` in this directory
-- **Used by:** `evonav_env/rl/networks/` and `evonav_env/rl/vec_env/` for `VecEnv`,
+- **Used by:** `raise_env/rl/networks/` and `raise_env/rl/vec_env/` for `VecEnv`,
   `VecNormalize`, logging, and related PPO training utilities.
 
 Install into your virtual environment (from repo root; **TensorFlow must be

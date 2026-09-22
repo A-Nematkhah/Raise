@@ -8,10 +8,10 @@ from __future__ import annotations
 
 import logging
 
-from crowd_nav.reward_search.evolver import RewardCandidate
+from crowd_nav.reward_search.explore import RewardCandidate
 from crowd_nav.reward_search.llm import ScriptedLLMClient
 from crowd_nav.reward_search.sandbox import RewardValidator
-from crowd_nav.reward_search.stage2 import (
+from crowd_nav.reward_search.refine import (
     ProxyMetrics,
     Stage2Config,
     Stage2Runner,
@@ -187,7 +187,7 @@ def test_table5_defaults():
 
 def test_stage2_argv_resolves_auto_num_processes():
     from crowd_nav.reward_search.parallelism import resolve_num_processes
-    from crowd_nav.reward_search.stage2 import _stage2_train_argv
+    from crowd_nav.reward_search.refine import _stage2_train_argv
 
     cfg = Stage2Config(num_processes=None)
     argv = _stage2_train_argv(cfg, "c0", 0)
@@ -203,7 +203,7 @@ def test_stage2_argv_resolves_auto_num_processes():
 
 def test_stage2_a2c_forces_num_mini_batch_one():
     """A2C/SRNN require matching mini-batch size (train.py sets this to 1)."""
-    from crowd_nav.reward_search.stage2 import _stage2_train_argv
+    from crowd_nav.reward_search.refine import _stage2_train_argv
 
     cfg = Stage2Config(algo="a2c", num_processes=4, num_mini_batch=None)
     argv = _stage2_train_argv(cfg, "c0", 0)

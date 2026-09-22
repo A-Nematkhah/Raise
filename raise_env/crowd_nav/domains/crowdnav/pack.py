@@ -1,4 +1,4 @@
-"""CrowdNav++ / EvoNav Algorithm 1 domain pack (default baseline)."""
+"""CrowdNav++ / RAISE domain pack (default baseline)."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import os
 from crowd_nav.domains.base import DomainPack
 from crowd_nav.domains.crowdnav import prompts as crowdnav_prompts
 from crowd_nav.domains.crowdnav.adapter import CrowdNavAdapter
-from crowd_nav.domains.crowdnav.stage1 import (
+from crowd_nav.domains.crowdnav.explore_score import (
     DEFAULT_STAGE1_DATASET,
     make_score_fn as crowdnav_make_score_fn,
 )
@@ -26,7 +26,7 @@ def get_pack(*, with_adapter: bool = True) -> DomainPack:
 
     return DomainPack(
         name="crowdnav",
-        display_name="CrowdNav++ (EvoNav Algorithm 1)",
+        display_name="CrowdNav++ (RAISE)",
         description=(
             "Robot crowd navigation in continuous 2D; LLM-proposed rewards "
             "scored with Score1 then trained via A2C (Stage II) / PPO (Stage III)."

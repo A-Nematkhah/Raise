@@ -1,22 +1,22 @@
-# Fast unit tests for evonav_env / crowd_nav.reward_search (no GPU, no Groq network).
-name: evonav-env-ci
+# Fast unit tests for raise_env / crowd_nav.reward_search (no GPU, no Groq network).
+name: raise-env-ci
 
 on:
   push:
     paths:
-      - "evonav_env/**"
-      - ".github/workflows/evonav-ci.yml"
+      - "raise_env/**"
+      - ".github/workflows/raise-ci.yml"
   pull_request:
     paths:
-      - "evonav_env/**"
-      - ".github/workflows/evonav-ci.yml"
+      - "raise_env/**"
+      - ".github/workflows/raise-ci.yml"
 
 jobs:
   test:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: evonav_env
+        working-directory: raise_env
 
     steps:
       - uses: actions/checkout@v4

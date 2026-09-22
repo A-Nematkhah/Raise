@@ -1,14 +1,14 @@
 #!/usr/bin/env python
 """
-Plot EvoNav Algorithm 1 metrics from a run directory (offline, no GPU).
+Plot RAISE metrics from a run directory (offline, no GPU).
 
 Reads stage*_population.json / best_stage*.json and writes PNGs under
 ``<run-dir>/plots/`` (or ``--output-dir``).
 
 Examples::
 
-    python scripts/plot_evonav_run.py --run-dir results/run_1to2h
-    python scripts/plot_evonav_run.py --run-dir results/run_easy --show
+    python scripts/plot_raise_run.py --run-dir results/run_1to2h
+    python scripts/plot_raise_run.py --run-dir results/run_easy --show
 """
 
 from __future__ import annotations
@@ -359,7 +359,7 @@ def _plot_h_sweep(h_sweep: Sequence[Any], out_path: str) -> bool:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Plot EvoNav run metrics to PNG")
+    parser = argparse.ArgumentParser(description="Plot RAISE run metrics to PNG")
     parser.add_argument("--run-dir", required=True, help="results/<run> directory")
     parser.add_argument(
         "--output-dir",

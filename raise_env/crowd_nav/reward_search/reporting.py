@@ -1,5 +1,5 @@
 """
-Shared evaluation + JSON reporting for EvoNav Table 1 / Table 2.
+Shared evaluation + JSON reporting for RAISE Table 1 / Table 2.
 
 Returns raw per-episode records (not just aggregates) so later AMFRS-style
 analyses can reuse the same baseline JSON without re-running.
@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import numpy as np
 import torch
 
-from crowd_nav.reward_search.stage2 import ProxyMetrics, pin_episode_human_count
+from crowd_nav.reward_search.refine import ProxyMetrics, pin_episode_human_count
 
 logger = logging.getLogger(__name__)
 
@@ -190,7 +190,7 @@ def candidate_to_dict(cand) -> Dict[str, Any]:
 
 
 def load_candidate_dict(d: Dict[str, Any]):
-    from crowd_nav.reward_search.evolver import RewardCandidate
+    from crowd_nav.reward_search.explore import RewardCandidate
     from crowd_nav.reward_search.sandbox import RewardValidator
 
     code = d["code"]

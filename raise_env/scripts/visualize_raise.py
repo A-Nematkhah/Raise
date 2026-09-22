@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-Visualize an EvoNav Stage II/III checkpoint with its reward candidate.
+Visualize an RAISE Stage II/III checkpoint with its reward candidate.
 
 Loads ``final_candidate.json`` (or ``--candidate``) + checkpoint, runs a few
 episodes with matplotlib rendering, optionally saves slide PNGs and a GIF.
@@ -8,11 +8,11 @@ episodes with matplotlib rendering, optionally saves slide PNGs and a GIF.
 Examples::
 
     # Headless: save slides + GIF for 2 episodes
-    python scripts/visualize_evonav.py --run-dir results/run_1to2h \\
+    python scripts/visualize_raise.py --run-dir results/run_1to2h \\
         --episodes 2 --save-slides --gif --no-display
 
     # Interactive window
-    python scripts/visualize_evonav.py --run-dir results/run_1to2h --episodes 1
+    python scripts/visualize_raise.py --run-dir results/run_1to2h --episodes 1
 """
 
 from __future__ import annotations
@@ -146,7 +146,7 @@ def visualize(
 
     from crowd_nav.reward_search.regime import env_name_for_predict_method
     from crowd_nav.reward_search.reporting import load_candidate_dict
-    from crowd_nav.reward_search.stage3 import Stage3Config, _make_full_env_config, _parse_stage3_algo_args
+    from crowd_nav.reward_search.validate import Stage3Config, _make_full_env_config, _parse_stage3_algo_args
     from rl.evaluation import evaluate
     from rl.networks.envs import make_vec_envs
     from rl.networks.model import Policy
@@ -298,7 +298,7 @@ def visualize(
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Visualize EvoNav checkpoint episodes")
+    parser = argparse.ArgumentParser(description="Visualize RAISE checkpoint episodes")
     parser.add_argument("--run-dir", required=True, help="results/<run> directory")
     parser.add_argument(
         "--candidate",

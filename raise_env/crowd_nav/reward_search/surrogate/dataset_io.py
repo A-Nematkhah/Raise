@@ -1,7 +1,7 @@
 """
 Surrogate dataset I/O: jsonl features/labels + manifest.
 
-Default root: ``evonav_env/data/surrogate_dataset/``.
+Default root: ``raise_env/data/surrogate_dataset/``.
 """
 
 from __future__ import annotations

@@ -1,5 +1,5 @@
 """
-EvoNav Stage I evolutionary loop (analytical Score1).
+RAISE Stage I evolutionary loop (analytical Score1).
 
 Population N=8, G1=10 generations. Each generation:
   1. Score candidates via ``score1_for_dataset`` (injected / Phase 2).

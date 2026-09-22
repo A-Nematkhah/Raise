@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, List, Optional, Sequence
 
-from crowd_nav.reward_search.closed_loop.logging_io import (
+from crowd_nav.reward_search.raise_loop.logging_io import (
     closed_loop_dir,
     read_epochs,
     write_json,

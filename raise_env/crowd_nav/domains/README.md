@@ -3,7 +3,7 @@
 Each simulation / training backend the reward-search algorithm can target is a
 **domain pack**: a folder under `crowd_nav/domains/<name>/`.
 
-Today only **`crowdnav`** is registered (EvoNav Algorithm 1 baseline). Do **not**
+Today only **`crowdnav`** is registered (RAISE baseline). Do **not**
 add placeholder / stub packs. Add a real domain only when env code, metrics, and
 prompts are ready.
 
@@ -28,7 +28,7 @@ Factories live in `crowd_nav.domains`:
 | `make_stage3_trainer_for_domain(pack, use_stub=)` | Stage III PolicyTrainer bridge |
 | `register_domain(name, module_path)` | Runtime registry (tests / plugins) |
 
-Default: `--domain crowdnav` (see `scripts/run_evonav.py`).
+Default: `--domain crowdnav` (see `scripts/run_raise.py`).
 
 ## Minimum layout (real domain)
 
@@ -121,7 +121,7 @@ runs use the domain’s real trainer.
    [`__init__.py`](__init__.py).
 3. Extend `make_stage2_trainer_for_domain` / `make_stage3_trainer_for_domain`
    (and rely on `pack.make_score_fn` for Stage I).
-4. Run: `python scripts/run_evonav.py --domain <name> --fast ...` once wiring
+4. Run: `python scripts/run_raise.py --domain <name> --fast ...` once wiring
    works; then non-fast with real LLM/GPU as needed.
 5. Add pack-specific tests; **never** change CrowdNav prompt bytes or Score1
    lock tests unless intentionally revising the baseline.
@@ -168,7 +168,7 @@ CrowdNav example: [`crowdnav/spec.md`](crowdnav/spec.md).
 ## Quick verify (CrowdNav)
 
 ```bash
-cd evonav_env
+cd raise_env
 pytest crowd_nav/reward_search/tests/test_domain_pack_baseline.py -q
-python scripts/run_evonav.py --domain crowdnav --fast --output-dir results/evonav_fast
+python scripts/run_raise.py --domain crowdnav --fast --output-dir results/raise_fast
 ```

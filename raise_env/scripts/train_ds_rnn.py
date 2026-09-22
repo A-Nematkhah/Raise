@@ -3,7 +3,7 @@
 Train DS-RNN Table 1 baselines (Option A).
 
 Uses this repo's ``srnn`` policy + ``--algo ppo`` for the same env-step budget
-as EvoNav Stage III (``STAGE3_STEPS`` by default; ``--paper-steps`` → 1e7).
+as RAISE Stage III (``STAGE3_STEPS`` by default; ``--paper-steps`` → 1e7).
 
 Writes::
 
@@ -147,7 +147,7 @@ def main() -> int:
         DEFAULT_DSRNN_NO_RAND_DIR,
         DEFAULT_DSRNN_RAND_DIR,
     )
-    from crowd_nav.reward_search.stage3 import STAGE3_PAPER_STEPS, STAGE3_STEPS
+    from crowd_nav.reward_search.validate import STAGE3_PAPER_STEPS, STAGE3_STEPS
 
     parser = argparse.ArgumentParser(description="Train DS-RNN Table 1 baselines")
     parser.add_argument(

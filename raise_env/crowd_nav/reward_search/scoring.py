@@ -218,7 +218,7 @@ def score1_for_dataset(
     reject_degenerate_at: float = DEFAULT_REJECT_DEGENERATE_AT,
 ) -> Score1Result:
     """
-    Analytical Score1 over pre-collected scenarios (EvoNav Eq. 1 / Figure 3).
+    Analytical Score1 over pre-collected scenarios (RAISE Eq. 1 / Figure 3).
 
     Call as ``score1_for_dataset(dataset, reward_fn)``. Scenarios with fewer
     than 2 trajectories are skipped.

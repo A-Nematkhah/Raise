@@ -9,7 +9,7 @@ Paper K3 = 1e7; this smoke uses a tiny budget. Scale up on a GPU cluster::
 
     python scripts/run_stage3_smoke.py --train-env-steps 10000000 --eval-episodes 500
 
-Example (from ``evonav_env/`` with the project venv active)::
+Example (from ``raise_env/`` with the project venv active)::
 
     python scripts/run_stage3_smoke.py --no-refine
     python scripts/run_stage3_smoke.py --train-env-steps 200 --eval-episodes 1 --h-sweep 5,10
@@ -69,12 +69,12 @@ def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
     import crowd_sim  # noqa: F401
-    from crowd_nav.reward_search.evolver import RewardCandidate
+    from crowd_nav.reward_search.explore import RewardCandidate
     from crowd_nav.reward_search.llm import ScriptedLLMClient
     from crowd_nav.reward_search.parallelism import resolve_num_processes
     from crowd_nav.reward_search.prompts import D5_SEED_FUNCTION
     from crowd_nav.reward_search.sandbox import RewardValidator
-    from crowd_nav.reward_search.stage3 import (
+    from crowd_nav.reward_search.validate import (
         STAGE3_PAPER_STEPS,
         RealPolicyTrainer,
         Stage3Config,

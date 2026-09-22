@@ -2,7 +2,7 @@
 Surrogate model package (cheap predictor of Stage II short metrics).
 
 See ``PLAN.md`` — contract locked 2026-09-20.
-Primary targets: SR, CR, TR. Do not wire into ``EvoNavPipeline`` until
+Primary targets: SR, CR, TR. Do not wire into ``RaisePipeline`` until
 bootstrap + offline fit are green.
 """
 

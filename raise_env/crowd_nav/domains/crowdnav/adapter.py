@@ -31,14 +31,14 @@ class CrowdNavAdapter:
     def _stage2_trainer(self) -> Any:
         if self._stage2_delegate is not None:
             return self._stage2_delegate
-        from crowd_nav.reward_search.stage2 import RealPolicyTrainer
+        from crowd_nav.reward_search.refine import RealPolicyTrainer
 
         return RealPolicyTrainer()
 
     def _stage3_trainer(self) -> Any:
         if self._stage3_delegate is not None:
             return self._stage3_delegate
-        from crowd_nav.reward_search.stage3 import RealPolicyTrainer
+        from crowd_nav.reward_search.validate import RealPolicyTrainer
 
         return RealPolicyTrainer()
 
@@ -145,7 +145,7 @@ class CrowdNavStage3Trainer:
 def make_stage2_trainer(*, use_stub: bool = False) -> CrowdNavStage2Trainer:
     """Build the Stage II trainer used by the CrowdNav domain pack."""
     if use_stub:
-        from crowd_nav.reward_search.stage2 import StubPolicyTrainer
+        from crowd_nav.reward_search.refine import StubPolicyTrainer
 
         adapter = CrowdNavAdapter(stage2_delegate=StubPolicyTrainer())
     else:
@@ -156,7 +156,7 @@ def make_stage2_trainer(*, use_stub: bool = False) -> CrowdNavStage2Trainer:
 def make_stage3_trainer(*, use_stub: bool = False) -> CrowdNavStage3Trainer:
     """Build the Stage III trainer used by the CrowdNav domain pack."""
     if use_stub:
-        from crowd_nav.reward_search.stage3 import StubPolicyTrainer
+        from crowd_nav.reward_search.validate import StubPolicyTrainer
 
         adapter = CrowdNavAdapter(stage3_delegate=StubPolicyTrainer())
     else:

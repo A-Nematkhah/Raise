@@ -5,7 +5,7 @@ Exercises the innovation path end-to-end (not paper Alg.1 linear):
   Score1 -> Surrogate gate -> in-loop AL -> Refine short -> append -> refit
   (+ Validate stub so the pipeline finishes)
 
-From evonav_env/:
+From raise_env/:
   python scripts/run_closed_loop_1h.py
   python scripts/run_closed_loop_1h.py --llm seed --allow-seed-llm
 """
@@ -52,7 +52,7 @@ def main() -> int:
 
     cmd = [
         sys.executable,
-        "scripts/run_evonav.py",
+        "scripts/run_raise.py",
         "--RAISE loop",
         "--llm",
         args.llm,

@@ -5,7 +5,7 @@ Thin provider wrappers (Groq / local vLLM OpenAI-compatible / scripted).
 Interface mirrors mobile_robot_env.rewards.generators: no crowd-nav logic
 inside the client — only text in, raw completion strings out.
 
-Primary API for EvoNav Stage I:
+Primary API for RAISE Stage I:
     generate(prompt: str, n: int) -> list[str]
 """
 
@@ -72,7 +72,7 @@ class GroqLLMClient(LLMClient):
     Auth (first match wins):
       1. ``api_key=`` constructor argument (single key)
       2. ``GROQ_API_KEY`` environment variable (single key)
-      3. ``evonav_env/groq_keys.json`` key pool via :mod:`key_manager`
+      3. ``raise_env/groq_keys.json`` key pool via :mod:`key_manager`
          (rate-limit rotation; copy from ``groq_keys.json.example``)
 
     Requires optional dependency: ``pip install groq``.
@@ -128,7 +128,7 @@ class GroqLLMClient(LLMClient):
                 if not self.api_key:
                     raise RuntimeError(
                         "GroqLLMClient requires GROQ_API_KEY, api_key=..., or "
-                        "evonav_env/groq_keys.json (see groq_keys.json.example)"
+                        "raise_env/groq_keys.json (see groq_keys.json.example)"
                     )
 
     @staticmethod
@@ -145,7 +145,7 @@ class GroqLLMClient(LLMClient):
         if not self.api_key and self._key_manager is None:
             raise RuntimeError(
                 "GroqLLMClient requires GROQ_API_KEY, api_key=..., or "
-                "evonav_env/groq_keys.json (see groq_keys.json.example)"
+                "raise_env/groq_keys.json (see groq_keys.json.example)"
             )
         messages = [
             {"role": "system", "content": self.system_prompt},

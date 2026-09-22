@@ -12,7 +12,7 @@ import logging
 import re
 from typing import Any, Dict, List, Optional, Sequence
 
-from crowd_nav.reward_search.evolver import RewardCandidate
+from crowd_nav.reward_search.explore import RewardCandidate
 from crowd_nav.reward_search.selection import candidate_nav_scalar
 
 logger = logging.getLogger(__name__)
@@ -73,7 +73,7 @@ def format_final_rank_prompt(candidates: Sequence[RewardCandidate]) -> str:
     ids = ", ".join(c.candidate_id for c in candidates)
     return (
         "You are ranking robot-navigation reward candidates after RL training "
-        "(EvoNav Algorithm 1 final ranking R2/R3).\n"
+        "(RAISE Algorithm 1 final ranking R2/R3).\n"
         "Using the multi-objective metrics below (higher SR/SD better; lower "
         "CR/TR/NT/PL/ITR better), produce a total order from best to worst.\n"
         f"Candidate ids: {ids}\n"

@@ -2,7 +2,7 @@
 
 **Status:** implementation in progress (contract locked 2026-09-20).  
 **Package:** `crowd_nav.reward_search.active_learning`  
-**Queue / logs:** `evonav_env/data/active_learning/`  
+**Queue / logs:** `raise_env/data/active_learning/`  
 **Hard dependency:** Surrogate v1 (`artifacts/surrogate` + uncertainty + `SR/CR/TR` targets).  
 **Soft dependency:** Stage I collector; surrogate `dataset_io.append_example`.
 
@@ -19,7 +19,7 @@ Depends on Surrogate v1 being green. Pipeline flag `--active-learning` is **out 
 | A3 | No model on disk | Loop returns `status=error` / CLI exit **2** with `Surrogate model required` |
 | A4 | Weights default | `u=0.45`, `disagree=0.35`, `borderline=0.15`, `diversity=0.15` |
 | A5 | Refit | After `refit_every` completed `stage2_label`s (or `--force-refit`), re-fit on full `surrogate_dataset` |
-| A6 | Pipeline | Opt-in via `EvoNavPipeline` + `--active-learning` (requires `--surrogate`) |
+| A6 | Pipeline | Opt-in via `RaisePipeline` + `--active-learning` (requires `--surrogate`) |
 
 ---
 

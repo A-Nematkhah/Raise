@@ -1,7 +1,7 @@
 # BASELINE LOCK REPORT — `baseline-pre-amfrs`
 
 **Date:** 2026-09-19 (paper-default fidelity lock)  
-**Purpose:** Freeze the EvoNav Algorithm 1 replication (CrowdNav++ fork) before AMFRS work.  
+**Purpose:** Freeze the RAISE Algorithm 1 replication (CrowdNav++ fork) before AMFRS work.  
 **Tag:** `baseline-pre-amfrs` — use for diffs; defaults now match paper K2 unit, R2/R3, and no Stage II/III elitism. Read **Documented deviations** below before claiming full paper parity.
 
 **Scope of this lock:** Domain Pack + fidelity honesty + paper-faithful **defaults** (K2=`gradient_steps`/8000, `final_rank=llm`, `elitism=off`, best from R2/R3). **No AMFRS.**
@@ -16,7 +16,7 @@
 
 | Area | Evidence |
 |------|----------|
-| Stage I population / gens | `N=8`, `G1=10` — `StageIConfig`, `EvoNavRunConfig`, `configs/paper_scale.yaml` |
+| Stage I population / gens | `N=8`, `G1=10` — `StageIConfig`, `RaiseRunConfig`, `configs/paper_scale.yaml` |
 | Stage I Score1 structure | Spearman(rules, cumulative recomputed reward) over dataset — Eq. 1 / `scoring.py` |
 | Category order | Success ≫ Other ≫ Fail — `rules.py` (Figure 3 category dominance) |
 | Stage II algo / rounds / eval | A2C, `G2=16`, `E2=50`, `T_short=100` — `Stage2Config` |
@@ -25,7 +25,7 @@
 | Fresh policy each round | Stage II/III trainers |
 | D.3 refine uses raw metrics | Not rank ids — §4.2 |
 | Paper-scale numeric budgets | YAML `K2=8000`, `K3=1e7` — **see K2 unit deviation** |
-| Fail-closed `--llm seed` | `run_evonav.py` / `run_evonav_paper_scale.py` |
+| Fail-closed `--llm seed` | `run_raise.py` / `run_raise_paper_scale.py` |
 | Sandbox bans `__import__` | AST + restricted builtins |
 | GST regime asserts | `regime.py` + stage entry points |
 | Dynamic `num_processes` | `None` → `min(16, cpu_count-1)` |
@@ -86,7 +86,7 @@ Part A pad freeze + degeneracy reporting remain closed. Success-tier nav-length 
 
 (Unchanged in spirit from 2026-09-19 lock — caches removed, results archived under `results/archive/`, credentials clean. See git history for file moves.)
 
-**Kept live primary run:** `evonav_env/results/run_scaled_h5_gst/` (pre-Score1-lock artifacts — not evidence of post-lock reproduction).
+**Kept live primary run:** `raise_env/results/run_scaled_h5_gst/` (pre-Score1-lock artifacts — not evidence of post-lock reproduction).
 
 ---
 
@@ -141,7 +141,7 @@ pytest crowd_nav/reward_search/tests -m "not slow"
 ### Tag
 
 ```bash
-git tag -a baseline-pre-amfrs -m "Paper-faithful EvoNav baseline (defaults match Alg.1 / §4.3.2)"
+git tag -a baseline-pre-amfrs -m "Paper-faithful RAISE baseline (defaults match Alg.1 / §4.3.2)"
 git diff baseline-pre-amfrs
 ```
 

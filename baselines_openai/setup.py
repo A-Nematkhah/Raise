@@ -30,7 +30,7 @@ extras['all'] = all_deps
 setup(name='baselines',
       packages=[package for package in find_packages()
                 if package.startswith('baselines')],
-      # Trimmed for the EvoNav fork: algorithm packages (ppo2, deepq, …) were
+      # Trimmed for the RAISE fork: algorithm packages (ppo2, deepq, …) were
       # removed; only logger / bench / common.vec_env (+ transitive) remain.
       # opencv-python is optional (Atari wrappers only; CrowdSim never imports it).
       install_requires=[

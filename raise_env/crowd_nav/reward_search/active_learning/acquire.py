@@ -45,7 +45,7 @@ def _candidate_from_payload(payload: Dict[str, Any]):
 
 def _execute_stage2_label(item: QueryItem, *, config: Dict[str, Any]) -> Dict[str, Any]:
     from crowd_nav.domains import load_domain, make_stage2_trainer_for_domain
-    from crowd_nav.reward_search.stage2 import Stage2Config
+    from crowd_nav.reward_search.refine import Stage2Config
     from crowd_nav.reward_search.surrogate.bootstrap import label_and_append_candidate
     from crowd_nav.reward_search.surrogate.dataset_io import existing_example_ids
 

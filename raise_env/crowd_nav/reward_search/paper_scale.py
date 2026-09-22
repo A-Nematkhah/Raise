@@ -1,7 +1,7 @@
 """
 Paper-scale multi-seed Algorithm 1 orchestration.
 
-Only invoked by ``scripts/run_evonav_paper_scale.py`` (never by pytest).
+Only invoked by ``scripts/run_raise_paper_scale.py`` (never by pytest).
 Aggregates final-policy metrics as mean±std **across seeds**, with explicit
 methodology text when the paper omits its seed count.
 """
@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence
 
 from crowd_nav.reward_search.checkpointing import CheckpointStore, CostLogger, Timer
-from crowd_nav.reward_search.pipeline import EvoNavPipeline, EvoNavRunConfig
+from crowd_nav.reward_search.pipeline import RaisePipeline, RaiseRunConfig
 from crowd_nav.reward_search.presets import (
     PaperScaleSpec,
     apply_paper_scale,
@@ -189,9 +189,9 @@ class PaperScaleRunner:
             device=self.device,
         )
 
-    def _config_for_seed(self, seed: int) -> EvoNavRunConfig:
+    def _config_for_seed(self, seed: int) -> RaiseRunConfig:
         seed_dir = os.path.join(self.output_dir, f"seed_{int(seed):04d}")
-        cfg = EvoNavRunConfig(output_dir=seed_dir, seed=int(seed))
+        cfg = RaiseRunConfig(output_dir=seed_dir, seed=int(seed))
         apply_paper_scale(cfg, self.spec)
         cfg.seed = int(seed)
         cfg.device = self.device
@@ -215,7 +215,7 @@ class PaperScaleRunner:
 
         cfg = self._config_for_seed(seed)
         timer = Timer()
-        pipeline = EvoNavPipeline(cfg, checkpoint_store=self.store)
+        pipeline = RaisePipeline(cfg, checkpoint_store=self.store)
         logger.info(
             "Paper-scale seed=%s → %s (K2=%d G2=%d K3=%d G3=%d)",
             seed,

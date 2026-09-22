@@ -1,7 +1,7 @@
 """
 Pluggable domain packs for reward search.
 
-Default domain is ``crowdnav`` (EvoNav Algorithm 1 on CrowdNav++). Other
+Default domain is ``crowdnav`` (RAISE on CrowdNav++). Other
 environments are added as sibling packages under this package, each exposing
 ``get_pack() -> DomainPack``.
 """
@@ -74,7 +74,7 @@ def make_score_fn_for_domain(
         return result
 
     if pack.name == "crowdnav":
-        from crowd_nav.domains.crowdnav.stage1 import make_score_fn
+        from crowd_nav.domains.crowdnav.explore_score import make_score_fn
 
         score_fn, _dataset = make_score_fn(mode=mode, dataset_path=path)
         return score_fn

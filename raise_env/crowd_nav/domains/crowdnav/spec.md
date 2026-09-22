@@ -1,6 +1,6 @@
 # CrowdNav domain pack
 
-Robot crowd navigation for EvoNav Algorithm 1 (baseline). This pack is the
+Robot crowd navigation for RAISE (baseline). This pack is the
 **default** domain; reward-search must behave identically to the pre-domains
 baseline when `domain=crowdnav`.
 

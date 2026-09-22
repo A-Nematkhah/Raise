@@ -1,22 +1,22 @@
 #!/usr/bin/env python
 """
-Single entry point for EvoNav Algorithm 1 (faithful replication baseline).
+Single entry point for RAISE (faithful replication baseline).
 
   seed generation → Stage I → Stage II → Stage III
 
 No AMFRS mechanisms (novelty archive, Pareto ranking, adaptive controller).
 
-Examples (from ``evonav_env/`` with system Python)::
+Examples (from ``raise_env/`` with system Python)::
 
     # Seconds-scale dry run (stub trainers + seed LLM)
-    python scripts/run_evonav.py --fast --output-dir results/evonav_fast
+    python scripts/run_raise.py --fast --output-dir results/raise_fast
 
     # Practical local run (real trainers, reduced Stage III K3)
-    python scripts/run_evonav.py --llm seed --output-dir results/evonav_local
+    python scripts/run_raise.py --llm seed --output-dir results/raise_local
 
     # Paper-faithful Stage III budget on a GPU cluster
-    python scripts/run_evonav.py --llm vllm --stage3-train-steps 10000000 \\
-        --device cuda --output-dir results/evonav_paper
+    python scripts/run_raise.py --llm vllm --stage3-train-steps 10000000 \\
+        --device cuda --output-dir results/raise_paper
 """
 
 from __future__ import annotations
@@ -36,11 +36,11 @@ os.chdir(_ROOT)
 
 
 def main() -> int:
-    from crowd_nav.reward_search.pipeline import EvoNavPipeline, EvoNavRunConfig
-    from crowd_nav.reward_search.stage3 import STAGE3_PAPER_STEPS, STAGE3_STEPS
+    from crowd_nav.reward_search.pipeline import RaisePipeline, RaiseRunConfig
+    from crowd_nav.reward_search.validate import STAGE3_PAPER_STEPS, STAGE3_STEPS
 
-    parser = argparse.ArgumentParser(description="EvoNav Algorithm 1 end-to-end")
-    parser.add_argument("--output-dir", type=str, default="results/evonav_run")
+    parser = argparse.ArgumentParser(description="RAISE end-to-end")
+    parser.add_argument("--output-dir", type=str, default="results/raise_run")
     parser.add_argument("--seed", type=int, default=425)
     parser.add_argument(
         "--domain",
@@ -110,7 +110,7 @@ def main() -> int:
         default=None,
         choices=["paper"],
         help=(
-            "Named budget preset. 'paper' redirects to scripts/run_evonav_paper_scale.py "
+            "Named budget preset. 'paper' redirects to scripts/run_raise_paper_scale.py "
             "(Tables 3–6, multi-seed); not used by pytest."
         ),
     )
@@ -276,7 +276,7 @@ def main() -> int:
         # Multi-seed paper budgets live in a dedicated human-triggered script.
         print(
             "Paper-scale (Tables 3–6, multi-seed) is only available via:\n"
-            "  python scripts/run_evonav_paper_scale.py\n"
+            "  python scripts/run_raise_paper_scale.py\n"
             "Pass --seeds / --device there. This keeps pytest/--fast unchanged "
             "and avoids accidental CI runs of K3=1e7.",
             file=sys.stderr,
@@ -307,7 +307,7 @@ def main() -> int:
 
     import crowd_sim  # noqa: F401
 
-    cfg = EvoNavRunConfig(
+    cfg = RaiseRunConfig(
         output_dir=args.output_dir,
         seed=args.seed,
         domain=args.domain,
@@ -379,7 +379,7 @@ def main() -> int:
         return 2
 
     logging.info(
-        "EvoNav Algorithm 1 → %s (domain=%s, fast=%s, easy=%s, humans=%d, predict=%s, K3=%d)",
+        "RAISE → %s (domain=%s, fast=%s, easy=%s, humans=%d, predict=%s, K3=%d)",
         cfg.output_dir,
         cfg.domain,
         cfg.fast,
@@ -388,7 +388,7 @@ def main() -> int:
         cfg.predict_method,
         cfg.stage3_train_steps,
     )
-    artifacts = EvoNavPipeline(cfg).run()
+    artifacts = RaisePipeline(cfg).run()
     logging.info("Done. Final candidate: %s", artifacts.best_stage3.candidate_id)
     logging.info("Artifacts: %s", artifacts.output_dir)
     return 0

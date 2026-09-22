@@ -8,10 +8,10 @@ from __future__ import annotations
 
 import logging
 
-from crowd_nav.reward_search.evolver import RewardCandidate
+from crowd_nav.reward_search.explore import RewardCandidate
 from crowd_nav.reward_search.llm import ScriptedLLMClient
 from crowd_nav.reward_search.sandbox import RewardValidator
-from crowd_nav.reward_search.stage3 import (
+from crowd_nav.reward_search.validate import (
     STAGE3_HUMAN_COUNTS,
     STAGE3_PAPER_STEPS,
     STAGE3_STEPS,
@@ -75,7 +75,7 @@ def test_table6_defaults_and_k3_constant():
 
 def test_stage3_argv_k3_independent_of_num_processes():
     """Total env-step budget K3 is unchanged; only wall-clock should change."""
-    from crowd_nav.reward_search.stage3 import _stage3_train_argv
+    from crowd_nav.reward_search.validate import _stage3_train_argv
 
     cfg_a = Stage3Config(num_processes=1, train_env_steps=100_000)
     cfg_b = Stage3Config(num_processes=4, train_env_steps=100_000)

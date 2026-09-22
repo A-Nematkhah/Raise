@@ -1,7 +1,7 @@
-# EvoNav Project Technical Report
+# RAISE Project Technical Report
 
 **Audience:** Thesis supervisor  
-**Repository:** Evonav (EvoNav Algorithm 1 faithful replication on CrowdNav++)  
+**Repository:** RAISE (RAISE Algorithm 1 faithful replication on CrowdNav++)  
 **Report basis:** Source code, configs, scripts, saved `results/`, evaluation JSON/MD, `AUDIT.md`, and git history  
 **Code HEAD at report time:** `fa3325d9cb618498a204903f2040a7c51aa0f55e`  
 **Report date:** 2026-09-11  
@@ -19,11 +19,11 @@
 
 ## 1. Executive Summary
 
-This repository implements a **reward-function search pipeline** for robot crowd navigation: an LLM proposes Python reward functions; a sandbox validates them; Stage I ranks them analytically on a fixed trajectory dataset (Score1); Stages II–III train a neural navigation policy under each candidate reward (short A2C proxy, then longer PPO) and refine rewards with LLM feedback. The simulation stack is a CrowdNav++ derivative (`evonav_env/`), not a new simulator. **AMFRS** (multi-objective evolutionary extensions described in thesis-oriented docs) is **explicitly not included** in this release (`README.md`, `pipeline.py` notes).
+This repository implements a **reward-function search pipeline** for robot crowd navigation: an LLM proposes Python reward functions; a sandbox validates them; Stage I ranks them analytically on a fixed trajectory dataset (Score1); Stages II–III train a neural navigation policy under each candidate reward (short A2C proxy, then longer PPO) and refine rewards with LLM feedback. The simulation stack is a CrowdNav++ derivative (`raise_env/`), not a new simulator. **AMFRS** (multi-objective evolutionary extensions described in thesis-oriented docs) is **explicitly not included** in this release (`README.md`, `pipeline.py` notes).
 
-The pipeline is **end-to-end runnable** and has been executed locally with real LLM (Groq), CUDA training, and GST-inferred observations. The most complete and independently re-evaluated run is `results/run_scaled_h5_gst` plus the P0 evaluation suite under `results/run_scaled_h5_gst/evals/`. Under that protocol (H=5 humans, GST on, without_random, E=150, three **evaluation** seeds), the best EvoNav checkpoint reaches mean **SR ≈ 0.65**, but is **outperformed** by pretrained CrowdNav++ GST, ORCA, and Social Force baselines evaluated under the same H=5 protocol. Paper-scale budgets (K3=10⁷, multi-seed Algorithm-1 training) are **not** evidenced by completed non-stub runs in this repository.
+The pipeline is **end-to-end runnable** and has been executed locally with real LLM (Groq), CUDA training, and GST-inferred observations. The most complete and independently re-evaluated run is `results/run_scaled_h5_gst` plus the P0 evaluation suite under `results/run_scaled_h5_gst/evals/`. Under that protocol (H=5 humans, GST on, without_random, E=150, three **evaluation** seeds), the best RAISE checkpoint reaches mean **SR ≈ 0.65**, but is **outperformed** by pretrained CrowdNav++ GST, ORCA, and Social Force baselines evaluated under the same H=5 protocol. Paper-scale budgets (K3=10⁷, multi-seed Algorithm-1 training) are **not** evidenced by completed non-stub runs in this repository.
 
-**Current project status:** working **experimental research framework** for Algorithm 1 replication and debugging—not a validated claim that EvoNav rewards beat CrowdNav++ under paper settings.
+**Current project status:** working **experimental research framework** for Algorithm 1 replication and debugging—not a validated claim that RAISE rewards beat CrowdNav++ under paper settings.
 
 ---
 
@@ -48,8 +48,8 @@ The pipeline is **end-to-end runnable** and has been executed locally with real 
 ### 3.1 Pipeline that actually exists
 
 ```text
-CLI (run_evonav.py / paper_scale)
-  → EvoNavPipeline (pipeline.py)
+CLI (run_raise.py / paper_scale)
+  → RaisePipeline (pipeline.py)
        → LLM + seed reward (prompts D5 / llm.py)
        → RewardValidator sandbox
        → Stage I: StageIEvolver + Score1(dataset)
@@ -62,7 +62,7 @@ Mapped to the requested template (**only where real**):
 
 | Template step | Status | Module |
 |---------------|--------|--------|
-| Input | Implemented | CLI + `EvoNavRunConfig` + Stage I dataset |
+| Input | Implemented | CLI + `RaiseRunConfig` + Stage I dataset |
 | Candidate / reward generation | Implemented | `llm.py`, `prompts.py`, `evolver.py` |
 | Validation | Implemented | `sandbox/` |
 | Cheap evaluation | Implemented | Stage I Score1 (`scoring.py`) — offline, not a learned surrogate |
@@ -114,7 +114,7 @@ Groq/Ollama/seed LLM
 | **Output** | `stage1_population.json`, `best_stage1.json`, `stage1_rejections.jsonl` |
 | **Files** | `evolver.py`, `scoring.py`, `rules.py`, `dataset.py`, `sandbox/*`, `prompts.py` |
 | **Cost** | Dominated by LLM calls + CPU Score1 (no policy training) |
-| **Why** | Cheap filter before RL (EvoNav Algorithm 1 design) |
+| **Why** | Cheap filter before RL (RAISE Algorithm 1 design) |
 
 Example from `run_scaled_h5_gst`: N=8, G1=8, best Score1 id `cro_0009`, score ≈ **0.831**.
 
@@ -249,7 +249,7 @@ PPO update (`rl/ppo/ppo.py`): advantage = returns − values, normalized; clippe
 
 **Proxy that exists:** Stage II short-horizon A2C train/eval producing `ProxyMetrics`. It is part of the live Algorithm 1 path (not a disconnected prototype).
 
-There is **no** separate feature/label dataset, ExtraTrees/RF training, or surrogate ranking step in `EvoNavPipeline`.
+There is **no** separate feature/label dataset, ExtraTrees/RF training, or surrogate ranking step in `RaisePipeline`.
 
 ---
 
@@ -260,7 +260,7 @@ Values below are taken from saved `config.json` / eval JSON only.
 | Experiment | Environment | Reward | RL | Steps (train) | Episodes (eval) | Seed | Metrics available | Status |
 |------------|-------------|--------|-----|---------------|-----------------|------|-------------------|--------|
 | `run_scaled_h5_gst` | GST inferred, H=5, without_random | Evolved LLM rewards | A2C K2=8e3; PPO K3=4e5 | Stage configs in `config.json` | S2:50 / S3:150 | train 425 | Full stage JSONs + plots + P0 suite | **Complete Algorithm 1 + independent re-eval** |
-| P0 suite (same run dir) | H=5, GST, without_random | Fixed EvoNav ckpt + baselines | Eval only | — | 150 × seeds 425–427 | eval 425–427 | `p0_comparison.json` | **Validated comparison** |
+| P0 suite (same run dir) | H=5, GST, without_random | Fixed RAISE ckpt + baselines | Eval only | — | 150 × seeds 425–427 | eval 425–427 | `p0_comparison.json` | **Validated comparison** |
 | `run_5h_easy` | `predict_method=none`, H=5 | Evolved | A2C 8e3; PPO 1.5e5 | see config | S2:40 / S3:80 | 425 | stage artifacts | Archived → `results/archive/run_5h_easy/` |
 | `run_1to2h` | GST inferred | Evolved | A2C 4e3; PPO 8e4 | see config | S2:20 / S3:50 | 425 | stage artifacts | Archived → `results/archive/run_1to2h/` |
 | `run_1to1p5h_easy` | (incomplete) | — | — | — | — | — | only Stage1 + 1 Stage2 dir | Archived → `results/archive/run_1to1p5h_easy/` |
@@ -281,7 +281,7 @@ Values below are taken from saved `config.json` / eval JSON only.
 | ORCA | Classical ORCA | `ORCA_no_rand` / `00000.pt` | n/a | P0 same | SR **0.978 ± 0.008**, scalar **0.956 ± 0.015** | **Yes (eval)** |
 | Social Force | Classical SF | `SF_no_rand` / `00000.pt` | n/a | P0 same | SR **0.773 ± 0.035**, scalar **0.547 ± 0.071** | **Yes (eval)** |
 | ORCA paper-table check | ORCA | `test.py` 500 eps | n/a | AUDIT.md | SR 0.78, NT 15.87, PL 18.53, ITR 26.04%, SD 0.36 | **Yes (documented)** |
-| LegacyReward PPO (matched K3) | LegacyReward | PPO | Same as EvoNav K3 | — | **Not available** | **No** in P0 suite |
+| LegacyReward PPO (matched K3) | LegacyReward | PPO | Same as RAISE K3 | — | **Not available** | **No** in P0 suite |
 | DS-RNN | — | — | — | — | Skipped locally | **Not reproduced** |
 
 **Caveat (from `p0_comparison.json`):** baselines were **pretrained at paper H=20** but evaluated here with **H pinned to 5**—comparison is useful for engineering triage, **not** a paper-table claim.
@@ -292,15 +292,15 @@ Values below are taken from saved `config.json` / eval JSON only.
 
 ### 11.1 P0 comparison (most citable numbers)
 
-Source: `evonav_env/results/run_scaled_h5_gst/evals/p0_comparison.json` and `P0_SUMMARY.md`.
+Source: `raise_env/results/run_scaled_h5_gst/evals/p0_comparison.json` and `P0_SUMMARY.md`.
 
 | Method | SR mean±std | CR mean | TR mean | Scalar mean±std |
 |--------|-------------|---------|---------|-----------------|
 | CrowdNav++ GST | 0.982 ± 0.008 | 0.000 | 0.018 | 0.973 ± 0.012 |
 | ORCA | 0.978 ± 0.008 | 0.022 | 0.000 | 0.956 ± 0.015 |
 | SF | 0.773 ± 0.035 | 0.227 | 0.000 | 0.547 ± 0.071 |
-| EvoNav best-ever R0 `mut_0060_v2` | **0.653 ± 0.046** | 0.302 | 0.044 | **0.329 ± 0.100** |
-| EvoNav last-round R1 same genome | 0.507 ± 0.035 | 0.396 | 0.098 | 0.062 ± 0.078 |
+| RAISE best-ever R0 `mut_0060_v2` | **0.653 ± 0.046** | 0.302 | 0.044 | **0.329 ± 0.100** |
+| RAISE last-round R1 same genome | 0.507 ± 0.035 | 0.396 | 0.098 | 0.062 ± 0.078 |
 
 Training-time logged metrics for R0 (seed 425): SR=0.680 — **reproduced** on re-eval seed 425 (P0_SUMMARY).
 
@@ -324,7 +324,7 @@ H-sweep on R1 `mut_0060` lineage: only H=5, SR=0.4667 (`h_sweep.txt`).
 ### 11.4 What is **not** evidenced
 
 - Surrogate accuracy / ranking quality vs full RL  
-- Multi-seed **training** mean±std for EvoNav Algorithm 1  
+- Multi-seed **training** mean±std for RAISE Algorithm 1  
 - Paper K3=1e7 completion  
 - Matched-budget LegacyReward PPO baseline  
 
@@ -344,11 +344,11 @@ H-sweep on R1 `mut_0060` lineage: only H=5, SR=0.4667 (`h_sweep.txt`).
 | **Algorithm** | Stage II A2C (K2=8000); Stage III PPO (K3=400000); policy `selfAttn_merge_srnn` |
 | **Training budget** | Reduced vs paper (not 1e7; G1/G2/G3 reduced; human_num=5) |
 | **Evaluation** | Independent E=150 × seeds {425,426,427}; baselines included |
-| **Main metrics** | EvoNav R0: SR **0.653±0.046**, scalar **0.329±0.100**; still below GST/ORCA/SF under this protocol |
-| **Result** | End-to-end Algorithm 1 **works**; current EvoNav reward/policy **does not** outperform standard baselines at this budget/H |
+| **Main metrics** | RAISE R0: SR **0.653±0.046**, scalar **0.329±0.100**; still below GST/ORCA/SF under this protocol |
+| **Result** | End-to-end Algorithm 1 **works**; current RAISE reward/policy **does not** outperform standard baselines at this budget/H |
 | **Why most reliable** | (1) Complete stage artifacts; (2) real LLM+GPU train; (3) GST path on; (4) independent re-eval reproduces train metric; (5) explicit limitation list in JSON; (6) baselines run under same eval harness. |
 
-**Important honesty note:** `final_candidate.json` / `best_stage3_id=mut_0060_v3` is **not** the strongest independently measured policy; P0 shows **R0 best-ever** beats **R1**. Prefer citing **P0 `EvoNav_best_ever_r00`**, not the raw `final_candidate` alone.
+**Important honesty note:** `final_candidate.json` / `best_stage3_id=mut_0060_v3` is **not** the strongest independently measured policy; P0 shows **R0 best-ever** beats **R1**. Prefer citing **P0 `RAISE_best_ever_r00`**, not the raw `final_candidate` alone.
 
 If the supervisor asks for a paper-faithful claim: **no fully validated paper-scale Algorithm 1 result is present in this repository.**
 
@@ -371,16 +371,16 @@ Older reduced runs show much weaker Stage III SR (including 0.0)—do **not** ci
 
 ## 14. Reproducibility
 
-Commands below are taken from `README.md` / `README_EVONAV.md` / scripts.
+Commands below are taken from `README.md` / `README_RAISE.md` / scripts.
 
-1. **Install** (`evonav_env/`): Python 3.10 venv; `pip install -r requirements_pinned.txt`; install PyTorch CUDA wheel as pinned; `pip install -e ../baselines_openai --no-build-isolation`; install Python-RVO2.  
+1. **Install** (`raise_env/`): Python 3.10 venv; `pip install -r requirements_pinned.txt`; install PyTorch CUDA wheel as pinned; `pip install -e ../baselines_openai --no-build-isolation`; install Python-RVO2.  
 2. **API keys:** `groq_keys.json` from example, or `GROQ_API_KEY` / Ollama.  
 3. **Stage I data:** `data/stage1_dataset/` (`stage1_dataset.npz`, manifest `n_scenarios: 100`). Collect via `python scripts/collect_stage1_dataset.py` if regenerating.  
 4. **GST weights:** required for `predict_method=inferred` (paths under `gst_updated/results/...` per AUDIT/regime).  
-5. **Fast wiring:** `python scripts/run_evonav.py --fast --output-dir results/evonav_fast`  
+5. **Fast wiring:** `python scripts/run_raise.py --fast --output-dir results/raise_fast`  
 6. **Tests:** `pytest crowd_nav/reward_search/tests -m "not slow"`  
-7. **Full-ish local run:** `python scripts/run_evonav.py --llm groq --device cuda --regime without_random --stage1-dataset data/stage1_dataset ...` (see README_EVONAV matrix).  
-8. **P0-style eval:** `scripts/run_p0_eval_suite.py`, `eval_evonav_checkpoint.py`, `run_p0_gst_baseline.py`  
+7. **Full-ish local run:** `python scripts/run_raise.py --llm groq --device cuda --regime without_random --stage1-dataset data/stage1_dataset ...` (see README_RAISE matrix).  
+8. **P0-style eval:** `scripts/run_p0_eval_suite.py`, `eval_raise_checkpoint.py`, `run_p0_gst_baseline.py`  
 9. **Expected outputs:** `results/<run>/{config,manifest,best_stage*,stage*_population,stage2_train,stage3_train,plots}/`
 
 **Reproducibility gaps:** single training seed in main run; `.venv` noted removed in AUDIT (must recreate); results may be machine-local; paper multi-seed training not completed.
@@ -392,7 +392,7 @@ Commands below are taken from `README.md` / `README_EVONAV.md` / scripts.
 Evidence-based only:
 
 1. **Budgets below paper** for the best documented run (K3=4e5 ≪ 1e7; reduced G; H=5).  
-2. **EvoNav underperforms** CrowdNav++/ORCA/SF under the P0 H=5 protocol.  
+2. **RAISE underperforms** CrowdNav++/ORCA/SF under the P0 H=5 protocol.  
 3. **Single training seed** (425); multi-seed is eval-only.  
 4. **Selection/refine regression:** last-round checkpoint worse than earlier best-ever (measured).  
 5. **No matched LegacyReward PPO** baseline at same K3.  
@@ -424,7 +424,7 @@ Evidence-based only:
 
 **Experimental Framework** (bordering **Research Prototype**).
 
-**Why:** End-to-end Algorithm 1 is implemented, tested at unit level, and executed with real LLM+GPU+GST; however, paper-scale validation is missing, primary EvoNav policies do not beat standard baselines under the best documented protocol, and several scientific controls (matched Legacy PPO, multi-seed training) are absent.
+**Why:** End-to-end Algorithm 1 is implemented, tested at unit level, and executed with real LLM+GPU+GST; however, paper-scale validation is missing, primary RAISE policies do not beat standard baselines under the best documented protocol, and several scientific controls (matched Legacy PPO, multi-seed training) are absent.
 
 ### What is already demonstrated?
 
@@ -436,7 +436,7 @@ Evidence-based only:
 
 ### What is not yet demonstrated?
 
-- EvoNav reward search **outperforming** CrowdNav++ under a fair, paper-aligned protocol.  
+- RAISE reward search **outperforming** CrowdNav++ under a fair, paper-aligned protocol.  
 - Completed paper K3 / multi-seed Algorithm 1.  
 - AMFRS / surrogate / active learning.  
 - Statistical significance across training seeds.  
@@ -457,13 +457,13 @@ Evidence-based only:
 Search a scalar reward for RL-based robot navigation among ORCA humans in CrowdNav++, aiming for high success and low collision.
 
 **Proposed Method (as implemented)**  
-EvoNav Algorithm 1: LLM proposes rewards → sandbox → Score1 offline ranking → short A2C proxy + LLM refine → longer PPO + LLM refine. AMFRS not in this codebase.
+RAISE Algorithm 1: LLM proposes rewards → sandbox → Score1 offline ranking → short A2C proxy + LLM refine → longer PPO + LLM refine. AMFRS not in this codebase.
 
 **Current Implementation**  
-Full pipeline in `evonav_env/crowd_nav/reward_search/` on CrowdNav++ envs; Groq LLM; GST optional; results under `results/`.
+Full pipeline in `raise_env/crowd_nav/reward_search/` on CrowdNav++ envs; Groq LLM; GST optional; results under `results/`.
 
 **Best Validated Result**  
-`run_scaled_h5_gst` + P0 eval: best EvoNav policy **SR ≈ 0.65 ± 0.05** (H=5, E=150, 3 eval seeds), while CrowdNav++ GST / ORCA remain ≈ **0.98** under the same eval protocol. Budgets are below paper scale.
+`run_scaled_h5_gst` + P0 eval: best RAISE policy **SR ≈ 0.65 ± 0.05** (H=5, E=150, 3 eval seeds), while CrowdNav++ GST / ORCA remain ≈ **0.98** under the same eval protocol. Budgets are below paper scale.
 
 **Main Contribution (honest)**  
 A reproducible engineering stack for Algorithm 1 reward search and evaluation on CrowdNav++, with measured gaps vs strong baselines—not yet a superior navigation method under paper conditions.
@@ -481,7 +481,7 @@ Reduced compute settings, single training seed, selection/refine pathologies, mi
 | # | Claim | Evidence path |
 |---|--------|----------------|
 | 1 | AMFRS not in this release | `README.md`; `pipeline.py` manifest notes |
-| 2 | Entry: `scripts/run_evonav.py` → `EvoNavPipeline` | `scripts/run_evonav.py`, `pipeline.py` |
+| 2 | Entry: `scripts/run_raise.py` → `RaisePipeline` | `scripts/run_raise.py`, `pipeline.py` |
 | 3 | Stage I = Score1 Spearman on dataset | `scoring.py`, `rules.py` |
 | 4 | Stage II default A2C; Stage III PPO | `stage2.py`, `stage3.py`, `AUDIT.md` §7 |
 | 5 | Sandbox validates LLM rewards | `sandbox/validator.py`, rejection jsonl in results |
@@ -489,7 +489,7 @@ Reduced compute settings, single training seed, selection/refine pathologies, mi
 | 7 | Best documented run dir | `results/run_scaled_h5_gst/` |
 | 8 | That run config: H=5, GST, K2=8000, K3=400000, Groq | `results/run_scaled_h5_gst/config.json` |
 | 9 | Stage I dataset 100 scenarios | `data/stage1_dataset/manifest.json` |
-| 10 | P0 EvoNav R0 SR≈0.653 vs GST≈0.982 | `results/run_scaled_h5_gst/evals/p0_comparison.json` |
+| 10 | P0 RAISE R0 SR≈0.653 vs GST≈0.982 | `results/run_scaled_h5_gst/evals/p0_comparison.json` |
 | 11 | R0 beats R1 (selection regression) | `P0_SUMMARY.md` |
 | 12 | `final_candidate` is `mut_0060_v3` with weaker R1 metrics | `best_stage3.json` / `final_candidate.json` |
 | 13 | Paper-scale folder is stub timings | `results/archive/paper_scale/cost_log.json` |
@@ -498,4 +498,4 @@ Reduced compute settings, single training seed, selection/refine pathologies, mi
 
 ---
 
-*End of report. This document describes what is present and measured in the repository as of the audit date; it does not claim paper-table superiority for EvoNav.*
+*End of report. This document describes what is present and measured in the repository as of the audit date; it does not claim paper-table superiority for RAISE.*

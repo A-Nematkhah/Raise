@@ -10,7 +10,7 @@ Real stack (not --easy / not Validate stub):
 Resume after interrupt:
   python scripts/run_closed_loop_18h.py --resume results/closed_loop_18h_YYYYMMDD_HHMMSS
 
-From evonav_env/:
+From raise_env/:
   python scripts/run_closed_loop_18h.py
 """
 
@@ -99,7 +99,7 @@ def main() -> int:
         keys = os.path.join(root, "groq_keys.json")
         if not os.path.isfile(keys) and not os.environ.get("GROQ_API_KEY"):
             print(
-                "Groq: set GROQ_API_KEY or create evonav_env/groq_keys.json",
+                "Groq: set GROQ_API_KEY or create raise_env/groq_keys.json",
                 file=sys.stderr,
             )
             return 2
@@ -124,7 +124,7 @@ def main() -> int:
     # REAL scaled: GST + randomization + real Validate. No --easy / no --stage3-stub.
     cmd = [
         sys.executable,
-        "scripts/run_evonav.py",
+        "scripts/run_raise.py",
         "--RAISE loop",
         "--llm",
         args.llm,

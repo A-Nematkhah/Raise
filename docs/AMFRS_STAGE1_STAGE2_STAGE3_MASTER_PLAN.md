@@ -1,8 +1,8 @@
-# AMFRS / EvoNav Stage 1–2–3 Master Plan
+# AMFRS / RAISE Stage 1–2–3 Master Plan
 
 **Status:** Reference document only — no implementation implied by this file.  
-**Repo reality:** This tree ships **EvoNav Algorithm 1** (faithful replication). **AMFRS is not implemented** (`pipeline.py` / `evolver.py` explicitly exclude novelty archive, Pareto, adaptive controller).  
-**Sources:** Code under `evonav_env/crowd_nav/reward_search/` + prior Stage I/II/III analysis in project discussions.  
+**Repo reality:** This tree ships **RAISE Algorithm 1** (faithful replication). **AMFRS is not implemented** (`pipeline.py` / `evolver.py` explicitly exclude novelty archive, Pareto, adaptive controller).  
+**Sources:** Code under `raise_env/crowd_nav/reward_search/` + prior Stage I/II/III analysis in project discussions.  
 **Last consolidated:** 2026-09-10
 
 Labels used throughout:
@@ -15,7 +15,7 @@ Labels used throughout:
 
 ## 1. Executive Summary
 
-The project today is a CrowdNav++ fork plus an EvoNav Algorithm 1 pipeline: LLM-proposed reward functions are sandboxed, ranked analytically on a fixed trajectory dataset (**Stage I**), refined under short proxy RL (**Stage II**, typically A2C), then trained/evaluated at near-full budget with PPO (**Stage III**), optionally with a human-count sweep. Entry is primarily `scripts/run_evonav.py` → `EvoNavPipeline.run()`, with paper budgets via `configs/paper_scale.yaml` / `run_evonav_paper_scale.py`.
+The project today is a CrowdNav++ fork plus an RAISE Algorithm 1 pipeline: LLM-proposed reward functions are sandboxed, ranked analytically on a fixed trajectory dataset (**Stage I**), refined under short proxy RL (**Stage II**, typically A2C), then trained/evaluated at near-full budget with PPO (**Stage III**), optionally with a human-count sweep. Entry is primarily `scripts/run_raise.py` → `RaisePipeline.run()`, with paper budgets via `configs/paper_scale.yaml` / `run_raise_paper_scale.py`.
 
 The main architectural tension is a **three-stage objective mismatch**: Stage I optimizes Spearman alignment with coarse analytical rules on offline ORCA-like trajectories; Stage II optimizes a noisy short-horizon navigation scalar under A2C; Stage III optimizes long PPO training and reports H-generalization. Selection uses a simple scalar `SR - CR - 0.5·TR` (`selection.py`). There is **no surrogate model, no active learning loop, and no AMFRS multi-objective evolution** in code.
 
@@ -29,7 +29,7 @@ Intended roles:
 
 Highest-leverage changes toward a credible path to **AMFRS-capable architecture** (without boiling the ocean): (1) make Stage I scoring trustworthy (pad/holdout/anti-exploit/richer rules); (2) stabilize Stage II ranking and **accept/reject** refinements; (3) turn Stage III into a **finalist tournament** with generalization/safety in the objective; (4) only then add AMFRS primitives (archive, Pareto, diversity) on stable interfaces (`RewardCandidate`, metrics, sandbox).
 
-Path: **stabilize EvoNav baseline metrics → close Stage I↔II↔III feedback loops → modularize shared train/refine → introduce AMFRS mechanisms as additive modules.**
+Path: **stabilize RAISE baseline metrics → close Stage I↔II↔III feedback loops → modularize shared train/refine → introduce AMFRS mechanisms as additive modules.**
 
 ---
 
@@ -39,16 +39,16 @@ Path: **stabilize EvoNav baseline metrics → close Stage I↔II↔III feedback 
 
 | Entry | Role |
 |-------|------|
-| `scripts/run_evonav.py` | Algorithm 1 end-to-end |
-| `scripts/run_evonav_paper_scale.py` | Multi-seed paper budgets; loads `configs/paper_scale.yaml` |
+| `scripts/run_raise.py` | Algorithm 1 end-to-end |
+| `scripts/run_raise_paper_scale.py` | Multi-seed paper budgets; loads `configs/paper_scale.yaml` |
 | `scripts/collect_stage1_dataset.py` | Build Stage I dataset |
 | `scripts/run_stage2_smoke.py` / `run_stage3_smoke.py` | Stage wiring smokes |
 | `train.py` / `test.py` | Standalone CrowdNav++ PPO (not called by Algorithm 1 stages) |
-| `scripts/eval_evonav_checkpoint.py`, `visualize_evonav.py`, `report.py`, `plot_evonav_run.py` | Post-hoc analysis |
+| `scripts/eval_raise_checkpoint.py`, `visualize_raise.py`, `report.py`, `plot_raise_run.py` | Post-hoc analysis |
 
 ### 2.2 Pipeline / orchestrator
 
-- `crowd_nav/reward_search/pipeline.py` — `EvoNavPipeline` / `EvoNavRunConfig`  
+- `crowd_nav/reward_search/pipeline.py` — `RaisePipeline` / `RaiseRunConfig`  
 - Order: seed reward → Stage I (`StageIEvolver`) → Stage II (`Stage2Runner`) → Stage III (`Stage3Runner`) → JSON artifacts  
 - Shared `RewardValidator`; optional `checkpoint_store` for paper-scale resume  
 
@@ -94,7 +94,7 @@ Path: **stabilize EvoNav baseline metrics → close Stage I↔II↔III feedback 
 
 ### 2.10 Experiment configuration
 
-- `EvoNavRunConfig`, CLI flags, `regime.py`, `presets.py` / `paper_scale.yaml`  
+- `RaiseRunConfig`, CLI flags, `regime.py`, `presets.py` / `paper_scale.yaml`  
 - Env hyperparameters: `crowd_nav/configs/config.py` + runtime overrides in stage trainers  
 
 ### 2.11 Data flow (current)
@@ -111,8 +111,8 @@ LLM code
 
 ```text
 Current:
-User/CLI → run_evonav / paper_scale
-        → EvoNavPipeline
+User/CLI → run_raise / paper_scale
+        → RaisePipeline
              → StageIEvolver (Score1)
              → Stage2Runner (A2C proxy + refine)
              → Stage3Runner (PPO + refine + H-sweep)
@@ -805,7 +805,7 @@ Cost legend: implementation complexity, computational cost, runtime impact, main
 **Decision D-1 — Paper fidelity vs Stage I rule enrichment**
 
 - **Question:** May we change analytical rules away from coarse Figure-3 buckets?  
-- **Option A:** Keep rules strict for faithful EvoNav replication; add enrichment only under a flagged `rules_version`.  
+- **Option A:** Keep rules strict for faithful RAISE replication; add enrichment only under a flagged `rules_version`.  
 - **Option B:** Replace rules globally with richer preferences.  
 - **Recommended:** **A**  
 - **Reason:** Repo claims faithful Algorithm 1; enrichment is AMFRS/thesis delta and must be ablatable.  

@@ -1,5 +1,5 @@
 """
-EvoNav Stage III — full-scale PPO training + D.3 refinement + Table 6 H-sweep.
+RAISE Stage III — full-scale PPO training + D.3 refinement + Table 6 H-sweep.
 
 Structurally identical to Stage II, but:
   - ``--algo ppo`` with fixed K3 environment steps (no early stopping)
@@ -26,7 +26,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import torch
 import torch.nn as nn
 
-from crowd_nav.reward_search.evolver import RewardCandidate
+from crowd_nav.reward_search.explore import RewardCandidate
 from crowd_nav.reward_search import console
 from crowd_nav.reward_search.llm import (
     LLMClient,
@@ -47,7 +47,7 @@ from crowd_nav.reward_search.selection import (
     candidate_nav_scalar,
     is_same_genome,
 )
-from crowd_nav.reward_search.stage2 import ProxyMetrics, evaluate_proxy_policy
+from crowd_nav.reward_search.refine import ProxyMetrics, evaluate_proxy_policy
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +55,7 @@ logger = logging.getLogger(__name__)
 # K3 training budget (Table 6)
 # ---------------------------------------------------------------------------
 #
-# Paper (EvoNav Table 6 / §C.3): K3 = 10^7 environment steps with PPO on
+# Paper (RAISE Table 6 / §C.3): K3 = 10^7 environment steps with PPO on
 # NVIDIA A6000-class GPUs.
 #
 # Default below is deliberately smaller for practical iteration on a laptop /
@@ -72,7 +72,7 @@ STAGE3_HUMAN_COUNTS: Tuple[int, ...] = (5, 10, 15, 20)  # Table 6 H sweep
 
 @dataclass
 class Stage3Config:
-    """EvoNav Table 6 Stage III defaults (with practical K3 override)."""
+    """RAISE Table 6 Stage III defaults (with practical K3 override)."""
 
     population_size: int = 8
     rounds: int = 3  # G3

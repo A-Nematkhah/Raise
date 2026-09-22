@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 from crowd_nav.domains.crowdnav.prompts import format_d2_mutation
-from crowd_nav.reward_search.evolver import RewardCandidate
+from crowd_nav.reward_search.explore import RewardCandidate
 from crowd_nav.reward_search.ranking import (
     multiobjective_lex_rank,
     pick_candidate_by_ranking,
     produce_final_ranking,
     rank_ids_by_scalar,
 )
-from crowd_nav.reward_search.stage2 import Stage2Config, resolve_stage2_env_steps
+from crowd_nav.reward_search.refine import Stage2Config, resolve_stage2_env_steps
 
 
 def test_mutation_prompt_targets_underperforming_parent():

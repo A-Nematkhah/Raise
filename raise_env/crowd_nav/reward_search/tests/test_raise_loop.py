@@ -7,11 +7,11 @@ from unittest.mock import patch
 
 import pytest
 
-from crowd_nav.reward_search.closed_loop.config import ClosedLoopConfig
-from crowd_nav.reward_search.closed_loop.epoch import select_to_label, unique_by_code
-from crowd_nav.reward_search.closed_loop.logging_io import read_epochs
-from crowd_nav.reward_search.closed_loop.runner import ClosedLoopRunner
-from crowd_nav.reward_search.evolver import RewardCandidate
+from crowd_nav.reward_search.raise_loop.config import ClosedLoopConfig
+from crowd_nav.reward_search.raise_loop.epoch import select_to_label, unique_by_code
+from crowd_nav.reward_search.raise_loop.logging_io import read_epochs
+from crowd_nav.reward_search.raise_loop.runner import ClosedLoopRunner
+from crowd_nav.reward_search.explore import RewardCandidate
 from crowd_nav.reward_search.prompts import D5_SEED_FUNCTION
 from crowd_nav.reward_search.sandbox.validator import RewardValidator
 
@@ -121,7 +121,7 @@ def test_al_inside_epoch_hard_gate(monkeypatch):
         ]
 
     monkeypatch.setattr(
-        "crowd_nav.reward_search.closed_loop.epoch.score_queries",
+        "crowd_nav.reward_search.raise_loop.epoch.score_queries",
         _fake_score_queries,
     )
     to_label, gate, al = select_to_label(
@@ -139,7 +139,6 @@ def test_al_inside_epoch_hard_gate(monkeypatch):
         al_max_per_epoch=2,
         al_allow_stage1_requests=False,
         al_root="data/active_learning",
-        require_skill=False,
     )
     assert gate.get("enabled") is True
     assert gate.get("soft") is False
@@ -184,8 +183,8 @@ def test_closed_loop_fast_two_epochs(tmp_path):
     # Isolation nests model under output_dir; use the path the runner actually wrote.
     assert os.path.isfile(os.path.join(result.model_dir, "model.joblib"))
     epochs = read_epochs(out)
-    # generations=2 → Gen0 + 2 evolution steps = 3 scored epochs
-    assert len(epochs) == 3
+    # generations=2 → Gen0 + Gen1 (two scored epochs)
+    assert len(epochs) == 2
     assert epochs[0]["gate"].get("soft") is True
     # After Gen0 refit, Gen1 may hard-gate if enough labels
     assert epochs[1]["epoch"] == 1
@@ -198,7 +197,7 @@ def test_closed_loop_fast_two_epochs(tmp_path):
 
 
 def test_format_epoch_summary_hard_gate():
-    from crowd_nav.reward_search.closed_loop.report import format_epoch_summary
+    from crowd_nav.reward_search.raise_loop.report import format_epoch_summary
 
     line = format_epoch_summary(
         {

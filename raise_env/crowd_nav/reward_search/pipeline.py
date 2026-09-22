@@ -1,5 +1,5 @@
 """
-EvoNav Algorithm 1 orchestrator (faithful replication baseline).
+RAISE orchestrator (faithful replication baseline).
 
 seed → Stage I → Stage II → Stage III. No AMFRS mechanisms.
 """
@@ -13,7 +13,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from crowd_nav.reward_search.evolver import (
+from crowd_nav.reward_search.explore import (
     RewardCandidate,
     StageIConfig,
     StageIEvolver,
@@ -45,11 +45,11 @@ from crowd_nav.reward_search.surrogate.gate import (
     predict_population,
     surrogate_model_ready,
 )
-from crowd_nav.reward_search.stage2 import (
+from crowd_nav.reward_search.refine import (
     Stage2Config,
     Stage2Runner,
 )
-from crowd_nav.reward_search.stage3 import (
+from crowd_nav.reward_search.validate import (
     STAGE3_PAPER_STEPS,
     STAGE3_STEPS,
     Stage3Config,
@@ -60,10 +60,10 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
-class EvoNavRunConfig:
+class RaiseRunConfig:
     """End-to-end Algorithm 1 settings (paper defaults + practical overrides)."""
 
-    output_dir: str = "results/evonav_run"
+    output_dir: str = "results/raise_run"
     seed: int = 425
     # Domain pack under crowd_nav.domains (default preserves Algorithm 1 baseline).
     domain: str = DEFAULT_DOMAIN
@@ -167,7 +167,7 @@ class EvoNavRunConfig:
 
 
 @dataclass
-class EvoNavArtifacts:
+class RaiseArtifacts:
     """Paths / populations produced by one Algorithm 1 run."""
 
     output_dir: str
@@ -181,18 +181,18 @@ class EvoNavArtifacts:
     manifest: Dict[str, Any] = field(default_factory=dict)
 
 
-class EvoNavPipeline:
+class RaisePipeline:
     """Reproduce Algorithm 1 end-to-end and persist JSON artifacts."""
 
     def __init__(
         self,
-        config: Optional[EvoNavRunConfig] = None,
+        config: Optional[RaiseRunConfig] = None,
         *,
         llm: Optional[LLMClient] = None,
         checkpoint_store: Optional[Any] = None,
         domain_pack: Optional[DomainPack] = None,
     ) -> None:
-        self.config = config or EvoNavRunConfig()
+        self.config = config or RaiseRunConfig()
         self.llm = llm
         self.validator = RewardValidator()
         # Optional paper-scale resume store (seed/stage/round/candidate).
@@ -240,7 +240,7 @@ class EvoNavPipeline:
 
     def _run_closed_loop_branch(
         self,
-        cfg: EvoNavRunConfig,
+        cfg: RaiseRunConfig,
         *,
         llm: Any,
         pack: Any,
@@ -248,7 +248,7 @@ class EvoNavPipeline:
         predict_method: str,
     ):
         """Innovation path: interleaved Score1 ↔ Stage II short ↔ Surrogate+AL."""
-        from crowd_nav.reward_search.closed_loop import ClosedLoopConfig, ClosedLoopRunner
+        from crowd_nav.reward_search.raise_loop import ClosedLoopConfig, ClosedLoopRunner
 
         console.banner("Closed-loop multi-fidelity (innovation)")
         cl_cfg = ClosedLoopConfig(
@@ -384,7 +384,7 @@ class EvoNavPipeline:
             dict(cl_result.manifest),
         )
 
-    def run(self) -> EvoNavArtifacts:
+    def run(self) -> RaiseArtifacts:
         import time
 
         cfg = self.config
@@ -404,7 +404,7 @@ class EvoNavPipeline:
         predict_method = (cfg.predict_method or EVOLUTION_PREDICT_METHOD).strip().lower()
         cfg.predict_method = predict_method
         attrs, goals = randomization_flags(regime)
-        console.banner("EvoNav Algorithm 1")
+        console.banner("RAISE")
         console.status(
             f"output={cfg.output_dir} seed={cfg.seed} llm={cfg.llm_provider} "
             f"fast={cfg.fast} device={cfg.device}"
@@ -438,7 +438,7 @@ class EvoNavPipeline:
         seed_code = pack.seed_reward_source.strip() + "\n"
 
         manifest: Dict[str, Any] = {
-            "algorithm": "EvoNav Algorithm 1",
+            "algorithm": "RAISE",
             "domain": pack.name,
             "domain_display_name": pack.display_name,
             "created_utc": datetime.now(timezone.utc).isoformat(),
@@ -915,7 +915,7 @@ class EvoNavPipeline:
             closed_loop=bool(cfg.closed_loop),
         )
 
-        return EvoNavArtifacts(
+        return RaiseArtifacts(
             output_dir=cfg.output_dir,
             seed_code=seed_code,
             stage1_population=stage1_pop,

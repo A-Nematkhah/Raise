@@ -1,5 +1,5 @@
 """
-Live terminal feedback for EvoNav runs.
+Live terminal feedback for RAISE runs.
 
 This module is about what a user sees *while a run is in progress*.
 It does not write JSON artifacts or change algorithms. Progress bars use
@@ -33,7 +33,7 @@ def is_verbose() -> bool:
 
 def is_interactive() -> bool:
     """True when stderr looks like a live terminal (not a pipe / CI capture)."""
-    if os.environ.get("EVONAV_FORCE_TQDM", "").strip() in ("1", "true", "yes"):
+    if os.environ.get("RAISE_FORCE_TQDM", "").strip() in ("1", "true", "yes"):
         return True
     if os.environ.get("CI") or os.environ.get("GITHUB_ACTIONS"):
         return False
@@ -45,7 +45,7 @@ def is_interactive() -> bool:
 
 def configure_run_logging(*, verbose: bool = False) -> None:
     """
-    Readable default logs: INFO for EvoNav, quiet HTTP/SDK noise.
+    Readable default logs: INFO for RAISE, quiet HTTP/SDK noise.
 
     ``--verbose`` turns on DEBUG for ``crowd_nav`` / ``crowd_sim`` only —
     not httpx/groq full request dumps (those made 1h runs unreadable).
@@ -312,12 +312,12 @@ def final_run_summary(
     best_stage3: Optional[Any] = None,
     closed_loop: bool = False,
 ) -> None:
-    banner("EvoNav Algorithm 1 - finished")
+    banner("RAISE - finished")
     status(f"Total wall-clock: {format_seconds(wall_seconds)}")
     if closed_loop:
         status("mode: closed_loop_v1 (innovation)")
         try:
-            from crowd_nav.reward_search.closed_loop.report import (
+            from crowd_nav.reward_search.raise_loop.report import (
                 build_closed_loop_report,
             )
 

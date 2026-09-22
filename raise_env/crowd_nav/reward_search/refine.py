@@ -1,5 +1,5 @@
 """
-EvoNav Stage II — lightweight proxy A2C rollouts + D.3 LLM refinement.
+RAISE Stage II — lightweight proxy A2C rollouts + D.3 LLM refinement.
 
 For each of N Stage-I candidates, each of G2 rounds:
   1. Train a FRESH A2C policy for fixed K2 env steps (Table 5: 8000).
@@ -29,7 +29,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from crowd_nav.reward_search.evolver import RewardCandidate
+from crowd_nav.reward_search.explore import RewardCandidate
 from crowd_nav.reward_search import console
 from crowd_nav.reward_search.llm import (
     LLMClient,
@@ -63,7 +63,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class Stage2Config:
-    """EvoNav Table 5 Stage II defaults."""
+    """RAISE Table 5 Stage II defaults."""
 
     population_size: int = 8
     rounds: int = 16  # G2

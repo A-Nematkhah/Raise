@@ -44,7 +44,7 @@ def main() -> int:
     args = parser.parse_args()
 
     # Windows spawn workers re-import Config → get_args() reads sys.argv.
-    # Isolate bootstrap flags (same pattern as run_evonav / run_stage3_smoke).
+    # Isolate bootstrap flags (same pattern as run_raise / run_stage3_smoke).
     sys.argv = [sys.argv[0], "--seed", str(args.seed)]
     if str(args.device).lower() != "cuda":
         sys.argv.append("--no-cuda")

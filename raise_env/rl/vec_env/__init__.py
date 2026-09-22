@@ -1,4 +1,4 @@
-"""Minimal vec_env surface used by EvoNav / CrowdNav++.
+"""Minimal vec_env surface used by RAISE / CrowdNav++.
 
 Active code imports ``VecPretextNormalize`` (and its ``VecEnvWrapper`` /
 ``RunningMeanStd`` dependencies). OpenAI Baselines supplies the live

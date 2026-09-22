@@ -1,16 +1,16 @@
-# گزارش کامل تغییرات — Domain Pack و سخت‌سازی Fidelity پایهٔ EvoNav
+# گزارش کامل تغییرات — Domain Pack و سخت‌سازی Fidelity پایهٔ RAISE
 
 **مخاطب:** خود پروژه / ناظر پایان‌نامه  
 **بازهٔ کار:** سپتامبر ۲۰۲۶ (پس از قفل Score1؛ شامل Domain Pack + fidelity + پیش‌فرض‌های مقاله)  
 **نقطهٔ ذخیره / تگ baseline:** `baseline-pre-amfrs` روی ریموت `baseline`  
-**مقالهٔ مرجع baseline:** EvoNav (arXiv:2605.11859) — فایل محلی `Evonav.pdf`  
+**مقالهٔ مرجع baseline:** RAISE (arXiv:2605.11859)  
 **هدف این گزارش:** توضیح ساده، کامل و دقیقِ اینکه **قبل چه بود**، **چه کردیم**، و **بعد چه شد** — بدون اغراق «بازتولید کامل مقاله».
 
 ---
 
 ## ۱) خلاصهٔ یک‌صفحه‌ای
 
-پروژه یک **پیاده‌سازی قابل‌اجرای Algorithm 1 مقالهٔ EvoNav** روی شبیه‌ساز CrowdNav++ بود. اسکلت درست بود، ولی:
+پروژه یک **پیاده‌سازی قابل‌اجرای Algorithm 1 مقالهٔ RAISE** روی شبیه‌ساز CrowdNav++ بود. اسکلت درست بود، ولی:
 
 1. بعضی ادعاهای «وفادار به مقاله / byte-faithful» بیش از حد قوی بودند؛
 2. چند فاصلهٔ واقعی با متن مقاله (رتبه‌بندی، واحد K2، Score1، دیتاست، elitism) در جدول انحراف‌ها شفاف نبود؛
@@ -83,7 +83,7 @@
 ### ۴.۲ ساختار جدید
 
 ```text
-evonav_env/crowd_nav/domains/
+raise_env/crowd_nav/domains/
   README.md                 ← راهنمای افزودن محیط واقعی (بدون stub جعلی)
   base.py                   ← DomainPack + EnvAdapter
   __init__.py               ← load_domain / make_*_for_domain
@@ -133,7 +133,7 @@ evonav_env/crowd_nav/domains/
 - جدول **Documented deviations** گسترش یافت: R2/R3، واحد K2، elitism، split نسل، seed، interface، N_traj، …
 - `selection.py` صریحاً می‌گوید اسکالر ≠ رتبه‌بندی LLM مقاله
 
-**اثر:** مقایسه‌های بعدی «AMFRS در برابر EvoNav» دیگر روی برچسب غلط بنا نمی‌شود.
+**اثر:** مقایسه‌های بعدی «AMFRS در برابر RAISE» دیگر روی برچسب غلط بنا نمی‌شود.
 
 ### ۵.۲ فاز B1 — تنوع دیتاست Stage I
 
@@ -153,7 +153,7 @@ evonav_env/crowd_nav/domains/
 **توجه:** دیتاست اصلی `data/stage1_dataset` باید با دستور زیر دوباره جمع شود تا اثر کامل دیده شود:
 
 ```bash
-cd evonav_env
+cd raise_env
 python scripts/collect_stage1_dataset.py --out data/stage1_dataset
 ```
 
@@ -214,7 +214,7 @@ python scripts/collect_stage1_dataset.py --out data/stage1_dataset
 **اجرای پیش‌فرض نزدیک به مقاله:**
 
 ```bash
-python scripts/run_evonav.py \
+python scripts/run_raise.py \
   --llm groq --device cuda ...
 # K2=8000 gradient_steps, final_rank=llm, elitism=off already default
 ```
@@ -248,7 +248,7 @@ python scripts/run_evonav.py \
 | `reward_search/ranking.py` | R2/R3 |
 | `reward_search/proxy_consistency.py` | Spearman بین stageها |
 | `scripts/collect_stage1_dataset.py` | دیتاست Stage I |
-| `scripts/run_evonav.py` | CLI فلگ‌های جدید |
+| `scripts/run_raise.py` | CLI فلگ‌های جدید |
 | `domains/README.md` | راهنمای افزودن محیط جدید |
 
 تست‌های اضافه‌شده/به‌روز:
@@ -318,7 +318,7 @@ python scripts/run_evonav.py \
 
 وضعیت درست برای گفتن به ناظر:
 
-> «پایهٔ EvoNav Algorithm 1 اکنون ماژولار و از نظر fidelity مستند و اصلاح‌شده است؛ هنوز ادعای بازتولید کامل نتایج Table 1 مقاله را مطرح نمی‌کنیم تا run مقیاس‌کاغذی با دیتاست تازه انجام شود.»
+> «پایهٔ RAISE Algorithm 1 اکنون ماژولار و از نظر fidelity مستند و اصلاح‌شده است؛ هنوز ادعای بازتولید کامل نتایج Table 1 مقاله را مطرح نمی‌کنیم تا run مقیاس‌کاغذی با دیتاست تازه انجام شود.»
 
 ---
 

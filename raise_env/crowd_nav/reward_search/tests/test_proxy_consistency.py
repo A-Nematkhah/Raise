@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from crowd_nav.reward_search.evolver import RewardCandidate
+from crowd_nav.reward_search.explore import RewardCandidate
 from crowd_nav.reward_search.proxy_consistency import (
     compute_proxy_consistency,
     genome_key,

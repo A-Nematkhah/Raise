@@ -180,7 +180,7 @@ def test_scenario_scores_and_failure_hints():
 
 
 def test_evolver_reflection_includes_diagnostics():
-    from crowd_nav.reward_search.evolver import RewardCandidate, StageIEvolver
+    from crowd_nav.reward_search.explore import RewardCandidate, StageIEvolver
     from crowd_nav.reward_search.llm import ScriptedLLMClient
 
     client = ScriptedLLMClient(["unused"])
@@ -207,7 +207,7 @@ def test_evolver_reflection_includes_diagnostics():
 
 
 def test_mutation_weakness_includes_parent_diagnostics(monkeypatch):
-    from crowd_nav.reward_search.evolver import RewardCandidate, StageIEvolver
+    from crowd_nav.reward_search.explore import RewardCandidate, StageIEvolver
     from crowd_nav.reward_search.llm import ScriptedLLMClient
 
     captured = {}
@@ -217,7 +217,7 @@ def test_mutation_weakness_includes_parent_diagnostics(monkeypatch):
         return "PROMPT"
 
     monkeypatch.setattr(
-        "crowd_nav.reward_search.evolver.format_d2_mutation", fake_mutation
+        "crowd_nav.reward_search.explore.format_d2_mutation", fake_mutation
     )
     code = (
         "def compute_reward(state, memory):\n"

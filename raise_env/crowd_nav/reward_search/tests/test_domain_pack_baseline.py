@@ -103,9 +103,9 @@ def test_make_score_fn_for_domain_unknown_mode():
 
 
 def test_pipeline_default_loads_crowdnav_pack():
-    from crowd_nav.reward_search.pipeline import EvoNavPipeline, EvoNavRunConfig
+    from crowd_nav.reward_search.pipeline import RaisePipeline, RaiseRunConfig
 
-    pipe = EvoNavPipeline(EvoNavRunConfig(fast=True))
+    pipe = RaisePipeline(RaiseRunConfig(fast=True))
     assert pipe.domain_pack.name == "crowdnav"
     assert pipe.domain_pack.seed_reward_source == legacy_prompts.D5_SEED_FUNCTION
     assert pipe.domain_pack.adapter is not None
@@ -132,8 +132,8 @@ def test_make_stage_trainers_use_adapter_bridge():
 def test_stub_bridge_matches_direct_stub_metrics():
     """Adapter stub path must rank identically to raw StubPolicyTrainer."""
     from crowd_nav.domains.crowdnav.adapter import make_stage2_trainer
-    from crowd_nav.reward_search.evolver import RewardCandidate
-    from crowd_nav.reward_search.stage2 import Stage2Config, StubPolicyTrainer
+    from crowd_nav.reward_search.explore import RewardCandidate
+    from crowd_nav.reward_search.refine import Stage2Config, StubPolicyTrainer
 
     code = "def compute_reward(state, memory):\n    return 1.0\n"
     cand = RewardCandidate(candidate_id="t", code=code, valid=True)
@@ -147,7 +147,7 @@ def test_stub_bridge_matches_direct_stub_metrics():
 
 def test_crowdnav_adapter_rejects_bad_stage():
     from crowd_nav.domains.crowdnav.adapter import CrowdNavAdapter
-    from crowd_nav.reward_search.evolver import RewardCandidate
+    from crowd_nav.reward_search.explore import RewardCandidate
 
     adapter = CrowdNavAdapter()
     cand = RewardCandidate(

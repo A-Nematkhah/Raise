@@ -1,4 +1,4 @@
-"""CrowdNav domain pack (default EvoNav Algorithm 1 backend)."""
+"""CrowdNav domain pack (default RAISE backend)."""
 
 from crowd_nav.domains.crowdnav.pack import get_pack
 

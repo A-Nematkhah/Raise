@@ -1,6 +1,6 @@
-# EvoNav paper-scale hyper-parameters (Tables 3–6).
+# RAISE paper-scale hyper-parameters (Tables 3–6).
 #
-# Loaded only by ``scripts/run_evonav_paper_scale.py`` (or an explicit
+# Loaded only by ``scripts/run_raise_paper_scale.py`` (or an explicit
 # ``--scale paper`` request). Never selected by pytest / ``--fast``.
 #
 # Notation (paper Tables 3–6):
@@ -10,7 +10,7 @@
 #   M, N_traj      Stage I trajectory dataset size (collect once)
 #
 # llm_provider defaults to seed for offline YAML parsing, but
-# ``run_evonav_paper_scale.py`` fail-closes unless you pass a real
+# ``run_raise_paper_scale.py`` fail-closes unless you pass a real
 # ``--llm`` or ``--allow-seed-llm``.
 
 scale: paper

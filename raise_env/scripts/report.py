@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-Reproduce EvoNav Table 1 (baselines) and Table 2 (stage ablation) structures.
+Reproduce RAISE Table 1 (baselines) and Table 2 (stage ablation) structures.
 
 Writes raw per-episode JSON so later AMFRS-style analyses can compare against
 this exact baseline without re-running. No AMFRS mechanisms are added here.
@@ -12,7 +12,7 @@ Table 2 (ablation, same seed throughout):
   (d) final Stage III candidate
 
 Table 1 (method comparison, with / without human randomization):
-  SF, ORCA, DS-RNN, CrowdNav++ (LegacyReward-trained), EvoNav final
+  SF, ORCA, DS-RNN, CrowdNav++ (LegacyReward-trained), RAISE final
   — mean ± std over evaluation seeds, paper metric set.
 
 DS-RNN (config chooses Option A or B):
@@ -24,9 +24,9 @@ DS-RNN (config chooses Option A or B):
 Examples::
 
     # After a --fast Algorithm 1 run (stub ablation)
-    python scripts/run_evonav.py --fast --output-dir results/evonav_fast
-    python scripts/report.py --run-dir results/evonav_fast --fast \\
-        --output results/evonav_fast/report.json --skip-dsrnn
+    python scripts/run_raise.py --fast --output-dir results/raise_fast
+    python scripts/report.py --run-dir results/raise_fast --fast \\
+        --output results/raise_fast/report.json --skip-dsrnn
 
     # Evaluate pretrained Table 1 baselines only (DS-RNN placeholder)
     python scripts/report.py --table1-only --eval-episodes 50 --n-seeds 1 \\
@@ -98,7 +98,7 @@ def _run_proxy_ablation(
         EpisodeRecord,
         summarize_episodes,
     )
-    from crowd_nav.reward_search.stage2 import (
+    from crowd_nav.reward_search.refine import (
         RealPolicyTrainer,
         Stage2Config,
         StubPolicyTrainer,
@@ -211,7 +211,7 @@ def _run_full_ablation(
 ) -> Any:
     """Table 2 rows (a)/(d): Stage-III-style full PPO (or stub)."""
     from crowd_nav.reward_search.reporting import EpisodeRecord, summarize_episodes
-    from crowd_nav.reward_search.stage3 import (
+    from crowd_nav.reward_search.validate import (
         RealPolicyTrainer,
         Stage3Config,
         StubPolicyTrainer,
@@ -333,7 +333,7 @@ def build_table2(
     logging.info("Table 2 (b) Stage I only (proxy)")
     row_b = _run_proxy_ablation(
         best_s1,
-        label="EvoNav_StageI",
+        label="RAISE_StageI",
         seed=seed,
         train_steps=proxy_steps,
         eval_episodes=proxy_episodes,
@@ -345,7 +345,7 @@ def build_table2(
     logging.info("Table 2 (c) Stage I+II")
     row_c = _run_proxy_ablation(
         best_s2,
-        label="EvoNav_StageI_II",
+        label="RAISE_StageI_II",
         seed=seed,
         train_steps=proxy_steps,
         eval_episodes=proxy_episodes,
@@ -357,7 +357,7 @@ def build_table2(
     logging.info("Table 2 (d) Stage III full")
     row_d = _run_full_ablation(
         best_s3,
-        label="EvoNav_Full",
+        label="RAISE_Full",
         seed=seed,
         train_steps=full_steps,
         eval_episodes=full_episodes,
@@ -368,9 +368,9 @@ def build_table2(
 
     rows = {
         "CrowdNav++_LegacyReward": row_a,
-        "EvoNav_StageI": row_b,
-        "EvoNav_StageI_II": row_c,
-        "EvoNav_Full": row_d,
+        "RAISE_StageI": row_b,
+        "RAISE_StageI_II": row_c,
+        "RAISE_Full": row_d,
     }
     print("\n=== Table 2 (ablation) ===")
     for name, bundle in rows.items():
@@ -390,8 +390,8 @@ def build_table1(
     ds_rnn_ckpt: str,
     skip_dsrnn: bool,
     skip_missing: bool,
-    include_evonav_train: bool,
-    evonav_train_steps: int,
+    include_raise_train: bool,
+    raise_train_steps: int,
     use_stub: bool,
     work_dir: str,
 ) -> Dict[str, Any]:
@@ -565,20 +565,20 @@ def build_table1(
             results[bucket]["DS-RNN"] = entry
             print(format_dsrnn_table1_row(entry, randomize=rand))
 
-    # EvoNav final from run_dir
+    # RAISE final from run_dir
     if run_dir and os.path.isfile(os.path.join(run_dir, "final_candidate.json")):
         cand = load_candidate_dict(
             _load_json(os.path.join(run_dir, "final_candidate.json"))
         )
         for bucket, rand in (("no_rand", False), ("rand", True)):
-            logging.info("Table 1 EvoNav (%s)", bucket)
-            if use_stub or not include_evonav_train:
+            logging.info("Table 1 RAISE (%s)", bucket)
+            if use_stub or not include_raise_train:
                 # Use Stage III stub metrics path via ablation helper.
                 from crowd_nav.reward_search.reporting import (
                     EpisodeRecord,
                     summarize_episodes,
                 )
-                from crowd_nav.reward_search.stage3 import (
+                from crowd_nav.reward_search.validate import (
                     Stage3Config,
                     StubPolicyTrainer,
                 )
@@ -624,36 +624,36 @@ def build_table1(
                                 intrusion_ratio_pct=m.itr,
                                 min_dist_during_intrusion=m.sd,
                                 steps=200,
-                                method="EvoNav",
+                                method="RAISE",
                                 randomize=rand,
                             )
                         )
                 ev = summarize_episodes(
-                    all_eps, method="EvoNav", randomize=rand, metadata={"stub": True}
+                    all_eps, method="RAISE", randomize=rand, metadata={"stub": True}
                 )
             else:
                 ev = _run_full_ablation(
                     cand,
-                    label="EvoNav",
+                    label="RAISE",
                     seed=seed,
-                    train_steps=evonav_train_steps,
+                    train_steps=raise_train_steps,
                     eval_episodes=eval_episodes,
                     use_stub=False,
-                    output_root=os.path.join(work_dir, "table1_evonav"),
+                    output_root=os.path.join(work_dir, "table1_raise"),
                     n_seeds=n_seeds,
                 )
                 # Note: real train path currently ignores rand flag in helper;
                 # re-eval would be needed for true rand — documented in metadata.
                 ev.randomize = rand
                 ev.metadata["randomize_requested"] = rand
-            results[bucket]["EvoNav"] = ev.to_dict()
+            results[bucket]["RAISE"] = ev.to_dict()
             print(format_table1_row(ev))
     else:
-        results["no_rand"]["EvoNav"] = {
+        results["no_rand"]["RAISE"] = {
             "skipped": True,
             "reason": "pass --run-dir with final_candidate.json",
         }
-        results["rand"]["EvoNav"] = results["no_rand"]["EvoNav"]
+        results["rand"]["RAISE"] = results["no_rand"]["RAISE"]
 
     return results
 
@@ -664,9 +664,9 @@ def main() -> int:
         DEFAULT_DSRNN_RAND_DIR,
     )
 
-    parser = argparse.ArgumentParser(description="EvoNav Table 1 / Table 2 report")
+    parser = argparse.ArgumentParser(description="RAISE Table 1 / Table 2 report")
     parser.add_argument("--run-dir", type=str, default=None, help="Algorithm 1 output dir")
-    parser.add_argument("--output", type=str, default="results/evonav_report.json")
+    parser.add_argument("--output", type=str, default="results/raise_report.json")
     parser.add_argument("--seed", type=int, default=425)
     parser.add_argument("--n-seeds", type=int, default=3, help="Seeds for mean±std")
     parser.add_argument("--eval-episodes", type=int, default=500)
@@ -708,9 +708,9 @@ def main() -> int:
         ),
     )
     parser.add_argument(
-        "--train-evonav",
+        "--train-raise",
         action="store_true",
-        help="Actually train EvoNav for Table 1 (slow); default uses stub if --fast",
+        help="Actually train RAISE for Table 1 (slow); default uses stub if --fast",
     )
     parser.add_argument("--proxy-steps", type=int, default=8000)
     parser.add_argument("--full-steps", type=int, default=None)
@@ -724,7 +724,7 @@ def main() -> int:
     )
     import crowd_sim  # noqa: F401
     from crowd_nav.reward_search.reporting import write_json
-    from crowd_nav.reward_search.stage3 import STAGE3_STEPS
+    from crowd_nav.reward_search.validate import STAGE3_STEPS
 
     use_stub = bool(args.fast)
     n_seeds = 1 if args.fast else args.n_seeds
@@ -741,7 +741,7 @@ def main() -> int:
         "fast": args.fast,
         "skip_dsrnn": bool(args.skip_dsrnn),
         "notes": (
-            "Faithful EvoNav replication baseline JSON. Raw per-episode records "
+            "Faithful RAISE replication baseline JSON. Raw per-episode records "
             "included under each method's 'episodes' key. No AMFRS mechanisms. "
             "DS-RNN: Option A via trained_models/ds_rnn_{no_,}rand or Option B "
             "(--skip-dsrnn / missing ckpt) marked not-reproduced — never invented."
@@ -778,9 +778,9 @@ def main() -> int:
             ds_rnn_ckpt=args.ds_rnn_ckpt,
             skip_dsrnn=bool(args.skip_dsrnn),
             skip_missing=args.skip_missing,
-            include_evonav_train=args.train_evonav and not args.fast,
-            evonav_train_steps=full_steps,
-            use_stub=use_stub or not args.train_evonav,
+            include_raise_train=args.train_raise and not args.fast,
+            raise_train_steps=full_steps,
+            use_stub=use_stub or not args.train_raise,
             work_dir=work_dir,
         )
 

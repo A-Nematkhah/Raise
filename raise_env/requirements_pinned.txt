@@ -1,5 +1,5 @@
-# Pinned dependency set for CrowdNav++ / Evonav env (Windows, Python 3.10).
-# Install into the single project environment: evonav_env/.venv.
+# Pinned dependency set for CrowdNav++ / RAISE env (Windows, Python 3.10).
+# Install into the single project environment: raise_env/.venv.
 # Adjust the cu1xx suffix to match your local CUDA driver.
 #
 # Upstream README targets Python 3.6/3.8 + PyTorch 1.12.1 + gym 0.15.7.
@@ -22,7 +22,7 @@ tensorflow==2.11.0
 cloudpickle==1.2.2  # gym 0.15.x compatible
 tqdm==4.66.1
 
-# EvoNav Algorithm 1 (optional — only for --llm groq)
+# RAISE Algorithm 1 (optional — only for --llm groq)
 groq>=1.0.0
 
 # Surrogate v1 (Stage II short metric predictor)

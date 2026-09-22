@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from crowd_nav.reward_search.evolver import RewardCandidate
-from crowd_nav.reward_search.pipeline import EvoNavPipeline
+from crowd_nav.reward_search.explore import RewardCandidate
+from crowd_nav.reward_search.pipeline import RaisePipeline
 from crowd_nav.reward_search.selection import (
     candidate_nav_scalar,
     navigation_scalar,
     pick_best_trained,
 )
-from crowd_nav.reward_search.stage2 import ProxyMetrics, Stage2RoundRecord
+from crowd_nav.reward_search.refine import ProxyMetrics, Stage2RoundRecord
 
 
 def test_navigation_scalar():
@@ -76,7 +76,7 @@ def test_pipeline_best_by_ever_uses_snapshots_not_last_round_only():
             kept_previous=False,
         ),
     ]
-    best = EvoNavPipeline._best_by_ever_metrics(
+    best = RaisePipeline._best_by_ever_metrics(
         [r1], history, trained_snapshots=[r0, r1]
     )
     assert best.candidate_id == "mut_0060_v2"

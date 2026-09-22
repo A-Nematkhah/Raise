@@ -1,5 +1,5 @@
 """
-Proxy consistency metrics (EvoNav §4.3.4 / Appendix C.8).
+Proxy consistency metrics (RAISE §4.3.4 / Appendix C.8).
 
 Compare stage-wise rankings of reward *genomes* (code fingerprints) using
 Spearman ρ and top-k preservation. Candidate ids change after D.3 refine;
@@ -13,7 +13,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 
-from crowd_nav.reward_search.evolver import RewardCandidate
+from crowd_nav.reward_search.explore import RewardCandidate
 from crowd_nav.reward_search.rules import spearman_correlation
 from crowd_nav.reward_search.selection import candidate_nav_scalar
 
@@ -167,7 +167,7 @@ def compute_proxy_consistency(
     s1 = scores_from_stage1(stage1)
     s2 = scores_from_trained(stage2)
     report: Dict[str, Any] = {
-        "paper_ref": "EvoNav §4.3.4 / Appendix C.8",
+        "paper_ref": "RAISE §4.3.4 / Appendix C.8",
         "n_stage1_genomes": len(s1),
         "n_stage2_genomes": len(s2),
         "stage1_vs_stage2": {

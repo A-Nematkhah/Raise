@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from crowd_nav.reward_search.active_learning.acquire import execute_query
 from crowd_nav.reward_search.active_learning.query import score_queries
-from crowd_nav.reward_search.evolver import RewardCandidate
+from crowd_nav.reward_search.explore import RewardCandidate
 from crowd_nav.reward_search.surrogate.features import code_sha256
 from crowd_nav.reward_search.surrogate.gate import gate_population
 

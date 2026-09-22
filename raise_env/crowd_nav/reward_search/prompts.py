@@ -1,5 +1,5 @@
 """
-EvoNav Appendix D prompt templates — **backward-compatible re-export**.
+RAISE Appendix D prompt templates — **backward-compatible re-export**.
 
 Canonical source: ``crowd_nav.domains.crowdnav.prompts`` (CrowdNav domain pack).
 Importing from this module must remain byte-identical for Algorithm 1 baseline.

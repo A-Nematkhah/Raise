@@ -1,7 +1,7 @@
 """
 Groq API key pool (rate-limit rotation).
 
-Loads keys from ``evonav_env/groq_keys.json`` (or ``GROQ_KEYS_PATH``).
+Loads keys from ``raise_env/groq_keys.json`` (or ``GROQ_KEYS_PATH``).
 Falls back to a single ``GROQ_API_KEY`` env var when the JSON file is absent.
 
 Copy ``groq_keys.json.example`` → ``groq_keys.json`` and fill in your keys.
@@ -39,8 +39,8 @@ DEFAULT_MAX_ATTEMPTS = int(os.environ.get("GROQ_MAX_ATTEMPTS", "8"))
 DEFAULT_TRANSIENT_BACKOFF = float(os.environ.get("GROQ_TRANSIENT_BACKOFF", "2.0"))
 _PLACEHOLDER_PREFIXES = ("gsk_REPLACE", "gsk_your_", "YOUR_KEY")
 
-_EVONAV_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-DEFAULT_GROQ_KEYS_PATH = os.path.join(_EVONAV_ROOT, "groq_keys.json")
+_RAISE_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+DEFAULT_GROQ_KEYS_PATH = os.path.join(_RAISE_ROOT, "groq_keys.json")
 
 
 def _is_rate_limit_error(exc: Exception) -> bool:

@@ -1,6 +1,6 @@
 """Unit tests for paper-scale presets, checkpointing, and cross-seed aggregation.
 
-Does **not** invoke ``scripts/run_evonav_paper_scale.py`` or paper K3 training.
+Does **not** invoke ``scripts/run_raise_paper_scale.py`` or paper K3 training.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from crowd_nav.reward_search.paper_scale import (
     aggregate_across_seeds,
     build_paper_scale_report,
 )
-from crowd_nav.reward_search.pipeline import EvoNavRunConfig
+from crowd_nav.reward_search.pipeline import RaiseRunConfig
 from crowd_nav.reward_search.presets import (
     PAPER_DEFAULT_SEEDS,
     PAPER_K3,
@@ -46,12 +46,12 @@ def test_paper_scale_yaml_tables_3_to_6():
 
 
 def test_apply_paper_scale_distinct_from_fast():
-    cfg = EvoNavRunConfig()
+    cfg = RaiseRunConfig()
     cfg.apply_fast_profile()
     assert cfg.fast is True
     assert cfg.stage3_train_steps < 100
 
-    paper = EvoNavRunConfig()
+    paper = RaiseRunConfig()
     apply_paper_scale(paper)
     assert paper.fast is False
     assert paper.stage1_population == 8
@@ -70,7 +70,7 @@ def test_apply_paper_scale_distinct_from_fast():
 
 
 def test_pipeline_defaults_match_paper_fidelity():
-    cfg = EvoNavRunConfig()
+    cfg = RaiseRunConfig()
     assert cfg.stage2_train_steps == 8_000
     assert cfg.stage2_k2_unit == "gradient_steps"
     assert cfg.elitism is False
@@ -136,7 +136,7 @@ def test_ci_guard_in_paper_scale_script():
     root = os.path.abspath(
         os.path.join(os.path.dirname(__file__), "..", "..", "..")
     )
-    script = os.path.join(root, "scripts", "run_evonav_paper_scale.py")
+    script = os.path.join(root, "scripts", "run_raise_paper_scale.py")
     assert os.path.isfile(script)
     text = open(script, encoding="utf-8").read()
     assert "CI" in text

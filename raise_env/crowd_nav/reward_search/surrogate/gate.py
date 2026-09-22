@@ -1,5 +1,5 @@
 """
-Surrogate predict + Stage-III gate helpers for ``EvoNavPipeline``.
+Surrogate predict + Stage-III gate helpers for ``RaisePipeline``.
 
 Opt-in: only runs when a fitted model directory is provided and contains
 ``model.joblib``. Does not change paper Stage III claims when disabled.

@@ -3,7 +3,7 @@
 P0 evaluation suite for thesis/audit follow-up.
 
 Locks in:
-  1) EvoNav Stage III best-ever (R0 mut_0060_v2) vs last-round (R1) policies
+  1) RAISE Stage III best-ever (R0 mut_0060_v2) vs last-round (R1) policies
   2) Classical / CrowdNav++ baselines under the SAME protocol as the scaled run:
      H=5, GST inferred, without_random, E episodes, multiple eval seeds
 
@@ -36,8 +36,8 @@ os.chdir(_ROOT)
 import importlib.util
 
 _spec = importlib.util.spec_from_file_location(
-    "eval_evonav_checkpoint",
-    os.path.join(_ROOT, "scripts", "eval_evonav_checkpoint.py"),
+    "eval_raise_checkpoint",
+    os.path.join(_ROOT, "scripts", "eval_raise_checkpoint.py"),
 )
 _eval_mod = importlib.util.module_from_spec(_spec)
 assert _spec.loader is not None
@@ -74,7 +74,7 @@ def _aggregate_seed_rows(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     return out
 
 
-def eval_evonav_multi_seed(
+def eval_raise_multi_seed(
     *,
     run_dir: str,
     candidate_id: str,
@@ -86,7 +86,7 @@ def eval_evonav_multi_seed(
 ) -> Dict[str, Any]:
     rows = []
     for seed in seeds:
-        print(f"\n=== EvoNav {candidate_id} r{round_index:02d} seed={seed} E={episodes} ===")
+        print(f"\n=== RAISE {candidate_id} r{round_index:02d} seed={seed} E={episodes} ===")
         row = run_eval(
             run_dir=run_dir,
             candidate_id=candidate_id,
@@ -103,7 +103,7 @@ def eval_evonav_multi_seed(
         )
         rows.append(row)
     return {
-        "method": f"EvoNav_{candidate_id}_r{round_index:02d}",
+        "method": f"RAISE_{candidate_id}_r{round_index:02d}",
         "candidate_id": candidate_id,
         "round_index": round_index,
         **_aggregate_seed_rows(rows),
@@ -176,7 +176,7 @@ def main() -> int:
     parser.add_argument(
         "--skip-baselines",
         action="store_true",
-        help="Only re-eval EvoNav R0/R1",
+        help="Only re-eval RAISE R0/R1",
     )
     parser.add_argument(
         "--output",
@@ -217,7 +217,7 @@ def main() -> int:
     }
 
     # 1) Best-ever R0
-    report["methods"]["EvoNav_best_ever_r00"] = eval_evonav_multi_seed(
+    report["methods"]["RAISE_best_ever_r00"] = eval_raise_multi_seed(
         run_dir=run_dir,
         candidate_id="mut_0060_v2",
         round_index=0,
@@ -228,7 +228,7 @@ def main() -> int:
     )
 
     # 2) Last-round R1 (same genome folder r01_mut_0060_v2)
-    report["methods"]["EvoNav_last_round_r01"] = eval_evonav_multi_seed(
+    report["methods"]["RAISE_last_round_r01"] = eval_raise_multi_seed(
         run_dir=run_dir,
         candidate_id="mut_0060_v2",
         round_index=1,
