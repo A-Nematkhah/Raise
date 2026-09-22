@@ -269,6 +269,23 @@ def main() -> int:
         default=4,
         help="Min candidates to Stage II-label per closed-loop epoch (default 4)",
     )
+    resume_group = parser.add_mutually_exclusive_group()
+    resume_group.add_argument(
+        "--resume",
+        dest="resume",
+        action="store_true",
+        default=True,
+        help=(
+            "With --closed-loop, continue from --output-dir/closed_loop/checkpoint.json "
+            "if present (default: on)"
+        ),
+    )
+    resume_group.add_argument(
+        "--no-resume",
+        dest="resume",
+        action="store_false",
+        help="Ignore any existing closed-loop checkpoint and start the loop from Gen0",
+    )
 
     args = parser.parse_args()
 
@@ -342,6 +359,7 @@ def main() -> int:
         closed_loop_k2=int(args.closed_loop_k2),
         closed_loop_refit_every_new_labels=int(args.closed_loop_refit_every),
         closed_loop_min_stage2_per_gen=int(args.closed_loop_min_stage2),
+        closed_loop_resume=bool(args.resume),
         device=args.device,
         num_processes=args.num_processes,
         randomization_regime=args.regime,

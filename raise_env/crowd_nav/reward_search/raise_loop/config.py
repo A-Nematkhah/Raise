@@ -45,6 +45,11 @@ class ClosedLoopConfig:
     predict_method: str = "inferred"
     randomization_regime: str = "without_random"
     horizon_steps: int = 100
+    # Crash-safe resume from ``checkpoint.json`` written under the run dir.
+    resume: bool = True
+    # Keep surrogate model / dataset / AL queue inside output_dir so a run is
+    # self-contained and resumable without guessing sibling paths.
+    isolate_run_artifacts: bool = True
 
     def apply_fast_profile(self) -> None:
         self.use_stub = True

@@ -117,6 +117,10 @@ class RaiseRunConfig:
     closed_loop_final_stage2_rounds: int = 0
     closed_loop_refit_every_new_labels: int = 8
     closed_loop_min_stage2_per_gen: int = 4
+    # Crash-safe resume of the closed loop from output_dir/closed_loop/checkpoint.json.
+    closed_loop_resume: bool = True
+    # Keep surrogate model / dataset / AL queue inside output_dir (self-contained run).
+    closed_loop_isolate_artifacts: bool = True
 
     device: str = "cuda"
     # None → auto (min(16, cpu-1)); set low on 4GB GPUs to avoid OOM.
@@ -280,6 +284,8 @@ class RaisePipeline:
             predict_method=str(predict_method),
             randomization_regime=str(regime),
             horizon_steps=max(1, int(cfg.stage2_horizon)),
+            resume=bool(cfg.closed_loop_resume),
+            isolate_run_artifacts=bool(cfg.closed_loop_isolate_artifacts),
         )
         if cfg.fast:
             cl_cfg.apply_fast_profile()
@@ -298,6 +304,11 @@ class RaisePipeline:
             ),
             validator=self.validator,
         ).run()
+
+        # The runner may have nested surrogate artifacts under output_dir; point the
+        # rest of the pipeline (Stage III gate, manifest) at what it actually wrote.
+        cfg.surrogate_model_dir = str(cl_result.model_dir)
+        cfg.surrogate_dataset = str(cl_result.dataset_dir)
 
         stage1_pop = list(cl_result.population)
         best_s1 = max(

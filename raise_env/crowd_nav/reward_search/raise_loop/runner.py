@@ -7,6 +7,12 @@ import os
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional
 
+from crowd_nav.reward_search.raise_loop.checkpoint import (
+    build_checkpoint,
+    deserialize_population,
+    load_checkpoint,
+    save_checkpoint,
+)
 from crowd_nav.reward_search.raise_loop.config import ClosedLoopConfig
 from crowd_nav.reward_search.raise_loop.epoch import select_to_label
 from crowd_nav.reward_search.raise_loop.logging_io import (
@@ -17,6 +23,7 @@ from crowd_nav.reward_search.raise_loop.logging_io import (
 )
 from crowd_nav.reward_search.explore import RewardCandidate, StageIConfig, StageIEvolver
 from crowd_nav.reward_search.llm import LLMClient, make_llm_client
+from crowd_nav.reward_search.reporting import load_candidate_dict
 from crowd_nav.reward_search.surrogate.bootstrap import label_and_append_candidate
 from crowd_nav.reward_search.surrogate.dataset_io import (
     existing_example_ids,
@@ -43,6 +50,43 @@ class ClosedLoopResult:
     dataset_dir: str = ""
     output_dir: str = ""
     manifest: Dict[str, Any] = field(default_factory=dict)
+    resumed: bool = False
+
+
+def _is_under(parent: str, child: str) -> bool:
+    par = os.path.abspath(parent)
+    chi = os.path.abspath(child)
+    return chi == par or chi.startswith(par + os.sep)
+
+
+def isolate_run_paths(cfg: ClosedLoopConfig) -> ClosedLoopConfig:
+    """Nest surrogate model / dataset / AL queue under ``output_dir`` in place."""
+    out = str(cfg.output_dir)
+    if not _is_under(out, cfg.surrogate_model_dir):
+        cfg.surrogate_model_dir = os.path.join(out, "surrogate_model")
+    if not _is_under(out, cfg.surrogate_dataset):
+        cfg.surrogate_dataset = os.path.join(out, "surrogate_dataset")
+    if not _is_under(out, cfg.al_root):
+        cfg.al_root = os.path.join(out, "active_learning")
+    return cfg
+
+
+def _checkpoint_dirs(output_dir: str) -> List[str]:
+    """Checkpoint locations, most specific first (``closed_loop/`` then run root)."""
+    return [closed_loop_dir(output_dir), output_dir]
+
+
+def _save_ckpt(output_dir: str, payload: Dict[str, Any]) -> None:
+    for path in _checkpoint_dirs(output_dir):
+        save_checkpoint(path, payload)
+
+
+def _load_ckpt(output_dir: str) -> Optional[Dict[str, Any]]:
+    for path in _checkpoint_dirs(output_dir):
+        data = load_checkpoint(path)
+        if data:
+            return data
+    return None
 
 
 def _refit_surrogate(
@@ -92,11 +136,16 @@ class ClosedLoopRunner:
         cfg = self.cfg
         if cfg.use_stub:
             cfg.apply_fast_profile()
+        if bool(cfg.isolate_run_artifacts):
+            isolate_run_paths(cfg)
 
         os.makedirs(cfg.output_dir, exist_ok=True)
         closed_loop_dir(cfg.output_dir)
         os.makedirs(cfg.surrogate_dataset, exist_ok=True)
         os.makedirs(cfg.al_root, exist_ok=True)
+
+        ckpt = _load_ckpt(cfg.output_dir) if bool(cfg.resume) else None
+        resumed = ckpt is not None
 
         pack = load_domain("crowdnav")
         score1_mode = "smoke" if cfg.use_stub else "dataset"
@@ -160,67 +209,193 @@ class ClosedLoopRunner:
         n_labeled = len(known_ids)
         labels_since_refit = 0
         history: List[Dict[str, Any]] = []
+        generations = int(cfg.generations)
+        start_epoch = 0
+        pending: Optional[Dict[str, Any]] = None
+        population: List[RewardCandidate] = []
 
-        # Gen0 propose
-        population = evolver.initialize_population()
+        cfg_dict = asdict(cfg)
 
-        for g in range(int(cfg.generations)):
-            ranked = evolver.score_population(population)
-            evolver.reflection = evolver._build_reflection(ranked, generation=g)
-            if evolver.global_best is None or (
-                ranked[0].score is not None
-                and (
-                    evolver.global_best.score is None
-                    or float(ranked[0].score) > float(evolver.global_best.score)
-                )
-            ):
-                evolver.global_best = ranked[0]
-
-            model_ready = surrogate_model_ready(cfg.surrogate_model_dir)
-            predictions = None
-            if model_ready and g > 0:
-                try:
-                    predictions, _model = predict_population(
-                        ranked,
-                        cfg.surrogate_model_dir,
-                        score_fn=self.score_fn,
-                    )
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning("closed-loop predict failed: %s", exc)
-                    predictions = None
-                    model_ready = False
-
-            score1_results = [
-                (c.metadata or {}).get("score1_result") for c in ranked
-            ]
-            # Prefer attaching raw Score1Result if stored; else None list is fine.
-            to_label, gate_report, al_report = select_to_label(
-                ranked,
-                epoch=g,
+        def _checkpoint(
+            *,
+            status: str,
+            phase: str,
+            epoch: int,
+            next_epoch: int,
+            population: Optional[List[RewardCandidate]] = None,
+            ranked: Optional[List[RewardCandidate]] = None,
+            to_label: Optional[List[RewardCandidate]] = None,
+            labeled_ids: Optional[List[str]] = None,
+            extra: Optional[Dict[str, Any]] = None,
+        ) -> None:
+            paths = {
+                "output_dir": cfg.output_dir,
+                "surrogate_model_dir": cfg.surrogate_model_dir,
+                "surrogate_dataset": cfg.surrogate_dataset,
+                "al_root": cfg.al_root,
+                "generations": generations,
+            }
+            payload = build_checkpoint(
+                status=status,
+                phase=phase,
+                epoch=int(epoch),
+                next_epoch=int(next_epoch),
+                population=population,
+                ranked=ranked,
+                to_label=to_label,
+                labeled_ids_this_epoch=labeled_ids or [],
+                global_best=evolver.global_best,
+                reflection=evolver.reflection,
+                labels_since_refit=labels_since_refit,
                 n_labeled=n_labeled,
-                min_labels_for_gate=int(cfg.min_labels_for_gate),
-                predictions=predictions,
-                model_ready=bool(model_ready and predictions is not None),
-                drop_fraction=float(cfg.drop_fraction),
-                max_uncertainty_to_drop=float(cfg.max_uncertainty_to_drop),
-                min_keep=int(cfg.min_keep),
-                min_stage2_per_gen=int(cfg.min_stage2_per_gen),
-                al_enabled=bool(cfg.al_enabled),
-                al_max_per_epoch=int(cfg.al_max_per_epoch),
-                al_allow_stage1_requests=bool(cfg.al_allow_stage1_requests),
-                al_root=str(cfg.al_root),
-                score1_results=score1_results,
+                history=history,
+                config=cfg_dict,
+                extra={**paths, **(extra or {})},
+            )
+            # Mirror paths at top level so resume scripts can read them directly.
+            payload.update(paths)
+            _save_ckpt(cfg.output_dir, payload)
+
+        if ckpt is not None:
+            start_epoch = max(0, int(ckpt.get("next_epoch") or 0))
+            history = [r for r in (ckpt.get("history") or []) if isinstance(r, dict)]
+            labels_since_refit = int(ckpt.get("labels_since_refit") or 0)
+            evolver.reflection = str(ckpt.get("reflection") or "")
+            saved_best = ckpt.get("global_best")
+            if isinstance(saved_best, dict):
+                evolver.global_best = load_candidate_dict(dict(saved_best))
+            population = deserialize_population(ckpt.get("population"))
+            if str(ckpt.get("phase") or "") == "labeling" and start_epoch < generations:
+                resumed_to_label = deserialize_population(ckpt.get("to_label"))
+                if resumed_to_label:
+                    saved_extra = ckpt.get("extra") or {}
+                    pending = {
+                        "epoch": start_epoch,
+                        "ranked": (
+                            deserialize_population(ckpt.get("ranked"))
+                            or list(resumed_to_label)
+                        ),
+                        "to_label": resumed_to_label,
+                        "done": {
+                            str(x) for x in (ckpt.get("labeled_ids_this_epoch") or [])
+                        },
+                        "gate": dict(
+                            saved_extra.get("gate_report")
+                            or {"enabled": False, "soft": True, "reason": "resumed"}
+                        ),
+                        "al": dict(
+                            saved_extra.get("al_report")
+                            or {
+                                "enabled": False,
+                                "n_al_stage2": 0,
+                                "n_stage1_requests": 0,
+                            }
+                        ),
+                    }
+            logger.info(
+                "closed-loop resume: status=%s phase=%s next_epoch=%d epochs_done=%d",
+                ckpt.get("status"),
+                ckpt.get("phase"),
+                start_epoch,
+                len(history),
             )
 
-            if al_report.get("enabled"):
-                append_al_step(
-                    cfg.output_dir,
-                    {"epoch": g, **al_report},
+        if not population:
+            # Gen0 propose
+            population = evolver.initialize_population()
+
+        if pending is None and start_epoch < generations:
+            _checkpoint(
+                status="running",
+                phase="init",
+                epoch=start_epoch,
+                next_epoch=start_epoch,
+                population=population,
+            )
+
+        for g in range(start_epoch, generations):
+            if pending is not None and int(pending["epoch"]) == g:
+                # Mid-epoch resume: reuse the selection the interrupted run made.
+                ranked = list(pending["ranked"])
+                to_label = list(pending["to_label"])
+                gate_report = dict(pending["gate"])
+                al_report = dict(pending["al"])
+                labeled_this_epoch = set(pending["done"])
+                pending = None
+                epoch_resumed = True
+            else:
+                labeled_this_epoch = set()
+                epoch_resumed = False
+                ranked = evolver.score_population(population)
+                evolver.reflection = evolver._build_reflection(ranked, generation=g)
+                if evolver.global_best is None or (
+                    ranked[0].score is not None
+                    and (
+                        evolver.global_best.score is None
+                        or float(ranked[0].score) > float(evolver.global_best.score)
+                    )
+                ):
+                    evolver.global_best = ranked[0]
+
+                model_ready = surrogate_model_ready(cfg.surrogate_model_dir)
+                predictions = None
+                if model_ready and g > 0:
+                    try:
+                        predictions, _model = predict_population(
+                            ranked,
+                            cfg.surrogate_model_dir,
+                            score_fn=self.score_fn,
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("closed-loop predict failed: %s", exc)
+                        predictions = None
+                        model_ready = False
+
+                score1_results = [
+                    (c.metadata or {}).get("score1_result") for c in ranked
+                ]
+                # Prefer attaching raw Score1Result if stored; else None list is fine.
+                to_label, gate_report, al_report = select_to_label(
+                    ranked,
+                    epoch=g,
+                    n_labeled=n_labeled,
+                    min_labels_for_gate=int(cfg.min_labels_for_gate),
+                    predictions=predictions,
+                    model_ready=bool(model_ready and predictions is not None),
+                    drop_fraction=float(cfg.drop_fraction),
+                    max_uncertainty_to_drop=float(cfg.max_uncertainty_to_drop),
+                    min_keep=int(cfg.min_keep),
+                    min_stage2_per_gen=int(cfg.min_stage2_per_gen),
+                    al_enabled=bool(cfg.al_enabled),
+                    al_max_per_epoch=int(cfg.al_max_per_epoch),
+                    al_allow_stage1_requests=bool(cfg.al_allow_stage1_requests),
+                    al_root=str(cfg.al_root),
+                    score1_results=score1_results,
+                )
+
+                if al_report.get("enabled"):
+                    append_al_step(
+                        cfg.output_dir,
+                        {"epoch": g, **al_report},
+                    )
+
+                _checkpoint(
+                    status="running",
+                    phase="labeling",
+                    epoch=g,
+                    next_epoch=g,
+                    population=population,
+                    ranked=ranked,
+                    to_label=to_label,
+                    labeled_ids=[],
+                    extra={"gate_report": gate_report, "al_report": al_report},
                 )
 
             n_ok = 0
             n_fail = 0
             for i, cand in enumerate(to_label):
+                if str(cand.candidate_id) in labeled_this_epoch:
+                    continue
                 result = label_and_append_candidate(
                     cand,
                     score_fn=self.score_fn,
@@ -243,6 +418,20 @@ class ClosedLoopRunner:
                     n_labeled = len(known_ids)
                 elif status == "skipped":
                     pass
+                # Each label is a Stage II train/eval; checkpoint per candidate so an
+                # interrupt costs at most one candidate of compute.
+                labeled_this_epoch.add(str(cand.candidate_id))
+                _checkpoint(
+                    status="running",
+                    phase="labeling",
+                    epoch=g,
+                    next_epoch=g,
+                    population=population,
+                    ranked=ranked,
+                    to_label=to_label,
+                    labeled_ids=sorted(labeled_this_epoch),
+                    extra={"gate_report": gate_report, "al_report": al_report},
+                )
 
             n_labeled = len(existing_example_ids(cfg.surrogate_dataset))
             known_ids = existing_example_ids(cfg.surrogate_dataset)
@@ -289,6 +478,9 @@ class ClosedLoopRunner:
                 "n_label_ok": n_ok,
                 "n_label_failed": n_fail,
             }
+            if epoch_resumed:
+                # Counts cover only the labels this process produced.
+                epoch_rec["resumed"] = True
             from crowd_nav.reward_search import console
             from crowd_nav.reward_search.raise_loop.report import format_epoch_summary
 
@@ -304,10 +496,28 @@ class ClosedLoopRunner:
 
             console.status(format_epoch_summary(epoch_rec), stage="closed-loop")
 
-            if g + 1 < int(cfg.generations):
+            if g + 1 < generations:
                 population = evolver._next_generation(ranked)
             else:
                 population = ranked
+
+            _checkpoint(
+                status="running",
+                phase="epoch_done",
+                epoch=g,
+                next_epoch=g + 1,
+                population=population,
+                ranked=ranked,
+            )
+
+        n_labeled = len(existing_example_ids(cfg.surrogate_dataset))
+        _checkpoint(
+            status="running",
+            phase="finishing",
+            epoch=max(0, generations - 1),
+            next_epoch=generations,
+            population=population,
+        )
 
         # Final manifest for dataset
         man = read_manifest(cfg.surrogate_dataset) or {}
@@ -328,7 +538,9 @@ class ClosedLoopRunner:
             "n_labeled_total": n_labeled,
             "surrogate_model_dir": cfg.surrogate_model_dir,
             "surrogate_dataset": cfg.surrogate_dataset,
-            "config": asdict(cfg),
+            "al_root": cfg.al_root,
+            "resumed": bool(resumed),
+            "config": cfg_dict,
             "history": history,
         }
         write_json(
@@ -342,6 +554,14 @@ class ClosedLoopRunner:
         except Exception as exc:  # noqa: BLE001
             logger.warning("closed-loop report failed: %s", exc)
 
+        _checkpoint(
+            status="completed",
+            phase="done",
+            epoch=max(0, generations - 1),
+            next_epoch=generations,
+            population=population,
+        )
+
         return ClosedLoopResult(
             population=list(population),
             history=history,
@@ -350,4 +570,5 @@ class ClosedLoopRunner:
             dataset_dir=cfg.surrogate_dataset,
             output_dir=cfg.output_dir,
             manifest=result_manifest,
+            resumed=bool(resumed),
         )

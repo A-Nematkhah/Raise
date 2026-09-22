@@ -64,7 +64,6 @@ def test_checkpoint_roundtrip(tmp_path):
     assert "pot_factor" in restored[0].code
 
 
-@pytest.mark.skip(reason="ClosedLoopRunner.resume not wired yet (checkpoint I/O only)")
 def test_closed_loop_resume_skips_finished_epochs(tmp_path):
     pytest.importorskip("sklearn")
     out = str(tmp_path / "run")
@@ -97,7 +96,8 @@ def test_closed_loop_resume_skips_finished_epochs(tmp_path):
 
     r1 = ClosedLoopRunner(cfg).run()
     assert r1.n_labeled_total >= 1
-    assert len(r1.history) == 3
+    # generations=G → G scored epochs (Gen0 is epoch 0), same as test_raise_loop.py.
+    assert len(r1.history) == 2
     ckpt = load_checkpoint(out)
     assert ckpt is not None
     assert ckpt["status"] == "completed"
@@ -107,7 +107,6 @@ def test_closed_loop_resume_skips_finished_epochs(tmp_path):
     assert len(r2.population) == len(r1.population)
 
 
-@pytest.mark.skip(reason="ClosedLoopRunner.resume not wired yet (checkpoint I/O only)")
 def test_resume_mid_labeling_continues(tmp_path, monkeypatch):
     pytest.importorskip("sklearn")
     out = str(tmp_path / "run")
