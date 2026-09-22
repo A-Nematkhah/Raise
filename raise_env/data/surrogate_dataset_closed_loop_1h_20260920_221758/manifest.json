@@ -1,7 +1,0 @@
-{
-  "feature_schema_version": "1",
-  "mode": "closed_loop_v1",
-  "n_examples": 12,
-  "closed_loop_output": "results/closed_loop_1h_20260920_221758",
-  "generations": 3
-}
