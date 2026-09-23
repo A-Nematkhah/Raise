@@ -121,6 +121,9 @@ class RaiseRunConfig:
     closed_loop_resume: bool = True
     # Keep surrogate model / dataset / AL queue inside output_dir (self-contained run).
     closed_loop_isolate_artifacts: bool = True
+    # Crash-safe Stage III resume from output_dir/stage3/checkpoint.json (+ mid-PPO).
+    stage3_resume: bool = True
+    stage3_save_interval_updates: int = 50
 
     device: str = "cuda"
     # None → auto (min(16, cpu-1)); set low on 4GB GPUs to avoid OOM.
@@ -750,6 +753,10 @@ class RaisePipeline:
             env_name=env_name_for_predict_method(predict_method),
             protect_elite_refine=bool(cfg.elitism),
             inject_elite=bool(cfg.elitism),
+            resume=bool(getattr(cfg, "stage3_resume", True)),
+            save_interval_updates=int(
+                getattr(cfg, "stage3_save_interval_updates", 50) or 0
+            ),
         )
         if cfg.stage3_use_stub:
             console.status(

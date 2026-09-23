@@ -1,7 +1,7 @@
 """
 Fast Stage III tests using StubPolicyTrainer (no real RL).
 
-Run: pytest crowd_nav/reward_search/tests/test_stage3.py -q
+Run: pytest crowd_nav/reward_search/tests/test_validate.py -q
 """
 
 from __future__ import annotations
@@ -114,6 +114,7 @@ def test_stage3_run_refines_to_v3_and_h_sweep():
             eval_episodes=2,
             human_counts=(5, 10, 20),
             protect_elite_refine=False,
+            resume=False,
         ),
     )
     out = runner.run(pop, run_h_sweep=True)
@@ -144,6 +145,7 @@ def test_failed_refinement_keeps_previous(caplog):
             rounds=1,
             human_counts=(5,),
             protect_elite_refine=False,
+            resume=False,
         ),
     )
     with caplog.at_level(logging.WARNING):

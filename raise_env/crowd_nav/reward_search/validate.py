@@ -100,6 +100,10 @@ class Stage3Config:
     # Alg. 1 has no elitism — defaults off; opt in via pipeline ``elitism=True``.
     protect_elite_refine: bool = False
     inject_elite: bool = False
+    # Crash-safe resume (``{run}/stage3/checkpoint.json`` + mid-PPO progress).
+    resume: bool = True
+    # Write policy weights every N PPO updates (0 = only final save).
+    save_interval_updates: int = 50
 
 
 @dataclass
@@ -179,6 +183,9 @@ class PolicyTrainer(ABC):
         *,
         round_index: int,
         config: Stage3Config,
+        resume_update: int = 0,
+        resume_weights_path: Optional[str] = None,
+        progress_callback: Optional[Any] = None,
     ) -> TrainEvalBundle:
         raise NotImplementedError
 
@@ -203,7 +210,11 @@ class StubPolicyTrainer(PolicyTrainer):
         *,
         round_index: int,
         config: Stage3Config,
+        resume_update: int = 0,
+        resume_weights_path: Optional[str] = None,
+        progress_callback: Optional[Any] = None,
     ) -> TrainEvalBundle:
+        del resume_update, resume_weights_path, progress_callback
         base = (_stable_code_hash(candidate.code) % 100) / 100.0
         jitter = 0.01 * (round_index % 3)
         sr = min(1.0, max(0.0, 0.5 + 0.4 * base + jitter))
@@ -356,10 +367,17 @@ class RealPolicyTrainer(PolicyTrainer):
         *,
         round_index: int,
         config: Stage3Config,
+        resume_update: int = 0,
+        resume_weights_path: Optional[str] = None,
+        progress_callback: Optional[Any] = None,
     ) -> TrainEvalBundle:
         if candidate.reward_fn is None:
             raise ValueError(f"Candidate {candidate.candidate_id} has no reward_fn")
 
+        from crowd_nav.reward_search.stage3_checkpoint import (
+            clear_train_progress,
+            save_train_progress,
+        )
         from rl import ppo
         from rl.networks.envs import make_vec_envs
         from rl.networks.model import Policy
@@ -403,6 +421,16 @@ class RealPolicyTrainer(PolicyTrainer):
         )
         nn.DataParallel(actor_critic).to(device)
 
+        start_j = max(0, int(resume_update))
+        if resume_weights_path and os.path.isfile(resume_weights_path):
+            state = torch.load(resume_weights_path, map_location=device)
+            actor_critic.load_state_dict(state)
+            console.status(
+                f"resume PPO {candidate.candidate_id} from update={start_j} "
+                f"({resume_weights_path})",
+                stage="Stage III",
+            )
+
         agent = ppo.PPO(
             actor_critic,
             algo_args.clip_param,
@@ -434,10 +462,11 @@ class RealPolicyTrainer(PolicyTrainer):
             // algo_args.num_steps
             // algo_args.num_processes
         )
+        save_every = max(0, int(getattr(config, "save_interval_updates", 50) or 0))
         console.status(
             f"training {candidate.candidate_id} round={round_index} "
             f"PPO K3={config.train_env_steps} updates={num_updates} "
-            f"nproc={algo_args.num_processes}",
+            f"start_j={start_j} nproc={algo_args.num_processes}",
             stage="Stage III",
         )
         pbar = console.progress(
@@ -445,9 +474,15 @@ class RealPolicyTrainer(PolicyTrainer):
             desc=f"[Stage III] {candidate.candidate_id} PPO",
             unit="upd",
         )
+        if start_j > 0 and hasattr(pbar, "update"):
+            try:
+                pbar.update(min(start_j, max(1, num_updates)))
+            except Exception:  # noqa: BLE001
+                pass
         t_train = time.perf_counter()
+        last_ckpt_path = os.path.join(ckpt_dir, f"{max(num_updates - 1, 0):05d}.pt")
         try:
-            for _j in range(num_updates):
+            for j in range(start_j, num_updates):
                 for step in range(algo_args.num_steps):
                     with torch.no_grad():
                         rollouts_obs = {k: rollouts.obs[k][step] for k in rollouts.obs}
@@ -496,6 +531,37 @@ class RealPolicyTrainer(PolicyTrainer):
                 agent.update(rollouts)
                 rollouts.after_update()
                 pbar.update(1)
+
+                done_update = j + 1
+                should_save = (
+                    save_every > 0
+                    and (
+                        done_update % save_every == 0
+                        or done_update >= num_updates
+                    )
+                )
+                if should_save:
+                    mid_path = os.path.join(ckpt_dir, f"{j:05d}.pt")
+                    torch.save(actor_critic.state_dict(), mid_path)
+                    last_ckpt_path = mid_path
+                    save_train_progress(
+                        out_dir,
+                        round_index=round_index,
+                        candidate_id=candidate.candidate_id,
+                        update_j=done_update,
+                        num_updates=num_updates,
+                        weights_path=mid_path,
+                    )
+                    if progress_callback is not None:
+                        progress_callback(
+                            {
+                                "round_index": int(round_index),
+                                "candidate_id": str(candidate.candidate_id),
+                                "update_j": int(done_update),
+                                "num_updates": int(num_updates),
+                                "weights_path": mid_path,
+                            }
+                        )
         except Exception as exc:  # noqa: BLE001
             console.fail(
                 f"train crashed for {candidate.candidate_id} round={round_index}: {exc}",
@@ -512,6 +578,7 @@ class RealPolicyTrainer(PolicyTrainer):
 
         ckpt_path = os.path.join(ckpt_dir, f"{max(num_updates - 1, 0):05d}.pt")
         torch.save(actor_critic.state_dict(), ckpt_path)
+        clear_train_progress(out_dir)
         envs.close()
 
         metrics = evaluate_proxy_policy(
@@ -613,6 +680,173 @@ class Stage3Runner:
         # Optional paper-scale resume (set by PaperScaleRunner).
         self.checkpoint_store = None  # type: ignore[assignment]
         self.checkpoint_seed: int = int(self.config.seed)
+        # Run-dir crash-safe resume (``{run}/stage3/checkpoint.json``).
+        self._ckpt_dir: Optional[str] = None
+        self._run_h_sweep: bool = True
+        self._history_payload: List[Dict[str, Any]] = []
+
+    def _resolve_ckpt_dir(self) -> str:
+        from crowd_nav.reward_search.stage3_checkpoint import stage3_dir_from_train_root
+
+        if self._ckpt_dir:
+            return self._ckpt_dir
+        return stage3_dir_from_train_root(self.config.output_root)
+
+    def _config_snapshot(self) -> Dict[str, Any]:
+        cfg = self.config
+        return {
+            "population_size": int(cfg.population_size),
+            "rounds": int(cfg.rounds),
+            "train_env_steps": int(cfg.train_env_steps),
+            "eval_episodes": int(cfg.eval_episodes),
+            "seed": int(cfg.seed),
+            "device": str(cfg.device),
+            "num_processes": cfg.num_processes,
+            "train_human_num": int(cfg.train_human_num),
+            "predict_method": str(cfg.predict_method),
+            "randomization_regime": str(cfg.randomization_regime),
+            "output_root": str(cfg.output_root),
+            "save_interval_updates": int(getattr(cfg, "save_interval_updates", 50)),
+        }
+
+    def _persist(
+        self,
+        *,
+        status: str,
+        phase: str,
+        round_index: int,
+        candidate_index: int,
+        round_input_population: Sequence[RewardCandidate],
+        round_output_partial: Sequence[RewardCandidate],
+        train_progress: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        if not bool(getattr(self.config, "resume", True)):
+            return
+        from crowd_nav.reward_search.stage3_checkpoint import (
+            build_checkpoint,
+            save_checkpoint,
+        )
+
+        payload = build_checkpoint(
+            status=status,
+            phase=phase,
+            round_index=round_index,
+            candidate_index=candidate_index,
+            rounds=int(self.config.rounds),
+            round_input_population=round_input_population,
+            round_output_partial=round_output_partial,
+            history=self._history_payload,
+            best_trained=self.best_trained,
+            trained_snapshots=self.trained_snapshots,
+            run_h_sweep=bool(self._run_h_sweep),
+            train_progress=train_progress,
+            config=self._config_snapshot(),
+        )
+        path = save_checkpoint(self._resolve_ckpt_dir(), payload)
+        logger.info("Stage III checkpoint → %s (%s/%s)", path, status, phase)
+
+    def _restore_history_from_payload(self, rows: Sequence[Dict[str, Any]]) -> None:
+        self.history = []
+        self._history_payload = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            md = row.get("metrics") or {}
+            metrics = ProxyMetrics(
+                sr=float(md.get("SR", md.get("sr", 0.0))),
+                cr=float(md.get("CR", md.get("cr", 0.0))),
+                tr=float(md.get("TR", md.get("tr", 0.0))),
+                nt=float(md.get("NT", md.get("nt", 0.0))),
+                pl=float(md.get("PL", md.get("pl", 0.0))),
+                itr=float(md.get("ITR", md.get("itr", 0.0))),
+                sd=float(md.get("SD", md.get("sd", 0.0))),
+            )
+            rec = Stage3RoundRecord(
+                round_index=int(row.get("round_index", 0)),
+                candidate_id=str(row.get("candidate_id", "")),
+                metrics=metrics,
+                refined=bool(row.get("refined")),
+                kept_previous=bool(row.get("kept_previous")),
+                validation_error=row.get("validation_error"),
+                checkpoint_path=row.get("checkpoint_path"),
+            )
+            self.history.append(rec)
+            self._history_payload.append(dict(row))
+            # Lightweight bundle so H-sweep can reload weights after process restart.
+            if rec.checkpoint_path:
+                self.last_bundles[rec.candidate_id] = TrainEvalBundle(
+                    metrics=metrics,
+                    checkpoint_path=rec.checkpoint_path,
+                )
+
+    def _append_history_record(self, rec: Stage3RoundRecord) -> None:
+        from crowd_nav.reward_search.stage3_checkpoint import history_record_to_dict
+
+        self.history.append(rec)
+        self._history_payload.append(
+            history_record_to_dict(
+                round_index=rec.round_index,
+                candidate_id=rec.candidate_id,
+                metrics=rec.metrics.as_dict(),
+                refined=rec.refined,
+                kept_previous=rec.kept_previous,
+                checkpoint_path=rec.checkpoint_path,
+                validation_error=rec.validation_error,
+            )
+        )
+
+    def _reload_policy_into_bundle(
+        self, candidate: RewardCandidate, bundle: TrainEvalBundle
+    ) -> TrainEvalBundle:
+        """Load ``.pt`` into a fresh Policy when actor_critic was not kept in memory."""
+        if bundle.actor_critic is not None and bundle.algo_args is not None:
+            return bundle
+        if not bundle.checkpoint_path or not os.path.isfile(bundle.checkpoint_path):
+            return bundle
+        from rl.networks.envs import make_vec_envs
+        from rl.networks.model import Policy
+
+        algo_args = _parse_stage3_algo_args(
+            self.config, candidate.candidate_id, int(
+                (candidate.metadata or {}).get("trained_round", 0)
+            )
+        )
+        env_config = _make_full_env_config(self.config)
+        device = torch.device(
+            "cuda" if algo_args.cuda and torch.cuda.is_available() else "cpu"
+        )
+        envs = make_vec_envs(
+            algo_args.env_name,
+            algo_args.seed,
+            1,
+            algo_args.gamma,
+            None,
+            device,
+            False,
+            config=env_config,
+            pretext_wrapper=env_config.env.use_wrapper,
+            reward_fn=candidate.reward_fn,
+        )
+        try:
+            actor_critic = Policy(
+                envs.observation_space.spaces,
+                envs.action_space,
+                base_kwargs=algo_args,
+                base=env_config.robot.policy,
+            )
+            nn.DataParallel(actor_critic).to(device)
+            state = torch.load(bundle.checkpoint_path, map_location=device)
+            actor_critic.load_state_dict(state)
+        finally:
+            envs.close()
+        return TrainEvalBundle(
+            metrics=bundle.metrics,
+            checkpoint_path=bundle.checkpoint_path,
+            algo_args=algo_args,
+            env_config=env_config,
+            actor_critic=actor_critic,
+            device=device,
+        )
 
     def _record_trained_snapshot(
         self,
@@ -857,6 +1091,10 @@ class Stage3Runner:
         self,
         population: Sequence[RewardCandidate],
         round_index: int,
+        *,
+        start_index: int = 0,
+        partial_next: Optional[Sequence[RewardCandidate]] = None,
+        train_progress: Optional[Dict[str, Any]] = None,
     ) -> List[RewardCandidate]:
         if len(population) != self.config.population_size:
             logger.warning(
@@ -864,17 +1102,42 @@ class Stage3Runner:
                 self.config.population_size,
                 len(population),
             )
-        next_pop: List[RewardCandidate] = []
+        next_pop: List[RewardCandidate] = list(partial_next or [])
         round_records: List[Stage3RoundRecord] = []
         n = len(population)
-        for i, cand in enumerate(population, start=1):
+        for i, cand in enumerate(population):
+            if i < int(start_index):
+                continue
             console.status(
                 f"Round {round_index + 1}/{self.config.rounds} - "
-                f"candidate {cand.candidate_id} ({i}/{n})",
+                f"candidate {cand.candidate_id} ({i + 1}/{n})",
                 stage="Stage III",
             )
+            mid = train_progress if (
+                train_progress
+                and int(train_progress.get("round_index", -1)) == int(round_index)
+                and str(train_progress.get("candidate_id", "")) == str(cand.candidate_id)
+            ) else None
+            # Clear mid-train hint after first use so later candidates start fresh.
+            train_progress = None
+
+            def _on_progress(prog: Dict[str, Any], _i=i, _inp=population, _out=next_pop) -> None:
+                self._persist(
+                    status="running",
+                    phase="training",
+                    round_index=round_index,
+                    candidate_index=_i,
+                    round_input_population=_inp,
+                    round_output_partial=_out,
+                    train_progress=prog,
+                )
+
             refined, bundle, kept = self._train_refine_one(
-                cand, round_index=round_index
+                cand,
+                round_index=round_index,
+                resume_update=int((mid or {}).get("update_j", 0) or 0),
+                resume_weights_path=(mid or {}).get("weights_path"),
+                progress_callback=_on_progress if bool(getattr(self.config, "resume", True)) else None,
             )
             rec = Stage3RoundRecord(
                 round_index=round_index,
@@ -885,19 +1148,36 @@ class Stage3Runner:
                 validation_error=refined.metadata.get("refine_error"),
                 checkpoint_path=bundle.checkpoint_path,
             )
-            self.history.append(rec)
+            self._append_history_record(rec)
             round_records.append(rec)
             self.last_bundles[cand.candidate_id] = bundle
             self.last_bundles[refined.candidate_id] = bundle
             next_pop.append(refined)
+            self._persist(
+                status="running",
+                phase="training",
+                round_index=round_index,
+                candidate_index=i + 1,
+                round_input_population=population,
+                round_output_partial=next_pop,
+                train_progress=None,
+            )
         next_pop = self._inject_elite(next_pop)
         console.stage_round_summary(
             "Stage III", round_index, self.config.rounds, round_records
         )
         return next_pop
 
-    def _train_refine_one(self, cand: RewardCandidate, *, round_index: int):
-        """Train+refine one candidate with optional paper-scale resume."""
+    def _train_refine_one(
+        self,
+        cand: RewardCandidate,
+        *,
+        round_index: int,
+        resume_update: int = 0,
+        resume_weights_path: Optional[str] = None,
+        progress_callback: Optional[Any] = None,
+    ):
+        """Train+refine one candidate with optional paper-scale / mid-PPO resume."""
         import time
 
         from crowd_nav.reward_search.checkpointing import CheckpointKey, CostEvent
@@ -956,7 +1236,12 @@ class Stage3Runner:
 
         t0 = time.perf_counter()
         bundle = self.trainer.train_and_eval(
-            cand, round_index=round_index, config=self.config
+            cand,
+            round_index=round_index,
+            config=self.config,
+            resume_update=int(resume_update or 0),
+            resume_weights_path=resume_weights_path,
+            progress_callback=progress_callback,
         )
         self._record_trained_snapshot(cand, bundle, round_index=round_index)
         if self._skip_refine_for_elite(cand):
@@ -1028,10 +1313,35 @@ class Stage3Runner:
                     if bundle is not None:
                         break
             if bundle is None:
+                # Fall back to metadata checkpoint_path after crash-resume.
+                ckpt = (cand.metadata or {}).get("checkpoint_path")
+                md = (cand.metadata or {}).get("last_metrics") or {}
+                if ckpt and md:
+                    bundle = TrainEvalBundle(
+                        metrics=ProxyMetrics(
+                            sr=float(md.get("SR", md.get("sr", 0.0))),
+                            cr=float(md.get("CR", md.get("cr", 0.0))),
+                            tr=float(md.get("TR", md.get("tr", 0.0))),
+                            nt=float(md.get("NT", md.get("nt", 0.0))),
+                            pl=float(md.get("PL", md.get("pl", 0.0))),
+                            itr=float(md.get("ITR", md.get("itr", 0.0))),
+                            sd=float(md.get("SD", md.get("sd", 0.0))),
+                        ),
+                        checkpoint_path=str(ckpt),
+                    )
+            if bundle is None:
                 logger.warning(
                     "No train bundle for %s — skipping H-sweep", cand.candidate_id
                 )
                 continue
+            if bundle.actor_critic is None and bundle.checkpoint_path:
+                bundle = self._reload_policy_into_bundle(cand, bundle)
+                if bundle.actor_critic is None:
+                    logger.warning(
+                        "Could not load policy for %s — skipping H-sweep",
+                        cand.candidate_id,
+                    )
+                    continue
             report = self.trainer.evaluate_at_human_counts(
                 cand, bundle, config=self.config, human_counts=human_counts
             )
@@ -1046,20 +1356,123 @@ class Stage3Runner:
         *,
         run_h_sweep: bool = True,
     ) -> List[RewardCandidate]:
+        from crowd_nav.reward_search.stage3_checkpoint import (
+            deserialize_population,
+            load_checkpoint,
+            load_train_progress,
+        )
+        from crowd_nav.reward_search.reporting import load_candidate_dict
+
         console.banner(
             f"Stage III - full PPO refinement (K3={self.config.train_env_steps}, "
             f"paper={STAGE3_PAPER_STEPS})"
         )
+        self._run_h_sweep = bool(run_h_sweep)
+        self._ckpt_dir = self._resolve_ckpt_dir()
         pop = list(population)
-        for r in range(self.config.rounds):
+        start_round = 0
+        start_index = 0
+        partial_next: List[RewardCandidate] = []
+        train_progress: Optional[Dict[str, Any]] = None
+        resume_phase = "training"
+
+        if bool(getattr(self.config, "resume", True)):
+            payload = load_checkpoint(self._ckpt_dir)
+            if payload and str(payload.get("status", "")) != "done":
+                console.status(
+                    f"resuming Stage III from {self._ckpt_dir} "
+                    f"(round={payload.get('round_index')} "
+                    f"cand_idx={payload.get('candidate_index')} "
+                    f"phase={payload.get('phase')})",
+                    stage="Stage III",
+                )
+                self._restore_history_from_payload(payload.get("history") or [])
+                if payload.get("best_trained"):
+                    self.best_trained = load_candidate_dict(payload["best_trained"])
+                snaps = deserialize_population(payload.get("trained_snapshots") or [])
+                if snaps:
+                    self.trained_snapshots = snaps
+                start_round = int(payload.get("round_index", 0))
+                start_index = int(payload.get("candidate_index", 0))
+                round_in = deserialize_population(
+                    payload.get("round_input_population") or []
+                )
+                if round_in:
+                    pop = round_in
+                partial_next = deserialize_population(
+                    payload.get("round_output_partial") or []
+                )
+                train_progress = payload.get("train_progress")
+                if not train_progress and partial_next is not None:
+                    # Also check on-disk mid-PPO file for the next candidate.
+                    if start_round < int(self.config.rounds) and start_index < len(pop):
+                        nxt = pop[start_index]
+                        cand_out = os.path.join(
+                            self.config.output_root,
+                            f"r{start_round:02d}_{nxt.candidate_id}",
+                        )
+                        train_progress = load_train_progress(cand_out)
+                resume_phase = str(payload.get("phase") or "training")
+                if resume_phase == "h_sweep":
+                    start_round = int(self.config.rounds)
+            elif payload and str(payload.get("status", "")) == "done":
+                console.status(
+                    "Stage III checkpoint already done — reusing finished population",
+                    stage="Stage III",
+                )
+                finished = deserialize_population(
+                    payload.get("round_output_partial")
+                    or payload.get("round_input_population")
+                    or []
+                )
+                self._restore_history_from_payload(payload.get("history") or [])
+                if payload.get("best_trained"):
+                    self.best_trained = load_candidate_dict(payload["best_trained"])
+                snaps = deserialize_population(payload.get("trained_snapshots") or [])
+                if snaps:
+                    self.trained_snapshots = snaps
+                if finished:
+                    return finished
+
+        for r in range(start_round, self.config.rounds):
             console.status(
                 f"starting round {r + 1}/{self.config.rounds} "
                 f"(N={len(pop)}, K3={self.config.train_env_steps})",
                 stage="Stage III",
             )
-            pop = self.run_round(pop, round_index=r)
+            si = start_index if r == start_round else 0
+            pn = partial_next if r == start_round else []
+            tp = train_progress if r == start_round else None
+            pop = self.run_round(
+                pop,
+                round_index=r,
+                start_index=si,
+                partial_next=pn,
+                train_progress=tp,
+            )
+            partial_next = []
+            start_index = 0
+            train_progress = None
+            self._persist(
+                status="running",
+                phase="h_sweep" if (run_h_sweep and r + 1 >= self.config.rounds) else "training",
+                round_index=min(r + 1, self.config.rounds),
+                candidate_index=0,
+                round_input_population=pop,
+                round_output_partial=pop,
+                train_progress=None,
+            )
+
         if run_h_sweep:
             console.status("running H-sweep generalization...", stage="Stage III")
+            self._persist(
+                status="running",
+                phase="h_sweep",
+                round_index=int(self.config.rounds),
+                candidate_index=0,
+                round_input_population=pop,
+                round_output_partial=pop,
+            )
             # Prefer best-ever trained policy (matches final selection).
             sweep_pop: List[RewardCandidate]
             if self.best_trained is not None:
@@ -1067,4 +1480,14 @@ class Stage3Runner:
             else:
                 sweep_pop = pop
             self.run_generalization_sweep(sweep_pop)
+
+        self._persist(
+            status="done",
+            phase="done",
+            round_index=int(self.config.rounds),
+            candidate_index=0,
+            round_input_population=pop,
+            round_output_partial=pop,
+            train_progress=None,
+        )
         return pop

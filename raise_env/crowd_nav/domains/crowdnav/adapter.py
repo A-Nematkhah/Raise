@@ -49,6 +49,7 @@ class CrowdNavAdapter:
         round_index: int,
         config: Any,
         stage: str = "stage2",
+        **train_kwargs: Any,
     ) -> Any:
         stage_key = str(stage).strip().lower()
         if stage_key in ("2", "stage2", "ii"):
@@ -57,7 +58,10 @@ class CrowdNavAdapter:
             )
         if stage_key in ("3", "stage3", "iii"):
             return self._stage3_trainer().train_and_eval(
-                candidate, round_index=round_index, config=config
+                candidate,
+                round_index=round_index,
+                config=config,
+                **train_kwargs,
             )
         raise ValueError(f"Unknown stage for CrowdNavAdapter: {stage!r}")
 
@@ -118,12 +122,14 @@ class CrowdNavStage3Trainer:
         *,
         round_index: int,
         config: Any,
+        **train_kwargs: Any,
     ) -> Any:
         return self.adapter.train_and_eval(
             candidate,
             round_index=round_index,
             config=config,
             stage="stage3",
+            **train_kwargs,
         )
 
     def evaluate_at_human_counts(

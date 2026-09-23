@@ -246,4 +246,17 @@ python scripts/run_raise.py --fast --closed-loop --allow-seed-llm `
 
 ---
 
+## Stage III crash-safe resume (۲۰۲۶-۰۹-۲۳)
+
+**قبل:** اگر Stage III وسط PPO یا بین کاندیدها قطع می‌شد، باید از صفر
+شروع می‌کرد (مگر paper-scale `CheckpointStore`).
+
+**بعد:**
+- `{output_dir}/stage3/checkpoint.json` + `RESUME.json` بعد از هر کاندید
+- mid-PPO: هر `--stage3-save-interval` آپدیت، وزن `.pt` + `train_progress.json`
+- `--resume` / `--no-resume` هم برای closed-loop و هم Stage III
+- بقیهٔ کاندیدها / راندها از همان‌جا ادامه می‌یابند؛ پروتکل eval عوض نشده
+
+---
+
 *ادامهٔ تغییرات بعدی از همین‌جا اضافه شود.*

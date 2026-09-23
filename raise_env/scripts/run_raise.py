@@ -230,8 +230,8 @@ def main() -> int:
         "--closed-loop",
         action="store_true",
         help=(
-            "Innovation path: Gen epochs with Score1 → Surrogate gate → "
-            "in-loop AL → Stage II short labels → refit (not paper Alg.1 linear)"
+            "Innovation path: Gen epochs with Score1 -> Surrogate gate -> "
+            "in-loop AL -> Stage II short labels -> refit (not paper Alg.1 linear)"
         ),
     )
     parser.add_argument(
@@ -276,15 +276,25 @@ def main() -> int:
         action="store_true",
         default=True,
         help=(
-            "With --closed-loop, continue from --output-dir/closed_loop/checkpoint.json "
-            "if present (default: on)"
+            "Resume from checkpoints when present (default: on). "
+            "Closed-loop: --output-dir/closed_loop/checkpoint.json. "
+            "Stage III: --output-dir/stage3/checkpoint.json (+ mid-PPO progress)."
         ),
     )
     resume_group.add_argument(
         "--no-resume",
         dest="resume",
         action="store_false",
-        help="Ignore any existing closed-loop checkpoint and start the loop from Gen0",
+        help="Ignore existing closed-loop / Stage III checkpoints and start fresh",
+    )
+    parser.add_argument(
+        "--stage3-save-interval",
+        type=int,
+        default=50,
+        help=(
+            "Write Stage III PPO weights every N updates for mid-train resume "
+            "(0 = final save only; default 50)"
+        ),
     )
 
     args = parser.parse_args()
@@ -308,7 +318,7 @@ def main() -> int:
     ):
         print(
             "Refusing to run a non-fast pipeline with the seed (no real LLM) "
-            "provider — pass --llm groq|ollama|vllm explicitly, or pass "
+            "provider - pass --llm groq|ollama|vllm explicitly, or pass "
             "--allow-seed-llm if this is intentional (e.g. debugging Stage II/III "
             "wiring without LLM cost).",
             file=sys.stderr,
@@ -360,6 +370,8 @@ def main() -> int:
         closed_loop_refit_every_new_labels=int(args.closed_loop_refit_every),
         closed_loop_min_stage2_per_gen=int(args.closed_loop_min_stage2),
         closed_loop_resume=bool(args.resume),
+        stage3_resume=bool(args.resume),
+        stage3_save_interval_updates=int(args.stage3_save_interval),
         device=args.device,
         num_processes=args.num_processes,
         randomization_regime=args.regime,
@@ -397,7 +409,7 @@ def main() -> int:
         return 2
 
     logging.info(
-        "RAISE → %s (domain=%s, fast=%s, easy=%s, humans=%d, predict=%s, K3=%d)",
+        "RAISE -> %s (domain=%s, fast=%s, easy=%s, humans=%d, predict=%s, K3=%d)",
         cfg.output_dir,
         cfg.domain,
         cfg.fast,
