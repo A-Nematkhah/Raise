@@ -736,11 +736,13 @@ class Stage2Runner:
         *,
         validator: Optional[RewardValidator] = None,
         config: Optional[Stage2Config] = None,
+        prompts: Any = None,
     ) -> None:
         self.llm = llm
         self.trainer = trainer
         self.validator = validator or RewardValidator()
         self.config = config or Stage2Config()
+        self._prompts = prompts
         self.history: List[Stage2RoundRecord] = []
         self.validation_failures: List[Dict[str, Any]] = []
         # Trained (pre-refine) snapshots; best_trained is best-ever by SR-CR-0.5TR.
@@ -749,6 +751,27 @@ class Stage2Runner:
         # Optional paper-scale resume (set by PaperScaleRunner).
         self.checkpoint_store = None  # type: ignore[assignment]
         self.checkpoint_seed: int = int(self.config.seed)
+
+    def _d3_system_prompt(self) -> str:
+        if self._prompts is not None:
+            return str(getattr(self._prompts, "D3_SYSTEM_PROMPT", D3_SYSTEM_PROMPT))
+        return D3_SYSTEM_PROMPT
+
+    def _format_d3_refinement(self, *args: Any, **kwargs: Any) -> str:
+        fn = (
+            getattr(self._prompts, "format_d3_refinement", None)
+            if self._prompts is not None
+            else None
+        )
+        return (fn or format_d3_refinement)(*args, **kwargs)
+
+    def _format_d3_repair(self, **kwargs: Any) -> str:
+        fn = (
+            getattr(self._prompts, "format_d3_repair", None)
+            if self._prompts is not None
+            else None
+        )
+        return (fn or format_d3_repair)(**kwargs)
 
     def _record_trained_snapshot(
         self,
@@ -817,11 +840,11 @@ class Stage2Runner:
         Single repair attempt: feed back the exact error and ask LLM to fix.
         Returns (repaired_code, error) or (None, error_reason) if repair fails.
         """
-        repair_prompt = format_d3_repair(
+        repair_prompt = self._format_d3_repair(
             bad_code=bad_code,
             validation_error=validation_error,
         )
-        full_prompt = f"{D3_SYSTEM_PROMPT}\n\n{repair_prompt}"
+        full_prompt = f"{self._d3_system_prompt()}\n\n{repair_prompt}"
         try:
             raw = self.llm.complete(full_prompt)
             repaired_code = normalize_to_compute_reward(extract_python_code(raw))
@@ -838,13 +861,13 @@ class Stage2Runner:
         D.3 refinement → ``*_v2``. On sandbox failure, attempt ONE repair before keeping previous.
         """
         feedback = metrics.feedback_text()
-        user_prompt = format_d3_refinement(
+        user_prompt = self._format_d3_refinement(
             candidate.code,
             last_score=metrics.scalar_score(),
             feedback=feedback,
             extra_context_if_any="",
         )
-        full_prompt = f"{D3_SYSTEM_PROMPT}\n\n{user_prompt}"
+        full_prompt = f"{self._d3_system_prompt()}\n\n{user_prompt}"
         try:
             raw = self.llm.complete(full_prompt)
             new_code = normalize_to_compute_reward(extract_python_code(raw))

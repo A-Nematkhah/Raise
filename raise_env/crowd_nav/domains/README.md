@@ -3,9 +3,9 @@
 Each simulation / training backend the reward-search algorithm can target is a
 **domain pack**: a folder under `crowd_nav/domains/<name>/`.
 
-Today only **`crowdnav`** is registered (RAISE baseline). Do **not**
-add placeholder / stub packs. Add a real domain only when env code, metrics, and
-prompts are ready.
+Today **`crowdnav`** (RAISE baseline) and **`highway`** (diagnostic
+`highway-fast-v0`) are registered. Do **not** add placeholder / stub packs.
+Add a real domain only when env code, metrics, and prompts are ready.
 
 ## How the core talks to a pack
 
@@ -160,10 +160,10 @@ CrowdNav example: [`crowdnav/spec.md`](crowdnav/spec.md).
 
 ## What is intentionally not here
 
-- No second domain package / stub folder in this repo yet
 - No AMFRS (Pareto / archive) inside packs
 - Physical Score1/rules code for CrowdNav stays under `reward_search/` (lock);
   the pack only owns the **resolution** entry point
+- Highway is diagnostic only — do not treat its metrics as CrowdNav paper numbers
 
 ## Quick verify (CrowdNav)
 

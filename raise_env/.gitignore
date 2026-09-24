@@ -1,6 +1,29 @@
+# Local run artifacts (regenerate via scripts/; never commit warm models)
+results/
+data/stage1_dataset/
+data/highway_stage1_dataset/
+data/surrogate_dataset/*.jsonl
+data/surrogate_dataset/manifest.json
+data/active_learning/queue.jsonl
+data/active_learning/done.jsonl
+data/active_learning/steps.jsonl
+data/active_learning/manifest.json
+data/active_learning/stage1_extra/
+!data/active_learning/.gitkeep
+
+# All generated surrogate / experiment artifacts except tiny tracked fixtures
+artifacts/**
+!artifacts/surrogate/.gitkeep
+!artifacts/surrogate_test_fix/
+!artifacts/surrogate_test_fix/**
+
+# Simulator / GST weight trees
 gst_datasets/
 gst_updated/scripts/data
 trained_models/
+figures/*.gif
+
+# Editor / venv / caches
 .idea/
 venv/
 .venv/
@@ -19,20 +42,6 @@ events.out.tfevents.*
 build/
 dist/
 .DS_Store
-
-# Local run artifacts (regenerate via scripts/)
-results/
-data/stage1_dataset/
-data/surrogate_dataset/*.jsonl
-data/surrogate_dataset/manifest.json
-data/active_learning/queue.jsonl
-data/active_learning/done.jsonl
-data/active_learning/steps.jsonl
-data/active_learning/manifest.json
-data/active_learning/stage1_extra/
-artifacts/surrogate/**
-!artifacts/surrogate/.gitkeep
-!data/active_learning/.gitkeep
 .pip_cache/
 .tmp/
 
@@ -42,8 +51,3 @@ groq_keys.json
 .env.*
 !.env.example
 .local_key_config.md
-
-train1.py
-test1.py
-test2.py
-check_env.py

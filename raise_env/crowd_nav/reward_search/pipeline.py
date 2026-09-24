@@ -26,6 +26,7 @@ from crowd_nav.domains import (
     make_score_fn_for_domain,
     make_stage2_trainer_for_domain,
     make_stage3_trainer_for_domain,
+    make_validator_for_domain,
 )
 from crowd_nav.reward_search.llm import LLMClient, make_llm_client
 from crowd_nav.reward_search.reporting import candidate_to_dict, write_json
@@ -207,17 +208,24 @@ class RaisePipeline:
     ) -> None:
         self.config = config or RaiseRunConfig()
         self.llm = llm
-        self.validator = RewardValidator()
         # Optional paper-scale resume store (seed/stage/round/candidate).
         self.checkpoint_store = checkpoint_store
         self.domain_pack = domain_pack or load_domain(self.config.domain)
+        self.validator = make_validator_for_domain(self.domain_pack)
 
     def _build_llm(self) -> LLMClient:
         if self.llm is not None:
             return self.llm
+        seed = self.domain_pack.seed_reward_source if self.domain_pack else None
         if self.config.llm_model is None:
-            return make_llm_client(self.config.llm_provider)
-        return make_llm_client(self.config.llm_provider, model=self.config.llm_model)
+            return make_llm_client(
+                self.config.llm_provider, base_code=seed
+            )
+        return make_llm_client(
+            self.config.llm_provider,
+            model=self.config.llm_model,
+            base_code=seed,
+        )
 
     def _score_fn(self):
         return make_score_fn_for_domain(
@@ -301,6 +309,7 @@ class RaisePipeline:
                 cfg.closed_loop_proxy_feedback_d3_per_epoch
             ),
             enable_refine=bool(cfg.closed_loop_enable_refine),
+            domain=str(pack.name),
         )
         if cfg.fast:
             cl_cfg.apply_fast_profile()
@@ -368,7 +377,11 @@ class RaisePipeline:
                 pack, use_stub=cfg.stage2_use_stub
             )
             s2_runner = Stage2Runner(
-                llm, s2_trainer, validator=self.validator, config=s2_cfg
+                llm,
+                s2_trainer,
+                validator=self.validator,
+                config=s2_cfg,
+                prompts=pack.prompts,
             )
             stage2_pop = s2_runner.run(stage2_pop)
 
@@ -435,25 +448,6 @@ class RaisePipeline:
             f"output={cfg.output_dir} seed={cfg.seed} llm={cfg.llm_provider} "
             f"fast={cfg.fast} device={cfg.device}"
         )
-        console.status(
-            f"regime={regime} (randomize_attributes={attrs}, "
-            f"random_goal_changing={goals}); predict_method={predict_method}"
-        )
-        if predict_method == "inferred":
-            assert_gst_matches_regime(
-                gst_model_dir_for_regime(regime),
-                regime,
-                predict_method=predict_method,
-                entry_point="pipeline_startup",
-            )
-        else:
-            assert_gst_matches_regime(
-                "",
-                regime,
-                predict_method=predict_method,
-                entry_point="pipeline_startup",
-            )
-
         llm = self._build_llm()
         pack = self.domain_pack
         if pack.name != str(cfg.domain).strip().lower():
@@ -461,22 +455,55 @@ class RaisePipeline:
                 f"Domain pack mismatch: config.domain={cfg.domain!r}, "
                 f"pack.name={pack.name!r}"
             )
+        is_crowdnav = pack.name == "crowdnav"
+        pipeline_profile = str(
+            (pack.metadata or {}).get("pipeline_profile") or pack.name
+        )
+        if is_crowdnav:
+            console.status(
+                f"regime={regime} (randomize_attributes={attrs}, "
+                f"random_goal_changing={goals}); predict_method={predict_method}"
+            )
+            if predict_method == "inferred":
+                assert_gst_matches_regime(
+                    gst_model_dir_for_regime(regime),
+                    regime,
+                    predict_method=predict_method,
+                    entry_point="pipeline_startup",
+                )
+            else:
+                assert_gst_matches_regime(
+                    "",
+                    regime,
+                    predict_method=predict_method,
+                    entry_point="pipeline_startup",
+                )
+        else:
+            console.status(
+                f"domain_profile={pipeline_profile} (CrowdNav GST/human_num path skipped)"
+            )
+
         seed_code = pack.seed_reward_source.strip() + "\n"
 
         manifest: Dict[str, Any] = {
             "algorithm": "RAISE",
             "domain": pack.name,
             "domain_display_name": pack.display_name,
+            "pipeline_profile": pipeline_profile,
             "created_utc": datetime.now(timezone.utc).isoformat(),
             "config": asdict(cfg),
             "stage3_paper_steps": STAGE3_PAPER_STEPS,
-            "evolution_randomization_regime": regime,
-            "predict_method": predict_method,
+            "evolution_randomization_regime": regime if is_crowdnav else None,
+            "predict_method": predict_method if is_crowdnav else None,
             "notes": (
                 "Faithful replication baseline. No AMFRS novelty / archive / "
-                "Pareto / adaptive controller. Obs-space choice (a): "
-                "Stage II/III use predict_method=inferred when not --fast "
-                "(AUDIT.md §8)."
+                "Pareto / adaptive controller. "
+                + (
+                    "Obs-space choice (a): Stage II/III use predict_method=inferred "
+                    "when not --fast (AUDIT.md §8)."
+                    if is_crowdnav
+                    else f"Domain {pack.name!r} uses pack-local trainers/metrics."
+                )
             ),
         }
         console.status(f"domain={pack.name} ({pack.display_name})")
@@ -512,6 +539,7 @@ class RaisePipeline:
                 score_fn=self._score_fn(),
                 validator=self.validator,
                 config=s1_cfg,
+                prompts=pack.prompts,
                 rejection_log_path=os.path.join(cfg.output_dir, "stage1_rejections.jsonl"),
             )
             stage1_pop = evolver.run()
@@ -639,7 +667,11 @@ class RaisePipeline:
                 pack, use_stub=cfg.stage2_use_stub
             )
             s2_runner = Stage2Runner(
-                llm, s2_trainer, validator=self.validator, config=s2_cfg
+                llm,
+                s2_trainer,
+                validator=self.validator,
+                config=s2_cfg,
+                prompts=pack.prompts,
             )
             if self.checkpoint_store is not None:
                 s2_runner.checkpoint_store = self.checkpoint_store
@@ -728,10 +760,15 @@ class RaisePipeline:
                 surrogate_gate_report = {"enabled": False, "error": str(exc)}
 
         # ----- Stage III -----
-        # H-sweep only at H <= training crowd size (obs / Policy width).
-        # Paper set {5,10,15,20} when human_num=20; with --human-num 5 → {5}.
+        # H-sweep only for CrowdNav (human counts). Other domains skip it.
         h_train = max(1, int(cfg.human_num))
-        if cfg.stage3_run_h_sweep:
+        run_h_sweep = bool(cfg.stage3_run_h_sweep) and is_crowdnav
+        if not is_crowdnav and bool(cfg.stage3_run_h_sweep):
+            console.status(
+                f"H-sweep disabled for domain={pack.name}",
+                stage="pipeline",
+            )
+        if run_h_sweep:
             swept = [h for h in (5, 10, 15, 20) if h <= h_train]
             if h_train not in swept:
                 swept.append(h_train)
@@ -779,12 +816,16 @@ class RaisePipeline:
             pack, use_stub=cfg.stage3_use_stub
         )
         s3_runner = Stage3Runner(
-            llm, s3_trainer, validator=self.validator, config=s3_cfg
+            llm,
+            s3_trainer,
+            validator=self.validator,
+            config=s3_cfg,
+            prompts=pack.prompts,
         )
         if self.checkpoint_store is not None:
             s3_runner.checkpoint_store = self.checkpoint_store
             s3_runner.checkpoint_seed = int(cfg.seed)
-        stage3_pop = s3_runner.run(stage3_input_pop, run_h_sweep=cfg.stage3_run_h_sweep)
+        stage3_pop = s3_runner.run(stage3_input_pop, run_h_sweep=run_h_sweep)
         rank_pool_s3 = list(s3_runner.trained_snapshots) or list(stage3_pop)
         r3_rank = produce_final_ranking(
             rank_pool_s3, mode=cfg.final_rank, llm=llm

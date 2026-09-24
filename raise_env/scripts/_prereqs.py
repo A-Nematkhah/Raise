@@ -9,12 +9,27 @@ instead of letting Stage II raise deep in the stack.
 from __future__ import annotations
 
 import os
-from typing import List, Sequence
+from typing import List, Optional, Sequence
 
-# Score1 dataset shipped with the sibling baseline checkout.
-BASELINE_STAGE1_DATASET = (
-    r"D:\Thesis\Implementation\Evonav_baseline\amfrs_env\data\stage1_dataset"
-)
+
+def _default_baseline_stage1_hint() -> str:
+    """Prefer env override; fall back to a common sibling layout (not required)."""
+    env = os.environ.get("RAISE_BASELINE_STAGE1_DATASET", "").strip()
+    if env:
+        return env
+    # Optional sibling checkout — only used in remediation text, never loaded.
+    here = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    sibling = os.path.normpath(
+        os.path.join(
+            here,
+            "..",
+            "Evonav_baseline",
+            "amfrs_env",
+            "data",
+            "stage1_dataset",
+        )
+    )
+    return sibling
 
 
 def check_stage1_dataset(root: str, path: str = "data/stage1_dataset") -> List[str]:
@@ -28,13 +43,14 @@ def check_stage1_dataset(root: str, path: str = "data/stage1_dataset") -> List[s
         for name in os.listdir(target)
     ):
         return []
+    hint = _default_baseline_stage1_hint()
     return [
         f"Missing Score1 dataset: {npz}",
-        "  Copy it from the baseline checkout:",
-        f'    Copy-Item -Recurse -Force "{BASELINE_STAGE1_DATASET}" "{target}"',
-        "  or collect a fresh one (runs the simulator, slow):",
+        "  Collect a fresh one (runs the simulator, slow):",
         f"    python scripts/collect_stage1_dataset.py --out {path} "
         "--n-scenarios 100 --n-traj 10 --human-num 20",
+        "  Or copy from another checkout / set RAISE_BASELINE_STAGE1_DATASET:",
+        f'    Copy-Item -Recurse -Force "{hint}" "{target}"',
     ]
 
 

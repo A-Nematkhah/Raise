@@ -147,7 +147,7 @@ class ClosedLoopRunner:
         ckpt = _load_ckpt(cfg.output_dir) if bool(cfg.resume) else None
         resumed = ckpt is not None
 
-        pack = load_domain("crowdnav")
+        pack = load_domain(str(getattr(cfg, "domain", "crowdnav") or "crowdnav"))
         score1_mode = "smoke" if cfg.use_stub else "dataset"
         if self.score_fn is None:
             self.score_fn, _ds = pack.make_score_fn(
@@ -157,7 +157,9 @@ class ClosedLoopRunner:
         if self.trainer is None:
             self.trainer = make_stage2_trainer_for_domain(pack, use_stub=cfg.use_stub)
         if self.validator is None:
-            self.validator = RewardValidator()
+            from crowd_nav.domains import make_validator_for_domain
+
+            self.validator = make_validator_for_domain(pack)
         if self.llm is None:
             self.llm = make_llm_client(cfg.llm_provider)
 
@@ -183,6 +185,7 @@ class ClosedLoopRunner:
             score_fn=self.score_fn,
             validator=self.validator,
             config=s1_cfg,
+            prompts=pack.prompts,
             rejection_log_path=os.path.join(
                 cfg.output_dir, "closed_loop", "stage1_rejections.jsonl"
             ),

@@ -2,7 +2,7 @@
 """Print a readable closed-loop REPORT for an existing run directory.
 
 Usage (from raise_env/):
-  python scripts/print_closed_loop_report.py results/closed_loop_1h_20260920_221939
+  python scripts/print_raise_report.py results/raise_12h_YYYYMMDD_HHMMSS
 """
 
 from __future__ import annotations

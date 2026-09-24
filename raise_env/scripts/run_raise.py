@@ -433,7 +433,7 @@ def main() -> int:
     from crowd_nav.domains import available_domains, load_domain
 
     try:
-        load_domain(cfg.domain)
+        pack = load_domain(cfg.domain)
     except KeyError as exc:
         print(str(exc), file=sys.stderr)
         print(
@@ -441,6 +441,14 @@ def main() -> int:
             file=sys.stderr,
         )
         return 2
+
+    # If caller left the CrowdNav Stage I default path, prefer the pack default.
+    if (
+        str(cfg.stage1_dataset_path).replace("\\", "/") == "data/stage1_dataset"
+        and pack.stage1_dataset_default
+        and pack.name != "crowdnav"
+    ):
+        cfg.stage1_dataset_path = str(pack.stage1_dataset_default)
 
     logging.info(
         "RAISE -> %s (domain=%s, fast=%s, easy=%s, humans=%d, predict=%s, K3=%d)",

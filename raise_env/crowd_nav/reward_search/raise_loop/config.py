@@ -55,6 +55,8 @@ class ClosedLoopConfig:
     # Keep surrogate model / dataset / AL queue inside output_dir so a run is
     # self-contained and resumable without guessing sibling paths.
     isolate_run_artifacts: bool = True
+    # Domain pack name (default CrowdNav baseline).
+    domain: str = "crowdnav"
 
     def apply_fast_profile(self) -> None:
         self.use_stub = True

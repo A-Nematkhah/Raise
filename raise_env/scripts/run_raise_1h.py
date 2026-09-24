@@ -6,8 +6,8 @@ Exercises the innovation path end-to-end (not paper Alg.1 linear):
   (+ Validate stub so the pipeline finishes)
 
 From raise_env/:
-  python scripts/run_closed_loop_1h.py
-  python scripts/run_closed_loop_1h.py --llm seed --allow-seed-llm
+  python scripts/run_raise_1h.py
+  python scripts/run_raise_1h.py --llm seed --allow-seed-llm
 """
 
 from __future__ import annotations
@@ -44,7 +44,7 @@ def main() -> int:
     os.chdir(root)
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    out = f"results/closed_loop_1h_{stamp}"
+    out = f"results/raise_1h_{stamp}"
     surr_model = os.path.join(out, "surrogate_model")
     surr_data = os.path.join(out, "surrogate_dataset")
     for path in (out, surr_model, surr_data):
@@ -53,7 +53,7 @@ def main() -> int:
     cmd = [
         sys.executable,
         "scripts/run_raise.py",
-        "--RAISE loop",
+        "--closed-loop",
         "--llm",
         args.llm,
         "--device",
@@ -69,20 +69,20 @@ def main() -> int:
         "4",
         "--stage1-generations",
         "3",
-        "--RAISE loop-k2",
+        "--closed-loop-k2",
         "2000",
         "--k2-unit",
         "gradient_steps",
         # Soft→hard gate after Gen0 (4 labels); AL + gate run on Gen≥1.
-        "--RAISE loop-min-labels-gate",
+        "--closed-loop-min-labels-gate",
         "4",
-        "--RAISE loop-al-max",
+        "--closed-loop-al-max",
         "2",
         # Allow gate to drop (min 2 Refine / epoch, not force all 4).
-        "--RAISE loop-min-stage2",
+        "--closed-loop-min-stage2",
         "2",
         # Refit after Gen1+ as soon as ≥2 new labels land.
-        "--RAISE loop-refit-every",
+        "--closed-loop-refit-every",
         "2",
         "--surrogate",
         surr_model,

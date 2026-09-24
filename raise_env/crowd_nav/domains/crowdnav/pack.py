@@ -6,7 +6,11 @@ import os
 
 from crowd_nav.domains.base import DomainPack
 from crowd_nav.domains.crowdnav import prompts as crowdnav_prompts
-from crowd_nav.domains.crowdnav.adapter import CrowdNavAdapter
+from crowd_nav.domains.crowdnav.adapter import (
+    CrowdNavAdapter,
+    make_stage2_trainer,
+    make_stage3_trainer,
+)
 from crowd_nav.domains.crowdnav.explore_score import (
     DEFAULT_STAGE1_DATASET,
     make_score_fn as crowdnav_make_score_fn,
@@ -37,6 +41,8 @@ def get_pack(*, with_adapter: bool = True) -> DomainPack:
         adapter=adapter,
         stage1_dataset_default=DEFAULT_STAGE1_DATASET,
         make_score_fn=crowdnav_make_score_fn,
+        make_stage2_trainer=make_stage2_trainer if with_adapter else None,
+        make_stage3_trainer=make_stage3_trainer if with_adapter else None,
         selection_scalar_name="navigation_scalar",
         metadata={
             "env_inferred": "CrowdSimPredRealGST-v0",
@@ -44,5 +50,6 @@ def get_pack(*, with_adapter: bool = True) -> DomainPack:
             "policy": "selfAttn_merge_srnn",
             "paper": "arXiv:2605.11859",
             "stage1": "score1_spearman_rules",
+            "pipeline_profile": "crowdnav",
         },
     )

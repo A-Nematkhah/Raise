@@ -12,6 +12,8 @@ raise_env/venv/
 # Local run artifacts
 raise_env/results/
 raise_env/data/stage1_dataset/
+raise_env/data/highway_stage1_dataset/
+raise_env/artifacts/surr_warm/
 raise_env/.pip_cache/
 raise_env/.tmp/
 

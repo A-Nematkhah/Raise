@@ -3,7 +3,9 @@
 Extension of CrowdNav++ for **RAISE** reward search. Compatible with RAISE
 Algorithm 1 (arXiv:2605.11859); AMFRS mechanisms are not included.
 
-Upstream simulator docs: `README.md` in this directory. Architecture audit: `AUDIT.md`.
+Upstream simulator docs: `README.md` in this directory.
+Repository layout map: [`../docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md).
+Simulator audit notes: `AUDIT.md` (CrowdNav++ env internals — not the RAISE API map).
 
 ## Install
 
@@ -55,20 +57,29 @@ The server URL defaults to `http://localhost:11434/v1`; override it with
 |------|---------|----------|------|
 | Wiring smoke | `python scripts/run_raise.py --fast` | CPU | seconds |
 | Stage I dataset (M=100) | `python scripts/collect_stage1_dataset.py --regime without_random` | CPU | ~tens of min |
-| Local validation | `python scripts/run_raise.py --llm groq --device cuda --regime without_random --stage1-dataset data/stage1_dataset --stage3-train-steps 500000` | GPU + Groq | hours |
+| Warm surrogate (match 12h env) | `python scripts/bootstrap_surrogate.py` | GPU + Groq | hours |
+| Closed-loop overnight | `python scripts/run_raise_12h.py --warm-surrogate artifacts/surr_warm` | GPU + Groq | ~12h |
+| Local Alg.1 validation | `python scripts/run_raise.py --llm groq --device cuda --regime without_random --stage1-dataset data/stage1_dataset --stage3-train-steps 500000` | GPU + Groq | hours |
 | Paper scale | `python scripts/run_raise_paper_scale.py --device cuda --llm groq` | GPU + Groq | days (K3=1e7 × seeds) |
 
 Defaults (AUDIT.md §8): `without_random`, Stage II/III `predict_method=inferred`, GST `...-seed_1000/sj`.
+Innovation closed-loop writes under `output_dir/closed_loop/` (name kept for resume).
 
 ## Domain packs
 
 Reward search is wired through a **domain pack** (default `crowdnav`). Prompts,
 Stage I Score1, and Stage II/III trainers are resolved via
-`crowd_nav.domains` so another environment can be added later as a sibling
-folder without rewriting the pipeline.
+`crowd_nav.domains` so another environment can be added as a sibling folder
+without rewriting the pipeline.
 
 - Guide: [`crowd_nav/domains/README.md`](crowd_nav/domains/README.md)
 - CLI: `python scripts/run_raise.py --domain crowdnav ...`
+- **Highway (diagnostic, additive):** `highway-fast-v0` via `--domain highway`.
+  Install extras first: `pip install -r requirements_highway.txt`.
+  Fast wiring: `python scripts/run_raise.py --domain highway --fast --output-dir results/highway_fast`.
+  Collect Stage I data: `python scripts/collect_highway_stage1_dataset.py --out data/highway_stage1_dataset`.
+  This domain validates algorithm convergence cheaply; it does **not** replace
+  CrowdNav paper claims or GST/SRNN baselines.
 
 Do not add stub domains; only register a pack when the real env is ready.
 

@@ -111,6 +111,7 @@ class StageIEvolver:
         config: Optional[StageIConfig] = None,
         system_prompt: str = D1_SYSTEM_PROMPT,
         rejection_log_path: Optional[str] = None,
+        prompts: Any = None,
     ) -> None:
         self.llm = llm
         if score_fn is None:
@@ -121,7 +122,13 @@ class StageIEvolver:
         self.score_fn = score_fn
         self.validator = validator or RewardValidator()
         self.config = config or StageIConfig()
-        self.system_prompt = system_prompt
+        # Domain pack prompt module (defaults: CrowdNav re-export).
+        self._prompts = prompts
+        self.system_prompt = (
+            system_prompt
+            if prompts is None
+            else str(getattr(prompts, "D1_SYSTEM_PROMPT", system_prompt))
+        )
         self.rejection_log_path = rejection_log_path
         self._counter = 0
         self.reflection: str = ""
@@ -135,6 +142,38 @@ class StageIEvolver:
                 f"({self.config.n_crossover}+{self.config.n_mutation}+"
                 f"{self.config.n_random} != {n})"
             )
+
+    def _format_d1_initial(self, **kwargs: Any) -> str:
+        fn = (
+            getattr(self._prompts, "format_d1_initial", None)
+            if self._prompts is not None
+            else None
+        )
+        return (fn or format_d1_initial)(**kwargs)
+
+    def _format_d1_initial_batch(self, n: int, **kwargs: Any) -> str:
+        fn = (
+            getattr(self._prompts, "format_d1_initial_batch", None)
+            if self._prompts is not None
+            else None
+        )
+        return (fn or format_d1_initial_batch)(n, **kwargs)
+
+    def _format_d2_crossover(self, *args: Any, **kwargs: Any) -> str:
+        fn = (
+            getattr(self._prompts, "format_d2_crossover", None)
+            if self._prompts is not None
+            else None
+        )
+        return (fn or format_d2_crossover)(*args, **kwargs)
+
+    def _format_d2_mutation(self, *args: Any, **kwargs: Any) -> str:
+        fn = (
+            getattr(self._prompts, "format_d2_mutation", None)
+            if self._prompts is not None
+            else None
+        )
+        return (fn or format_d2_mutation)(*args, **kwargs)
 
     # ------------------------------------------------------------------ helpers
 
@@ -343,7 +382,7 @@ class StageIEvolver:
             stage="Stage I",
         )
         with console.timed("Gen0 LLM batch", stage="Stage I"):
-            batch_prompt = format_d1_initial_batch(
+            batch_prompt = self._format_d1_initial_batch(
                 needed,
                 func_name=cfg.func_name,
                 include_seed=True,
@@ -406,7 +445,7 @@ class StageIEvolver:
         )
 
         def _one(attempt_no: int) -> RewardCandidate:
-            prompt = format_d1_initial(
+            prompt = self._format_d1_initial(
                 func_name=cfg.func_name,
                 include_seed=True,
                 include_external_knowledge=cfg.include_external_knowledge,
@@ -517,7 +556,7 @@ class StageIEvolver:
         phase: str,
         attempt: int,
     ) -> RewardCandidate:
-        prompt = format_d2_crossover(
+        prompt = self._format_d2_crossover(
             parent_a.code,
             parent_b.code,
             reflection,
@@ -561,7 +600,7 @@ class StageIEvolver:
             weakness = (
                 f"{weakness}\nScore1 diagnostics for this parent: {parent_hints}"
             )
-        prompt = format_d2_mutation(
+        prompt = self._format_d2_mutation(
             parent.code,
             weakness,
             func_name=self.config.func_name,
@@ -579,7 +618,7 @@ class StageIEvolver:
         )
 
     def _try_random_restart(self, *, phase: str, attempt: int) -> RewardCandidate:
-        prompt = format_d1_initial(
+        prompt = self._format_d1_initial(
             func_name=self.config.func_name,
             include_seed=True,
             include_external_knowledge=self.config.include_external_knowledge,
@@ -607,7 +646,7 @@ class StageIEvolver:
                 phase="random",
             )
         batch_id = f"random_batch_{self._counter:04d}"
-        prompt = format_d1_initial_batch(
+        prompt = self._format_d1_initial_batch(
             needed,
             func_name=self.config.func_name,
             include_seed=True,

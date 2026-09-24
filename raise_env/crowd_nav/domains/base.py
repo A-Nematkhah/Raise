@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from types import ModuleType
-from typing import Any, Callable, Dict, Optional, Protocol, runtime_checkable
+from typing import Any, Callable, Dict, Optional, Protocol, Sequence, runtime_checkable
 
 
 @runtime_checkable
@@ -54,6 +54,11 @@ class DomainPack:
     adapter: Optional[EnvAdapter] = None
     stage1_dataset_default: Optional[str] = None
     make_score_fn: Optional[Callable[..., Any]] = None
+    # Optional factory: () -> Sequence[smoke state objects] for RewardValidator.
+    smoke_states_fn: Optional[Callable[[], Sequence[Any]]] = None
+    # Pack-local Stage II/III trainer factories (preferred over name branches).
+    make_stage2_trainer: Optional[Callable[..., Any]] = None
+    make_stage3_trainer: Optional[Callable[..., Any]] = None
     selection_scalar_name: str = "navigation_scalar"
     metadata: Dict[str, Any] = field(default_factory=dict)
 

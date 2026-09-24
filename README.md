@@ -1,16 +1,25 @@
-# RAISE — reward search on CrowdNav++
+# RAISE — adaptive / evolutionary reward search
 
-This repository implements **RAISE**: an LLM-guided reward-function search
-pipeline for robot crowd navigation on a CrowdNav++ fork (`raise_env/`).
+This repository implements **RAISE**: LLM-guided reward-function search with
+RL evaluation. The active tree is `raise_env/` (a CrowdNav++ derivative).
 
-It can reproduce the linear **RAISE Algorithm 1** baseline (explore → refine →
-validate) and also run the **RAISE closed loop** (Score1 + Surrogate + Active
-Learning across generations). **AMFRS** is not included.
+| Mode | Meaning |
+|------|---------|
+| **Algorithm 1** | Linear Explore → Refine → Validate (paper baseline) |
+| **Closed loop** | Score1 ↔ Stage-II short ↔ Surrogate + AL across generations |
+
+**Environments (domain packs):**
+
+| `--domain` | Role |
+|------------|------|
+| `crowdnav` | CrowdNav++ / GST / SRNN — paper claims (**frozen** baseline) |
+| `highway` | HighwayEnv diagnostic (`highway-fast-v0`) — algorithm convergence only |
 
 | Directory | Role |
 |-----------|------|
-| `raise_env/` | Simulator fork + `crowd_nav/reward_search` (RAISE Alg. 1) |
-| `baselines_openai/` | Trimmed OpenAI Baselines (vec_env / logger / bench only) |
+| `raise_env/` | Simulator + RAISE (`crowd_nav/reward_search`) + domain packs |
+| `baselines_openai/` | Trimmed OpenAI Baselines (vec_env / logger / bench) |
+| `docs/ARCHITECTURE.md` | Layout map, entry points, artifact policy |
 
 `raise_env` is a **derivative work** of
 [CrowdNav_Prediction_AttnGraph](https://github.com/Shuijing725/CrowdNav_Prediction_AttnGraph)
@@ -26,8 +35,12 @@ pip install -r requirements_pinned.txt
 pip install -e ../baselines_openai --no-build-isolation
 # Install PyTorch (pinned) and Python-RVO2 per raise_env/README.md
 
-# Fast wiring test (~seconds)
+# Fast wiring test (~seconds) — CrowdNav
 python scripts/run_raise.py --fast --output-dir results/raise_fast
+
+# Highway diagnostic (install extras first)
+pip install -r requirements_highway.txt
+python scripts/run_raise.py --domain highway --fast --output-dir results/highway_fast
 
 # Tests
 pytest crowd_nav/reward_search/tests -m "not slow"
@@ -35,11 +48,10 @@ pytest crowd_nav/reward_search/tests -m "not slow"
 
 More detail:
 
-- RAISE / Alg. 1 runs, paper-scale, API keys → **`raise_env/README_RAISE.md`**
+- RAISE runs, paper-scale, API keys → **`raise_env/README_RAISE.md`**
+- Architecture map → **`docs/ARCHITECTURE.md`**
 - Simulator train/test → **`raise_env/README.md`**
-- Architecture notes → **`raise_env/AUDIT.md`**
 - Domain packs → **`raise_env/crowd_nav/domains/README.md`**
-- Surrogate / AL / raise-loop plans → under `raise_env/crowd_nav/reward_search/`
 
 ## Groq API keys
 

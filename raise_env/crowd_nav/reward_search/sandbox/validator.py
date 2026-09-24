@@ -22,7 +22,6 @@ from crowd_nav.reward_search.sandbox.runtime import (
     default_smoke_states,
     smoke_test_compute,
 )
-from crowd_nav.reward_search.state import RewardState
 
 
 class RewardValidator:
@@ -31,7 +30,7 @@ class RewardValidator:
     def __init__(
         self,
         config: Optional[SandboxConfig] = None,
-        smoke_states: Optional[Sequence[RewardState]] = None,
+        smoke_states: Optional[Sequence[object]] = None,
     ) -> None:
         self.config = config if config is not None else SandboxConfig()
         self.smoke_states = (

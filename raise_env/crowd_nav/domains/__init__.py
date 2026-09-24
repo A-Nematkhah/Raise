@@ -16,6 +16,7 @@ DEFAULT_DOMAIN = "crowdnav"
 
 _REGISTRY = {
     "crowdnav": "crowd_nav.domains.crowdnav",
+    "highway": "crowd_nav.domains.highway",
 }
 
 
@@ -87,7 +88,9 @@ def make_score_fn_for_domain(
 def make_stage2_trainer_for_domain(
     pack: DomainPack, *, use_stub: bool = False
 ) -> Any:
-    """Resolve Stage II PolicyTrainer via the domain pack (CrowdNav today)."""
+    """Resolve Stage II PolicyTrainer via the domain pack."""
+    if pack.make_stage2_trainer is not None:
+        return pack.make_stage2_trainer(use_stub=use_stub)
     if pack.name == "crowdnav":
         from crowd_nav.domains.crowdnav.adapter import make_stage2_trainer
 
@@ -100,7 +103,9 @@ def make_stage2_trainer_for_domain(
 def make_stage3_trainer_for_domain(
     pack: DomainPack, *, use_stub: bool = False
 ) -> Any:
-    """Resolve Stage III PolicyTrainer via the domain pack (CrowdNav today)."""
+    """Resolve Stage III PolicyTrainer via the domain pack."""
+    if pack.make_stage3_trainer is not None:
+        return pack.make_stage3_trainer(use_stub=use_stub)
     if pack.name == "crowdnav":
         from crowd_nav.domains.crowdnav.adapter import make_stage3_trainer
 
@@ -108,6 +113,15 @@ def make_stage3_trainer_for_domain(
     raise NotImplementedError(
         f"Domain {pack.name!r} has no Stage III trainer factory yet"
     )
+
+
+def make_validator_for_domain(pack: DomainPack) -> Any:
+    """Build a RewardValidator with domain smoke states when provided."""
+    from crowd_nav.reward_search.sandbox import RewardValidator
+
+    if pack.smoke_states_fn is not None:
+        return RewardValidator(smoke_states=pack.smoke_states_fn())
+    return RewardValidator()
 
 
 def register_domain(name: str, module_path: str) -> None:
@@ -125,5 +139,6 @@ __all__ = [
     "make_score_fn_for_domain",
     "make_stage2_trainer_for_domain",
     "make_stage3_trainer_for_domain",
+    "make_validator_for_domain",
     "register_domain",
 ]

@@ -666,11 +666,13 @@ class Stage3Runner:
         *,
         validator: Optional[RewardValidator] = None,
         config: Optional[Stage3Config] = None,
+        prompts: Any = None,
     ) -> None:
         self.llm = llm
         self.trainer = trainer
         self.validator = validator or RewardValidator()
         self.config = config or Stage3Config()
+        self._prompts = prompts
         self.history: List[Stage3RoundRecord] = []
         self.validation_failures: List[Dict[str, Any]] = []
         self.last_bundles: Dict[str, TrainEvalBundle] = {}
@@ -684,6 +686,27 @@ class Stage3Runner:
         self._ckpt_dir: Optional[str] = None
         self._run_h_sweep: bool = True
         self._history_payload: List[Dict[str, Any]] = []
+
+    def _d3_system_prompt(self) -> str:
+        if self._prompts is not None:
+            return str(getattr(self._prompts, "D3_SYSTEM_PROMPT", D3_SYSTEM_PROMPT))
+        return D3_SYSTEM_PROMPT
+
+    def _format_d3_refinement(self, *args: Any, **kwargs: Any) -> str:
+        fn = (
+            getattr(self._prompts, "format_d3_refinement", None)
+            if self._prompts is not None
+            else None
+        )
+        return (fn or format_d3_refinement)(*args, **kwargs)
+
+    def _format_d3_repair(self, **kwargs: Any) -> str:
+        fn = (
+            getattr(self._prompts, "format_d3_repair", None)
+            if self._prompts is not None
+            else None
+        )
+        return (fn or format_d3_repair)(**kwargs)
 
     def _resolve_ckpt_dir(self) -> str:
         from crowd_nav.reward_search.stage3_checkpoint import stage3_dir_from_train_root
@@ -944,11 +967,11 @@ class Stage3Runner:
         metrics: ProxyMetrics,
     ) -> tuple[Optional[str], Optional[str]]:
         """One D.3 repair attempt (same contract as Stage II)."""
-        repair_prompt = format_d3_repair(
+        repair_prompt = self._format_d3_repair(
             bad_code=bad_code,
             validation_error=validation_error,
         )
-        full_prompt = f"{D3_SYSTEM_PROMPT}\n\n{repair_prompt}"
+        full_prompt = f"{self._d3_system_prompt()}\n\n{repair_prompt}"
         try:
             raw = self.llm.complete(full_prompt)
             repaired_code = normalize_to_compute_reward(extract_python_code(raw))
@@ -962,13 +985,13 @@ class Stage3Runner:
         metrics: ProxyMetrics,
     ) -> RewardCandidate:
         feedback = metrics.feedback_text()
-        user_prompt = format_d3_refinement(
+        user_prompt = self._format_d3_refinement(
             candidate.code,
             last_score=metrics.scalar_score(),
             feedback=feedback,
             extra_context_if_any="",
         )
-        full_prompt = f"{D3_SYSTEM_PROMPT}\n\n{user_prompt}"
+        full_prompt = f"{self._d3_system_prompt()}\n\n{user_prompt}"
         try:
             raw = self.llm.complete(full_prompt)
             new_code = normalize_to_compute_reward(extract_python_code(raw))

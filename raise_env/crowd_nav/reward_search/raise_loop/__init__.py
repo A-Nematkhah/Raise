@@ -1,14 +1,28 @@
-"""Closed-loop multi-fidelity evolution (innovation path). See PLAN.md."""
+"""Closed-loop multi-fidelity evolution (innovation path). See PLAN.md.
+
+Canonical package name: ``raise_loop``.
+On-disk run subdirectory remains ``closed_loop/`` for resume compatibility.
+Class names ``ClosedLoop*`` are kept as the public API; ``RaiseLoop*`` aliases
+exist for readability (identical objects — no behavior change).
+"""
 
 from __future__ import annotations
 
 from crowd_nav.reward_search.raise_loop.config import ClosedLoopConfig
 from crowd_nav.reward_search.raise_loop.runner import ClosedLoopResult, ClosedLoopRunner
 
+# Readable aliases (identical objects — no behavior change).
+RaiseLoopConfig = ClosedLoopConfig
+RaiseLoopResult = ClosedLoopResult
+RaiseLoopRunner = ClosedLoopRunner
+
 __all__ = [
     "ClosedLoopConfig",
     "ClosedLoopResult",
     "ClosedLoopRunner",
+    "RaiseLoopConfig",
+    "RaiseLoopResult",
+    "RaiseLoopRunner",
     "PLAN_PATH",
 ]
 

@@ -386,7 +386,7 @@ class OllamaLLMClient(VLLMLLMClient):
 
 class SeedVariantLLMClient(LLMClient):
     """
-    Always emits a valid ``compute_reward`` variant of the D.5 seed.
+    Always emits a valid ``compute_reward`` variant of a domain seed.
 
     Used for dry-runs / ``--llm seed`` so Algorithm 1 can execute without
     an API key or a huge scripted completion list.
@@ -399,9 +399,29 @@ class SeedVariantLLMClient(LLMClient):
 
         self._base = (base_code or D5_SEED_FUNCTION).strip()
         self._n = 0
+        self._highway = "state.ego" in self._base or "state.progress" in self._base
 
     def complete(self, prompt: str, *, max_tokens: Optional[int] = None) -> str:
         self._n += 1
+        if self._highway:
+            speed_coef = 0.05 + 0.002 * ((self._n % 20) - 10)
+            progress_coef = 1.0 + 0.05 * ((self._n % 10) - 5)
+            code = (
+                "```python\n"
+                "def compute_reward(state, memory):\n"
+                "    collision_penalty = -20.0\n"
+                "    off_road_penalty = -10.0\n"
+                f"    speed_coef = {speed_coef:.4f}\n"
+                f"    progress_coef = {progress_coef:.4f}\n"
+                "    if state.collision:\n"
+                "        return float(collision_penalty)\n"
+                "    if state.off_road:\n"
+                "        return float(off_road_penalty)\n"
+                "    return float(progress_coef * state.progress + "
+                "speed_coef * state.speed)\n"
+                "```\n"
+            )
+            return code
         pot = 2.0 + 0.05 * ((self._n % 20) - 10)
         # Tiny localized tweak so Stage I/II/III see distinct codes.
         code = (
@@ -433,6 +453,7 @@ def make_llm_client(
     *,
     completions: Optional[Sequence[str]] = None,
     model: Optional[str] = None,
+    base_code: Optional[str] = None,
     **kwargs,
 ) -> LLMClient:
     """
@@ -440,10 +461,11 @@ def make_llm_client(
 
     For ``scripted``, pass ``completions=...``.
     For ``seed``, returns ``SeedVariantLLMClient`` (no API key).
+    Optional ``base_code`` seeds the seed-variant client (domain D.5).
     """
     name = str(provider).strip().lower()
     if name in ("seed", "seed-variant", "d5"):
-        return SeedVariantLLMClient()
+        return SeedVariantLLMClient(base_code=base_code)
     if name == "scripted":
         if not completions:
             raise ValueError("make_llm_client(scripted) requires completions=...")
