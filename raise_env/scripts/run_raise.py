@@ -248,8 +248,8 @@ def main() -> int:
     parser.add_argument(
         "--closed-loop-k2",
         type=int,
-        default=4000,
-        help="Stage II short budget inside closed-loop epochs (default 4000)",
+        default=8000,
+        help="Stage II short budget inside closed-loop epochs (default 8000)",
     )
     parser.add_argument(
         "--closed-loop-min-labels-gate",
@@ -268,6 +268,34 @@ def main() -> int:
         type=int,
         default=4,
         help="Min candidates to Stage II-label per closed-loop epoch (default 4)",
+    )
+    parser.add_argument(
+        "--closed-loop-proxy-feedback",
+        action="store_true",
+        help=(
+            "Attach selective Stage-II SR/CR/TR blocks to D.2 mutation prompts "
+            "and reflection (after min labels + epoch>=1)"
+        ),
+    )
+    parser.add_argument(
+        "--closed-loop-proxy-feedback-min-labels",
+        type=int,
+        default=16,
+        help="Min surrogate labels before proxy feedback attaches (default 16)",
+    )
+    parser.add_argument(
+        "--closed-loop-proxy-d3",
+        type=int,
+        default=0,
+        help=(
+            "Max in-loop D.3 rewrites per epoch from worst proxy scalars "
+            "(0=off; requires --closed-loop-proxy-feedback)"
+        ),
+    )
+    parser.add_argument(
+        "--closed-loop-refine",
+        action="store_true",
+        help="Legacy: enable 1 in-loop D.3 per epoch (same as --closed-loop-proxy-d3 1)",
     )
     resume_group = parser.add_mutually_exclusive_group()
     resume_group.add_argument(
@@ -370,6 +398,12 @@ def main() -> int:
         closed_loop_refit_every_new_labels=int(args.closed_loop_refit_every),
         closed_loop_min_stage2_per_gen=int(args.closed_loop_min_stage2),
         closed_loop_resume=bool(args.resume),
+        closed_loop_proxy_feedback=bool(args.closed_loop_proxy_feedback),
+        closed_loop_proxy_feedback_min_labels=int(
+            args.closed_loop_proxy_feedback_min_labels
+        ),
+        closed_loop_proxy_feedback_d3_per_epoch=int(args.closed_loop_proxy_d3),
+        closed_loop_enable_refine=bool(args.closed_loop_refine),
         stage3_resume=bool(args.resume),
         stage3_save_interval_updates=int(args.stage3_save_interval),
         device=args.device,

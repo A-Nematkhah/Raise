@@ -542,13 +542,22 @@ class StageIEvolver:
         phase: str,
         attempt: int,
     ) -> RewardCandidate:
-        weakness = (
-            f"Parent {parent.candidate_id} score={parent.score}. "
-            f"Weakness focus: improve analytical Score1 relative to elites. "
-            f"Global reflection: {reflection}"
-        )
+        proxy_fb = (parent.metadata or {}).get("proxy_feedback")
+        if proxy_fb:
+            weakness = (
+                f"Parent {parent.candidate_id} Score1={parent.score}. "
+                f"Use the Stage-II proxy feedback below (higher priority than "
+                f"Score1 alone).\n{proxy_fb}\n"
+                f"Global reflection: {reflection}"
+            )
+        else:
+            weakness = (
+                f"Parent {parent.candidate_id} score={parent.score}. "
+                f"Weakness focus: improve analytical Score1 relative to elites. "
+                f"Global reflection: {reflection}"
+            )
         parent_hints = (parent.metadata or {}).get("score1_failure_hints")
-        if parent_hints:
+        if parent_hints and not proxy_fb:
             weakness = (
                 f"{weakness}\nScore1 diagnostics for this parent: {parent_hints}"
             )
@@ -755,6 +764,16 @@ class StageIEvolver:
                     seen.add(b)
                     uniq.append(b)
             note = note + " Diagnostics: " + " | ".join(uniq[:3])
+        try:
+            from crowd_nav.reward_search.raise_loop.proxy_feedback import (
+                proxy_summary_for_reflection,
+            )
+
+            proxy_line = proxy_summary_for_reflection(ranked)
+            if proxy_line:
+                note = note + " " + proxy_line
+        except Exception:  # noqa: BLE001
+            pass
         if not self.reflection.strip():
             return note
         parts = [p.strip() for p in self.reflection.split(" || ") if p.strip()]

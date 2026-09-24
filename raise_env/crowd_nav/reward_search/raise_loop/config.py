@@ -14,7 +14,7 @@ class ClosedLoopConfig:
     generations: int = 10
     min_labels_for_gate: int = 24
     refit_every_new_labels: int = 8
-    stage2_train_steps: int = 4_000
+    stage2_train_steps: int = 8_000
     k2_unit: str = "gradient_steps"
     drop_fraction: float = 0.25
     max_uncertainty_to_drop: float = 0.15
@@ -23,7 +23,12 @@ class ClosedLoopConfig:
     al_enabled: bool = True
     al_max_per_epoch: int = 4
     al_allow_stage1_requests: bool = True
-    enable_refine: bool = False  # reserved; v1 does not run D.3 inside loop
+    # When True, attach SR/CR/TR blocks for mutation / optional in-loop D.3.
+    proxy_feedback: bool = False
+    proxy_feedback_min_labels: int = 16
+    # Max D.3 rewrites per epoch using proxy metrics (0 = off).
+    proxy_feedback_d3_per_epoch: int = 0
+    enable_refine: bool = False  # legacy alias; prefer proxy_feedback_d3_per_epoch
     final_stage2_rounds: int = 0
     surrogate_model_dir: str = "artifacts/surrogate"
     surrogate_dataset: str = "data/surrogate_dataset"

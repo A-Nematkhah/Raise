@@ -393,6 +393,21 @@ class ClosedLoopRunner:
 
             n_ok = 0
             n_fail = 0
+            n_proxy_fb = 0
+            # Score1 / scalar pools for mismatch detection (include prior labels on pop).
+            pop_s1 = [
+                float(c.score)
+                for c in ranked
+                if c.score is not None and float(c.score) == float(c.score)
+            ]
+            pop_sc = []
+            for c in ranked:
+                m = (c.metadata or {}).get("last_metrics")
+                if isinstance(m, dict) and "SR" in m:
+                    from crowd_nav.reward_search.raise_loop.proxy_feedback import nav_scalar
+
+                    pop_sc.append(nav_scalar(m))
+
             for i, cand in enumerate(to_label):
                 if str(cand.candidate_id) in labeled_this_epoch:
                     continue
@@ -418,6 +433,29 @@ class ClosedLoopRunner:
                     n_labeled = len(known_ids)
                 elif status == "skipped":
                     pass
+
+                metrics = (cand.metadata or {}).get("last_metrics")
+                if isinstance(metrics, dict) and metrics:
+                    from crowd_nav.reward_search.raise_loop.proxy_feedback import (
+                        attach_proxy_feedback,
+                        nav_scalar,
+                    )
+
+                    pop_sc.append(nav_scalar(metrics))
+                    if cand.score is not None:
+                        pop_s1.append(float(cand.score))
+                    if attach_proxy_feedback(
+                        cand,
+                        metrics,
+                        enabled=bool(getattr(cfg, "proxy_feedback", False)),
+                        n_labeled_dataset=int(n_labeled),
+                        min_labels=int(getattr(cfg, "proxy_feedback_min_labels", 16)),
+                        epoch=int(g),
+                        population_score1=pop_s1,
+                        population_scalars=pop_sc,
+                    ):
+                        n_proxy_fb += 1
+
                 # Each label is a Stage II train/eval; checkpoint per candidate so an
                 # interrupt costs at most one candidate of compute.
                 labeled_this_epoch.add(str(cand.candidate_id))
@@ -435,6 +473,49 @@ class ClosedLoopRunner:
 
             n_labeled = len(existing_example_ids(cfg.surrogate_dataset))
             known_ids = existing_example_ids(cfg.surrogate_dataset)
+
+            # Optional in-loop D.3 on worst proxy candidates (budget-capped).
+            d3_n = int(getattr(cfg, "proxy_feedback_d3_per_epoch", 0) or 0)
+            if bool(getattr(cfg, "enable_refine", False)) and d3_n <= 0:
+                d3_n = 1
+            n_d3 = 0
+            if (
+                bool(getattr(cfg, "proxy_feedback", False))
+                and d3_n > 0
+                and int(g) >= 1
+                and int(n_labeled) >= int(getattr(cfg, "proxy_feedback_min_labels", 16))
+            ):
+                from crowd_nav.reward_search.raise_loop.proxy_feedback import (
+                    apply_in_loop_d3,
+                    select_for_in_loop_d3,
+                )
+
+                targets = select_for_in_loop_d3(to_label, max_n=d3_n)
+                for old in targets:
+                    new_c = apply_in_loop_d3(
+                        old, llm=self.llm, validator=self.validator
+                    )
+                    if new_c is old or new_c.candidate_id == old.candidate_id:
+                        continue
+                    n_d3 += 1
+                    # Swap into ranked / to_label / population lists in-place.
+                    for lst in (ranked, to_label, population):
+                        for j, c in enumerate(lst):
+                            if str(c.candidate_id) == str(old.candidate_id):
+                                lst[j] = new_c
+                    # Re-score only the rewritten genome so next_generation sees Score1.
+                    try:
+                        rescored = evolver.score_population([new_c])
+                        if rescored:
+                            new_c = rescored[0]
+                            for lst in (ranked, to_label, population):
+                                for j, c in enumerate(lst):
+                                    if str(c.candidate_id) == str(new_c.candidate_id) or (
+                                        str(c.candidate_id) == str(old.candidate_id)
+                                    ):
+                                        lst[j] = new_c
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("in-loop D.3 rescore failed: %s", exc)
 
             should_refit = False
             if g == 0:
@@ -477,6 +558,8 @@ class ClosedLoopRunner:
                 "refit": fit_metrics is not None,
                 "n_label_ok": n_ok,
                 "n_label_failed": n_fail,
+                "n_proxy_feedback": n_proxy_fb,
+                "n_in_loop_d3": n_d3,
             }
             if epoch_resumed:
                 # Counts cover only the labels this process produced.

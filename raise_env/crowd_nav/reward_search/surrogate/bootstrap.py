@@ -241,13 +241,20 @@ def run_bootstrap(
     llm_provider: str = "seed",
     device: str = "cpu",
     label_rejected: bool = True,
-    num_processes: int = 1,
+    num_processes: int = 2,
+    human_num: int = 5,
+    predict_method: str = "inferred",
+    randomization_regime: str = "with_random",
+    horizon_steps: int = 100,
 ) -> dict[str, Any]:
     """
     End-to-end surrogate bootstrap (idempotent unless ``force``).
 
     ``num_processes`` defaults to 1 — Windows + GST + CUDA with the Stage II
     default (up to 16 workers) can OOM the host / kill the IDE.
+
+    Defaults match the 12h closed-loop profile: human_num=5, with_random,
+    inferred GST, K2=8000 gradient steps.
 
     See ``PLAN.md`` §5.
     """
@@ -281,6 +288,7 @@ def run_bootstrap(
 
     from crowd_nav.domains import load_domain, make_stage2_trainer_for_domain
     from crowd_nav.reward_search.refine import Stage2Config
+    from crowd_nav.reward_search.regime import env_name_for_predict_method
 
     pack = load_domain("crowdnav")
     score_fn, _dataset = pack.make_score_fn(
@@ -305,15 +313,20 @@ def run_bootstrap(
         known_ids = set()
 
     nproc = 1 if use_stub else max(1, int(num_processes))
+    pred = str(predict_method)
     stage2_cfg = Stage2Config(
         train_env_steps=int(stage2_train_steps),
         k2_unit=str(k2_unit),
         eval_episodes=8 if use_stub else 50,
-        horizon_steps=20 if use_stub else 100,
+        horizon_steps=20 if use_stub else max(1, int(horizon_steps)),
         seed=int(seed),
         device=str(device),
         output_root=os.path.join(model_dir, "_stage2_runs"),
         num_processes=nproc,
+        human_num=max(1, int(human_num)),
+        predict_method=pred,
+        randomization_regime=str(randomization_regime),
+        env_name=env_name_for_predict_method(pred),
     )
 
     labeled = 0
@@ -365,6 +378,10 @@ def run_bootstrap(
         "stage1_dataset_path": stage1_dataset_path if score1_mode == "dataset" else None,
         "stage2_train_steps": int(stage2_train_steps),
         "k2_unit": str(k2_unit),
+        "human_num": max(1, int(human_num)),
+        "predict_method": str(predict_method),
+        "randomization_regime": str(randomization_regime),
+        "horizon_steps": int(stage2_cfg.horizon_steps),
         "llm_provider": str(llm_provider),
         "num_processes": int(nproc),
         "seed": int(seed),

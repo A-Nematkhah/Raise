@@ -113,7 +113,7 @@ class RaiseRunConfig:
     closed_loop_no_al: bool = False
     closed_loop_al_max_per_epoch: int = 4
     closed_loop_min_labels_for_gate: int = 24
-    closed_loop_k2: int = 4_000
+    closed_loop_k2: int = 8_000
     closed_loop_final_stage2_rounds: int = 0
     closed_loop_refit_every_new_labels: int = 8
     closed_loop_min_stage2_per_gen: int = 4
@@ -121,6 +121,12 @@ class RaiseRunConfig:
     closed_loop_resume: bool = True
     # Keep surrogate model / dataset / AL queue inside output_dir (self-contained run).
     closed_loop_isolate_artifacts: bool = True
+    # Feed Stage-II SR/CR/TR into D.2 mutation prompts (selective).
+    closed_loop_proxy_feedback: bool = False
+    closed_loop_proxy_feedback_min_labels: int = 16
+    # Max in-loop D.3 rewrites per epoch (0 = off; needs proxy_feedback).
+    closed_loop_proxy_feedback_d3_per_epoch: int = 0
+    closed_loop_enable_refine: bool = False  # legacy → d3_per_epoch=1 when set
     # Crash-safe Stage III resume from output_dir/stage3/checkpoint.json (+ mid-PPO).
     stage3_resume: bool = True
     stage3_save_interval_updates: int = 50
@@ -289,6 +295,12 @@ class RaisePipeline:
             horizon_steps=max(1, int(cfg.stage2_horizon)),
             resume=bool(cfg.closed_loop_resume),
             isolate_run_artifacts=bool(cfg.closed_loop_isolate_artifacts),
+            proxy_feedback=bool(cfg.closed_loop_proxy_feedback),
+            proxy_feedback_min_labels=int(cfg.closed_loop_proxy_feedback_min_labels),
+            proxy_feedback_d3_per_epoch=int(
+                cfg.closed_loop_proxy_feedback_d3_per_epoch
+            ),
+            enable_refine=bool(cfg.closed_loop_enable_refine),
         )
         if cfg.fast:
             cl_cfg.apply_fast_profile()
