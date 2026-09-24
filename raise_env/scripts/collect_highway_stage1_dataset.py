@@ -41,18 +41,18 @@ def main() -> int:
     if root not in sys.path:
         sys.path.insert(0, root)
 
-    from crowd_nav.domains.highway.env_wrapper import (
+    from domains.highway.env_wrapper import (
         kinematics_to_state,
         make_base_env,
         default_env_config,
     )
-    from crowd_nav.domains.highway.prompts import D5_SEED_FUNCTION
-    from crowd_nav.domains.highway.stage1 import (
+    from domains.highway.prompts import D5_SEED_FUNCTION
+    from domains.highway.stage1 import (
         HighwayTrajectoryRecord,
         save_highway_dataset,
     )
-    from crowd_nav.reward_search.sandbox import RewardValidator
-    from crowd_nav.domains.highway.state import default_smoke_states
+    from raise_core.sandbox import RewardValidator
+    from domains.highway.state import default_smoke_states
 
     validator = RewardValidator(smoke_states=default_smoke_states())
     reward_fn = validator.validate_code(D5_SEED_FUNCTION)

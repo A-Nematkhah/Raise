@@ -2,7 +2,7 @@
 """
 Bootstrap surrogate dataset + model.
 
-Implementation: ``crowd_nav.reward_search.surrogate.bootstrap.run_bootstrap``.
+Implementation: ``raise_core.surrogate.bootstrap.run_bootstrap``.
 Design: ``crowd_nav/reward_search/surrogate/PLAN.md`` (locked v1).
 
 Match the closed-loop Stage II env when warm-starting a RAISE run.
@@ -100,7 +100,7 @@ def main() -> int:
     if str(args.device).lower() != "cuda":
         sys.argv.append("--no-cuda")
 
-    from crowd_nav.reward_search.surrogate.bootstrap import run_bootstrap
+    from raise_core.surrogate.bootstrap import run_bootstrap
 
     result = run_bootstrap(
         stage1_dataset_path=args.stage1_dataset,

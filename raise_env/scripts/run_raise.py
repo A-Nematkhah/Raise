@@ -36,8 +36,8 @@ os.chdir(_ROOT)
 
 
 def main() -> int:
-    from crowd_nav.reward_search.pipeline import RaisePipeline, RaiseRunConfig
-    from crowd_nav.reward_search.validate import STAGE3_PAPER_STEPS, STAGE3_STEPS
+    from raise_core.pipeline import RaisePipeline, RaiseRunConfig
+    from raise_core.validate import STAGE3_PAPER_STEPS, STAGE3_STEPS
 
     parser = argparse.ArgumentParser(description="RAISE end-to-end")
     parser.add_argument("--output-dir", type=str, default="results/raise_run")
@@ -46,7 +46,7 @@ def main() -> int:
         "--domain",
         type=str,
         default="crowdnav",
-        help="Domain pack under crowd_nav.domains (default: crowdnav baseline)",
+        help="Domain pack under raise_core.domains (default: crowdnav baseline)",
     )
     parser.add_argument("--llm-model", type=str, default=None)
     parser.add_argument(
@@ -356,7 +356,7 @@ def main() -> int:
     # Protect Config.get_args() class-body from our CLI flags.
     sys.argv = [sys.argv[0], "--no-cuda" if args.device == "cpu" else "--seed", str(args.seed)]
 
-    from crowd_nav.reward_search import console as _console
+    from raise_core import console as _console
 
     _console.configure_run_logging(verbose=bool(args.verbose))
 
@@ -430,7 +430,7 @@ def main() -> int:
     if args.human_num is not None:
         cfg.human_num = max(1, int(args.human_num))
 
-    from crowd_nav.domains import available_domains, load_domain
+    from raise_core.domains import available_domains, load_domain
 
     try:
         pack = load_domain(cfg.domain)

@@ -121,7 +121,7 @@ def eval_baseline_multi_seed(
     human_num: int,
     randomize: bool = False,
 ) -> Dict[str, Any]:
-    from crowd_nav.reward_search.reporting import evaluate_saved_model
+    from domains.crowdnav.reporting import evaluate_saved_model
 
     rows = []
     for seed in seeds:
@@ -186,7 +186,7 @@ def main() -> int:
     args = parser.parse_args()
 
     import crowd_sim  # noqa: F401
-    from crowd_nav.reward_search.reporting import write_json
+    from domains.crowdnav.reporting import write_json
 
     run_dir = os.path.abspath(args.run_dir)
     seeds = [int(args.base_seed) + i for i in range(int(args.n_seeds))]

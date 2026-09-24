@@ -23,7 +23,7 @@ def main() -> int:
     if root not in sys.path:
         sys.path.insert(0, root)
 
-    from crowd_nav.reward_search.raise_loop.report import (
+    from raise_core.raise_loop.report import (
         build_closed_loop_report,
         write_closed_loop_report,
     )

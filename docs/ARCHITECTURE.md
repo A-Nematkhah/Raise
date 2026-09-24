@@ -1,88 +1,89 @@
 # RAISE repository architecture
 
-This document maps **where things live** after the organizational audit.
-Scientific behavior (Score1, Stage II/III trainers, prompts, seeds) is unchanged.
+This document describes the **actual** layout after the domain-isolation
+restructure. Scientific behavior (Score1, trainers, prompts, seeds) is unchanged;
+only package ownership and import paths moved.
 
-## Repository layout
+## Top-level map (`raise_env/`)
 
 ```text
-Evonav/
-├── README.md                 # Project entry
-├── docs/
-│   └── ARCHITECTURE.md       # This file
-├── baselines_openai/         # Trimmed OpenAI Baselines (vec_env / logger)
-└── raise_env/                # CrowdNav++ fork + RAISE + domain packs
-    ├── scripts/              # CLI entry points (run / collect / report / plot)
-    ├── crowd_nav/
-    │   ├── domains/          # Environment packs (crowdnav, highway)
-    │   ├── reward_search/    # RAISE core algorithm
-    │   │   ├── explore.py    # Stage I (Score1 evolution)
-    │   │   ├── refine.py     # Stage II (short RL + D.3)
-    │   │   ├── validate.py   # Stage III (long RL + H-sweep)
-    │   │   ├── pipeline.py   # Orchestrator (Alg.1 + --closed-loop)
-    │   │   ├── raise_loop/   # Innovation multi-fidelity loop
-    │   │   ├── surrogate/    # Stage-II proxy model + gate
-    │   │   ├── active_learning/
-    │   │   ├── sandbox/      # Reward AST validation
-    │   │   └── tests/
-    │   ├── configs/          # CrowdNav++ Config (simulator)
-    │   └── policy/           # CrowdNav policies
-    ├── crowd_sim/            # Gym envs (CrowdNav++)
-    ├── rl/                   # A2C / PPO / vec_env (CrowdNav++ train stack)
-    ├── gst_updated/          # Gumbel Social Transformer
-    ├── data/                 # Datasets (gitignored contents)
-    ├── artifacts/            # Fitted models (gitignored; keep fixtures)
-    └── results/              # Experiment runs (gitignored)
+raise_env/
+├── raise_core/                 # RAISE algorithm (environment-agnostic)
+│   ├── explore / refine / validate / pipeline
+│   ├── raise_loop / surrogate / active_learning / sandbox
+│   ├── domains/                # DomainPack registry ONLY (not env code)
+│   └── tests/                  # Core / innovation tests
+│
+├── domains/                    # First-class environment packs
+│   ├── crowdnav/               # CrowdNav++-specific RAISE surfaces
+│   │   ├── pack, prompts, adapter, explore_score, state, dataset, …
+│   │   ├── trainers still façade over raise_core.refine/validate RealPolicyTrainer
+│   │   └── tests/              # Score1 locks, regime, reward adapter, …
+│   └── highway/                # HighwayEnv diagnostic pack
+│       ├── pack, prompts, adapter, env_wrapper, stage1, state
+│       └── tests/
+│
+├── crowd_nav/                  # CrowdNav++ simulator stack + COMPAT SHIMS
+│   ├── configs/, policy/       # Original CrowdNav++ modules
+│   ├── reward_search/          # Thin re-exports → raise_core / domains.crowdnav
+│   └── domains/                # Thin re-exports → raise_core.domains / domains.*
+│
+├── crowd_sim/                  # Gym CrowdNav++ environments
+├── rl/                         # A2C / PPO / vec_env train stack (CrowdNav++)
+├── gst_updated/                # Gumbel Social Transformer
+├── scripts/                    # Experiment / CLI entry points
+├── data/  results/  artifacts/ # Generated outputs (gitignored)
+└── docs → ../docs/ARCHITECTURE.md
 ```
 
-## Two ways to run RAISE
+## Ownership rules
 
-| Mode | How | Code path |
-|------|-----|-----------|
-| **Paper Algorithm 1** | `python scripts/run_raise.py` (no `--closed-loop`) | `pipeline` → explore → refine → validate |
-| **Innovation closed loop** | `--closed-loop` or `run_raise_12h.py` | `pipeline` → `raise_loop.ClosedLoopRunner` → optional Stage III |
+| Concern | Lives in |
+|---------|----------|
+| Search / evolution / Score1 math / LLM / sandbox AST / surrogate / AL | `raise_core` |
+| CrowdNav prompts, RewardState, Stage I dataset, GST regime, DS-RNN | `domains.crowdnav` |
+| Highway prompts, HighwayRewardState, SB3 trainers, env wrapper | `domains.highway` |
+| Gym env + ORCA/SRNN policies + Config | `crowd_sim` / `crowd_nav.policy` / `crowd_nav.configs` / `rl` |
+| CLI experiments | `scripts/` |
+| Frozen import paths for Score1 / prompt regression | `crowd_nav.reward_search.*` shims |
 
-On-disk innovation artifacts still use the subdirectory name `closed_loop/`
-(resume-compatible). Public classes are `ClosedLoop*`; aliases `RaiseLoop*`
-are identical objects.
+## How RAISE talks to an environment
 
-## Domains
+```text
+scripts/run_raise.py --domain <name>
+  → raise_core.domains.load_domain(name)
+  → DomainPack  (prompts, make_score_fn, trainers, smoke_states)
+  → raise_core.pipeline.RaisePipeline
+```
 
-| Domain | Pack | Role |
-|--------|------|------|
-| `crowdnav` | `crowd_nav/domains/crowdnav/` | Paper baseline (GST / SRNN / Score1) — **frozen** |
-| `highway` | `crowd_nav/domains/highway/` | Diagnostic HighwayEnv (`highway-fast-v0`) — additive |
+Adding a third environment: create `domains/<name>/` with `get_pack()`, register
+in `raise_core.domains._REGISTRY`, add tests under `domains/<name>/tests/`.
 
-Select with `--domain crowdnav|highway`. Do not put Highway assumptions into
-CrowdNav Score1 / trainers; use pack factories.
+## Compatibility shims (CrowdNav freeze)
 
-## Artifacts vs source
+Imports of the form `crowd_nav.reward_search.*` and `crowd_nav.domains.*` still
+work. They re-export the new packages so Score1 baseline locks and
+`crowd_sim` wiring do not need simultaneous rewrites of every caller.
 
-| Path | Source-controlled? | Notes |
-|------|--------------------|-------|
-| `crowd_nav/`, `scripts/`, `rl/` | Yes | Code |
-| `results/` | No | Per-run outputs |
-| `artifacts/surr_warm/` | No | Warm surrogate (regenerate via `bootstrap_surrogate.py`) |
-| `artifacts/surrogate_test_fix/` | Yes | Tiny test fixture |
-| `data/stage1_dataset/` | No | Collect or copy locally |
-| `data/highway_stage1_dataset/` | No | Highway collector |
+Prefer new imports in new code:
 
-## Primary scripts
+- `from raise_core.pipeline import RaisePipeline`
+- `from domains.crowdnav.prompts import D5_SEED_FUNCTION`
+- `from domains.highway.pack import get_pack`
 
-| Script | Purpose |
-|--------|---------|
-| `run_raise.py` | Canonical CLI |
-| `run_raise_12h.py` | Overnight closed-loop profile (+ `--warm-surrogate`) |
-| `run_raise_1h.py` | Short closed-loop smoke |
-| `bootstrap_surrogate.py` | Pre-fit Stage-II surrogate |
-| `collect_stage1_dataset.py` | CrowdNav Score1 data |
-| `collect_highway_stage1_dataset.py` | Highway Stage I data |
-| `plot_raise_run.py` / `print_raise_report.py` | Analysis |
+## Experiments
 
-## Intentionally deferred (technical debt)
+| Goal | Entry |
+|------|-------|
+| Alg.1 (paper) | `python scripts/run_raise.py` |
+| Closed loop | `python scripts/run_raise.py --closed-loop` or `run_raise_12h.py` |
+| Highway smoke | `python scripts/run_raise.py --domain highway --fast` |
+| Warm surrogate | `python scripts/bootstrap_surrogate.py` |
 
-1. Renaming package `crowd_nav` → `raise` (import blast radius; CrowdNav freeze).
-2. Moving CrowdNav `RealPolicyTrainer` bodies out of `refine.py` / `validate.py`
-   into `domains/crowdnav/` (safe only with identical re-exports + freeze lift).
-3. Renaming on-disk `closed_loop/` → `raise_loop/` (needs dual-read forever for old runs).
-4. Unifying Stage II and Stage III trainer implementations.
+## Intentionally deferred
+
+1. Moving `RealPolicyTrainer` bodies from `raise_core.refine` / `validate` into
+   `domains.crowdnav.trainers_*` (façade already exists; extraction is mechanical).
+2. Splitting `RewardFunction` ABC into `raise_core.state` vs CrowdNav dataclasses
+   (currently co-located in `domains.crowdnav.state` for freeze safety).
+3. Deleting compatibility shims after all callers are retargeted.

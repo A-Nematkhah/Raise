@@ -69,12 +69,12 @@ def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
     import crowd_sim  # noqa: F401
-    from crowd_nav.reward_search.explore import RewardCandidate
-    from crowd_nav.reward_search.llm import ScriptedLLMClient
-    from crowd_nav.reward_search.parallelism import resolve_num_processes
-    from crowd_nav.reward_search.prompts import D5_SEED_FUNCTION
-    from crowd_nav.reward_search.sandbox import RewardValidator
-    from crowd_nav.reward_search.validate import (
+    from raise_core.explore import RewardCandidate
+    from raise_core.llm import ScriptedLLMClient
+    from raise_core.parallelism import resolve_num_processes
+    from domains.crowdnav.prompts import D5_SEED_FUNCTION
+    from raise_core.sandbox import RewardValidator
+    from raise_core.validate import (
         STAGE3_PAPER_STEPS,
         RealPolicyTrainer,
         Stage3Config,

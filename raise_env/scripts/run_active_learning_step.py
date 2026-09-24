@@ -33,7 +33,7 @@ def main() -> int:
     parser.add_argument("--promote-threshold", type=float, default=0.0)
     args = parser.parse_args()
 
-    from crowd_nav.reward_search.active_learning.loop import run_active_learning_step
+    from raise_core.active_learning.loop import run_active_learning_step
 
     summary = run_active_learning_step(
         surrogate_model_dir=args.surrogate,

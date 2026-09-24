@@ -143,11 +143,11 @@ def train_ds_rnn_variant(
 
 
 def main() -> int:
-    from crowd_nav.reward_search.dsrnn_baseline import (
+    from domains.crowdnav.dsrnn_baseline import (
         DEFAULT_DSRNN_NO_RAND_DIR,
         DEFAULT_DSRNN_RAND_DIR,
     )
-    from crowd_nav.reward_search.validate import STAGE3_PAPER_STEPS, STAGE3_STEPS
+    from raise_core.validate import STAGE3_PAPER_STEPS, STAGE3_STEPS
 
     parser = argparse.ArgumentParser(description="Train DS-RNN Table 1 baselines")
     parser.add_argument(

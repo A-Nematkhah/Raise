@@ -44,11 +44,11 @@ def main() -> int:
 
     # Import crowd_sim registration + Stage II after chdir/path setup.
     import crowd_sim  # noqa: F401
-    from crowd_nav.reward_search.explore import RewardCandidate
-    from crowd_nav.reward_search.llm import ScriptedLLMClient
-    from crowd_nav.reward_search.prompts import D5_SEED_FUNCTION
-    from crowd_nav.reward_search.sandbox import RewardValidator
-    from crowd_nav.reward_search.refine import (
+    from raise_core.explore import RewardCandidate
+    from raise_core.llm import ScriptedLLMClient
+    from domains.crowdnav.prompts import D5_SEED_FUNCTION
+    from raise_core.sandbox import RewardValidator
+    from raise_core.refine import (
         RealPolicyTrainer,
         Stage2Config,
         Stage2Runner,

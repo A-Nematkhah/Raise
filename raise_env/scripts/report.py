@@ -68,8 +68,8 @@ def _load_json(path: str) -> Dict[str, Any]:
 
 
 def _legacy_candidate():
-    from crowd_nav.reward_search.prompts import D5_SEED_FUNCTION
-    from crowd_nav.reward_search.reporting import load_candidate_dict
+    from domains.crowdnav.prompts import D5_SEED_FUNCTION
+    from domains.crowdnav.reporting import load_candidate_dict
 
     return load_candidate_dict(
         {
@@ -94,11 +94,11 @@ def _run_proxy_ablation(
     n_seeds: int,
 ) -> Any:
     """Table 2 rows (b)/(c): quick Stage-II-style proxy train+eval."""
-    from crowd_nav.reward_search.reporting import (
+    from domains.crowdnav.reporting import (
         EpisodeRecord,
         summarize_episodes,
     )
-    from crowd_nav.reward_search.refine import (
+    from raise_core.refine import (
         RealPolicyTrainer,
         Stage2Config,
         StubPolicyTrainer,
@@ -122,7 +122,7 @@ def _run_proxy_ablation(
         if use_stub:
             metrics = trainer.train_and_eval(candidate, round_index=0, config=cfg)
             # Synthesize episode-level rows from aggregate for JSON completeness.
-            from crowd_nav.reward_search.reporting import EpisodeRecord
+            from domains.crowdnav.reporting import EpisodeRecord
 
             n = eval_episodes
             n_s = int(round(metrics.sr * n))
@@ -160,7 +160,7 @@ def _run_proxy_ablation(
             # RealPolicyTrainer returns ProxyMetrics only — retrain is expensive;
             # use evaluate path from saved checkpoint if present.
             metrics = bundle
-            from crowd_nav.reward_search.reporting import EpisodeRecord
+            from domains.crowdnav.reporting import EpisodeRecord
 
             # Fall back: encode aggregate as synthetic episodes (same as stub path)
             # when actor is not retained. Prefer checkpoint reload when available.
@@ -210,8 +210,8 @@ def _run_full_ablation(
     n_seeds: int,
 ) -> Any:
     """Table 2 rows (a)/(d): Stage-III-style full PPO (or stub)."""
-    from crowd_nav.reward_search.reporting import EpisodeRecord, summarize_episodes
-    from crowd_nav.reward_search.validate import (
+    from domains.crowdnav.reporting import EpisodeRecord, summarize_episodes
+    from raise_core.validate import (
         RealPolicyTrainer,
         Stage3Config,
         StubPolicyTrainer,
@@ -242,7 +242,7 @@ def _run_full_ablation(
             and bundle.actor_critic is not None
             and bundle.algo_args is not None
         ):
-            from crowd_nav.reward_search.reporting import evaluate_actor_critic
+            from domains.crowdnav.reporting import evaluate_actor_critic
 
             ev = evaluate_actor_critic(
                 bundle.actor_critic,
@@ -303,7 +303,7 @@ def build_table2(
     use_stub: bool,
     work_dir: str,
 ) -> Dict[str, Any]:
-    from crowd_nav.reward_search.reporting import (
+    from domains.crowdnav.reporting import (
         format_table2_row,
         load_candidate_dict,
     )
@@ -395,14 +395,14 @@ def build_table1(
     use_stub: bool,
     work_dir: str,
 ) -> Dict[str, Any]:
-    from crowd_nav.reward_search.dsrnn_baseline import (
+    from domains.crowdnav.dsrnn_baseline import (
         DSRNN_NOT_REPRODUCED_MSG,
         dsrnn_placeholder,
         format_dsrnn_table1_row,
         resolve_checkpoint,
         resolve_dsrnn_dirs,
     )
-    from crowd_nav.reward_search.reporting import (
+    from domains.crowdnav.reporting import (
         evaluate_saved_model,
         format_table1_row,
         load_candidate_dict,
@@ -436,7 +436,7 @@ def build_table1(
                 randomize=randomize,
             )
             all_eps.extend(bundle.episodes)
-        from crowd_nav.reward_search.reporting import summarize_episodes
+        from domains.crowdnav.reporting import summarize_episodes
 
         return summarize_episodes(
             all_eps,
@@ -493,7 +493,7 @@ def build_table1(
                     randomize=True,
                 )
                 all_eps.extend(b.episodes)
-            from crowd_nav.reward_search.reporting import summarize_episodes
+            from domains.crowdnav.reporting import summarize_episodes
 
             bundle = summarize_episodes(
                 all_eps, method=display, randomize=True, metadata={"model_dir": path}
@@ -547,7 +547,7 @@ def build_table1(
                     randomize=rand,
                 )
                 all_eps.extend(b.episodes)
-            from crowd_nav.reward_search.reporting import summarize_episodes
+            from domains.crowdnav.reporting import summarize_episodes
 
             bundle = summarize_episodes(
                 all_eps,
@@ -574,11 +574,11 @@ def build_table1(
             logging.info("Table 1 RAISE (%s)", bucket)
             if use_stub or not include_raise_train:
                 # Use Stage III stub metrics path via ablation helper.
-                from crowd_nav.reward_search.reporting import (
+                from domains.crowdnav.reporting import (
                     EpisodeRecord,
                     summarize_episodes,
                 )
-                from crowd_nav.reward_search.validate import (
+                from raise_core.validate import (
                     Stage3Config,
                     StubPolicyTrainer,
                 )
@@ -659,7 +659,7 @@ def build_table1(
 
 
 def main() -> int:
-    from crowd_nav.reward_search.dsrnn_baseline import (
+    from domains.crowdnav.dsrnn_baseline import (
         DEFAULT_DSRNN_NO_RAND_DIR,
         DEFAULT_DSRNN_RAND_DIR,
     )
@@ -723,8 +723,8 @@ def main() -> int:
         datefmt="%H:%M:%S",
     )
     import crowd_sim  # noqa: F401
-    from crowd_nav.reward_search.reporting import write_json
-    from crowd_nav.reward_search.validate import STAGE3_STEPS
+    from domains.crowdnav.reporting import write_json
+    from raise_core.validate import STAGE3_STEPS
 
     use_stub = bool(args.fast)
     n_seeds = 1 if args.fast else args.n_seeds

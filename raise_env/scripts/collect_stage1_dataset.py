@@ -68,8 +68,8 @@ def _make_env(
     import gym
     import crowd_sim  # noqa: F401 — register envs before policy imports
     from crowd_nav.configs.config import Config
-    from crowd_nav.reward_search.regime import apply_regime_to_config
-    from crowd_nav.reward_search.state import LegacyReward
+    from domains.crowdnav.regime import apply_regime_to_config
+    from domains.crowdnav.state import LegacyReward
 
     cfg = Config()
     # Stage I collect: ORCA/SF rollouts → RewardState only; no GST wrapper.
@@ -286,7 +286,7 @@ def _collect_dataset_impl(
     fmt: str,
     randomization_regime: str,
 ) -> None:
-    from crowd_nav.reward_search.dataset import TrajectoryRecord, save_stage1_dataset
+    from domains.crowdnav.dataset import TrajectoryRecord, save_stage1_dataset
 
     if n_traj != 10:
         logging.warning(
@@ -311,7 +311,7 @@ def _collect_dataset_impl(
     # Ours (not paper): one clean ORCA/SF + graduated noise + random.
     schedule = build_stage1_traj_schedule(n_traj, noise_stds)
 
-    from crowd_nav.reward_search import console
+    from raise_core import console
     import time as _time
 
     t0 = _time.perf_counter()
@@ -379,7 +379,7 @@ def _collect_dataset_impl(
         )
 
     save_stage1_dataset(dataset, out_dir, fmt=fmt)
-    from crowd_nav.reward_search import console as _console
+    from raise_core import console as _console
 
     _console.status(
         f"Wrote Stage I dataset → {out_dir} "
@@ -425,7 +425,7 @@ def main() -> int:
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(levelname)s %(message)s",
     )
-    from crowd_nav.reward_search import console as _console
+    from raise_core import console as _console
 
     _console.set_verbose(bool(args.verbose))
     collect_dataset(

@@ -1,5 +1,6 @@
-"""CrowdNav domain pack (default RAISE backend)."""
+"""Compatibility shim — use ``domains.crowdnav``."""
 
-from crowd_nav.domains.crowdnav.pack import get_pack
+from domains.crowdnav import *  # noqa: F401,F403
+from domains.crowdnav import get_pack  # noqa: F401
 
 __all__ = ["get_pack"]

@@ -138,10 +138,10 @@ def run_eval(
     from rl.networks.envs import make_vec_envs
     from rl.networks.model import Policy
 
-    from crowd_nav.reward_search.regime import env_name_for_predict_method
-    from crowd_nav.reward_search.reporting import load_candidate_dict, write_json
-    from crowd_nav.reward_search.refine import evaluate_proxy_policy
-    from crowd_nav.reward_search.validate import (
+    from domains.crowdnav.regime import env_name_for_predict_method
+    from domains.crowdnav.reporting import load_candidate_dict, write_json
+    from raise_core.refine import evaluate_proxy_policy
+    from raise_core.validate import (
         Stage3Config,
         _make_full_env_config,
         _parse_stage3_algo_args,

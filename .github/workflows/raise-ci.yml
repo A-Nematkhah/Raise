@@ -1,4 +1,4 @@
-# Fast unit tests for raise_env / crowd_nav.reward_search (no GPU, no Groq network).
+# Fast unit tests for raise_env (raise_core + domains; no GPU, no Groq network).
 name: raise-env-ci
 
 on:
@@ -33,4 +33,4 @@ jobs:
 
       - name: Fast tests (exclude slow simulator collect)
         run: |
-          python -m pytest crowd_nav/reward_search/tests -m "not slow" -q
+          python -m pytest -m "not slow" -q

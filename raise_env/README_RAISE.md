@@ -3,9 +3,17 @@
 Extension of CrowdNav++ for **RAISE** reward search. Compatible with RAISE
 Algorithm 1 (arXiv:2605.11859); AMFRS mechanisms are not included.
 
+| Package | Role |
+|---------|------|
+| `raise_core/` | RAISE search / evolution (env-agnostic) |
+| `domains/crowdnav/` | CrowdNav-specific prompts, Score1 wiring, state, GST regime |
+| `domains/highway/` | HighwayEnv diagnostic pack |
+| `crowd_nav/` | CrowdNav++ configs/policies + **compat shims** |
+| `crowd_sim/`, `rl/`, `gst_updated/` | CrowdNav++ simulator stack |
+
 Upstream simulator docs: `README.md` in this directory.
 Repository layout map: [`../docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md).
-Simulator audit notes: `AUDIT.md` (CrowdNav++ env internals — not the RAISE API map).
+Simulator audit notes: `AUDIT.md` (CrowdNav++ env internals).
 
 ## Install
 
@@ -67,27 +75,22 @@ Innovation closed-loop writes under `output_dir/closed_loop/` (name kept for res
 
 ## Domain packs
 
-Reward search is wired through a **domain pack** (default `crowdnav`). Prompts,
-Stage I Score1, and Stage II/III trainers are resolved via
-`crowd_nav.domains` so another environment can be added as a sibling folder
-without rewriting the pipeline.
+Reward search is wired through a **domain pack**. Prompts, Stage I Score1, and
+Stage II/III trainers resolve via `raise_core.domains` so environments live as
+sibling packages under `domains/`.
 
-- Guide: [`crowd_nav/domains/README.md`](crowd_nav/domains/README.md)
-- CLI: `python scripts/run_raise.py --domain crowdnav ...`
-- **Highway (diagnostic, additive):** `highway-fast-v0` via `--domain highway`.
-  Install extras first: `pip install -r requirements_highway.txt`.
-  Fast wiring: `python scripts/run_raise.py --domain highway --fast --output-dir results/highway_fast`.
-  Collect Stage I data: `python scripts/collect_highway_stage1_dataset.py --out data/highway_stage1_dataset`.
-  This domain validates algorithm convergence cheaply; it does **not** replace
-  CrowdNav paper claims or GST/SRNN baselines.
-
-Do not add stub domains; only register a pack when the real env is ready.
+- Guide: [`domains/README.md`](domains/README.md)
+- CLI: `python scripts/run_raise.py --domain crowdnav|highway ...`
+- **Highway (diagnostic):** install `requirements_highway.txt`, then
+  `python scripts/run_raise.py --domain highway --fast`
+- Compat: `crowd_nav.reward_search.*` and `crowd_nav.domains.*` still re-export
+  the new packages for frozen Score1 / prompt locks.
 
 ## Stage I dataset
 
 Collect once (paper: M=100, N_traj=10). Our behavior mix is **not** claimed as
 paper text — see `scripts/collect_stage1_dataset.py` and
-`crowd_nav/domains/README.md`.
+`domains/README.md`.
 
 After the fidelity collector fix (diverse ORCA/SF/noise/random), **recollect**
 before new Stage I science runs:
@@ -101,8 +104,8 @@ Older archives may have ~5 unique trajs / 10 (duplicate deterministic ORCA/SF).
 ## Tests
 
 ```bash
-pytest crowd_nav/reward_search/tests -m "not slow"   # CI default
-pytest crowd_nav/reward_search/tests -m slow         # 1 real-env collect test
+pytest -m "not slow"   # CI default (raise_core + domains)
+pytest -m slow         # 1 real-env collect test
 ```
 
 ## Stage III H-sweep (Table 6)

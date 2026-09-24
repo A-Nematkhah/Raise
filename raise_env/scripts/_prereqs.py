@@ -56,7 +56,7 @@ def check_stage1_dataset(root: str, path: str = "data/stage1_dataset") -> List[s
 
 def check_gst_model(root: str, regime: str) -> List[str]:
     """Stage II/III with predict_method=inferred loads a GST checkpoint tree."""
-    from crowd_nav.reward_search.regime import gst_model_dir_for_regime
+    from domains.crowdnav.regime import gst_model_dir_for_regime
 
     rel = gst_model_dir_for_regime(regime)
     target = os.path.normpath(os.path.join(root, rel))

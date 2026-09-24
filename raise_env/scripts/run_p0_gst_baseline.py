@@ -47,7 +47,7 @@ def main() -> int:
     args = parser.parse_args()
 
     import crowd_sim  # noqa: F401
-    from crowd_nav.reward_search.reporting import evaluate_saved_model, write_json
+    from domains.crowdnav.reporting import evaluate_saved_model, write_json
 
     seeds = [int(args.base_seed) + i for i in range(int(args.n_seeds))]
     model_dir = "trained_models/GST_predictor_non_rand"

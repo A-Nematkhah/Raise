@@ -30,7 +30,7 @@ class CrowdSimVarNum(CrowdSim):
 
     def set_reward_fn(self, reward_fn=None):
         """Inject a custom RewardFunction, or restore VarNum LegacyReward when None."""
-        from crowd_nav.reward_search.state import LegacyReward
+        from domains.crowdnav.state import LegacyReward
         self._reward_fn_override = reward_fn
         if reward_fn is None:
             if self.config is None:
@@ -46,7 +46,7 @@ class CrowdSimVarNum(CrowdSim):
         self.action_type=config.action_space.kinematics
         # Replace base LegacyReward with the VarNum formula (pot_factor / unicycle coeffs).
         if self._reward_fn_override is None:
-            from crowd_nav.reward_search.state import LegacyReward
+            from domains.crowdnav.state import LegacyReward
             self.reward_fn = LegacyReward.from_crowd_sim_var_num(self)
 
     # set observation space and action space
@@ -375,7 +375,7 @@ class CrowdSimVarNum(CrowdSim):
 
         if self.reward_fn is not None:
             self.reward_fn.reset()
-            from crowd_nav.reward_search.state import LegacyReward
+            from domains.crowdnav.state import LegacyReward
             if isinstance(self.reward_fn, LegacyReward):
                 self.reward_fn.sync_potential(self.potential)
 
@@ -485,7 +485,7 @@ class CrowdSimVarNum(CrowdSim):
     # danger_zone: how to define the personal_zone (if the robot intrudes into this zone, the info will be Danger)
     # circle (traditional) or future (based on true future traj of humans)
     def calc_reward(self, action, danger_zone='circle'):
-        from crowd_nav.reward_search.state import LegacyReward, build_reward_state
+        from domains.crowdnav.state import LegacyReward, build_reward_state
 
         # --- Env-owned detection (never delegated to reward_fn) ---
         dmin = float('inf')

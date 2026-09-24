@@ -116,12 +116,12 @@ def main() -> int:
         format="%(asctime)s %(levelname)s %(message)s",
         datefmt="%H:%M:%S",
     )
-    from crowd_nav.reward_search import console as _console
+    from raise_core import console as _console
 
     _console.set_verbose(bool(args.verbose))
 
-    from crowd_nav.reward_search.paper_scale import PaperScaleRunner
-    from crowd_nav.reward_search.presets import load_paper_scale_yaml
+    from raise_core.paper_scale import PaperScaleRunner
+    from raise_core.presets import load_paper_scale_yaml
     from dataclasses import replace
 
     spec = load_paper_scale_yaml(args.config)

@@ -14,7 +14,7 @@ from crowd_nav.policy.orca import ORCA
 from crowd_sim.envs.utils.state import *
 from crowd_sim.envs.utils.action import ActionRot, ActionXY
 from crowd_sim.envs.utils.recorder import Recoder
-from crowd_nav.reward_search.state import (
+from domains.crowdnav.state import (
     LegacyReward,
     RewardFunction,
     build_reward_state,

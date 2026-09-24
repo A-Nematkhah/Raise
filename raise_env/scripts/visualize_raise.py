@@ -144,9 +144,9 @@ def visualize(
     import torch
     import torch.nn as nn
 
-    from crowd_nav.reward_search.regime import env_name_for_predict_method
-    from crowd_nav.reward_search.reporting import load_candidate_dict
-    from crowd_nav.reward_search.validate import Stage3Config, _make_full_env_config, _parse_stage3_algo_args
+    from domains.crowdnav.regime import env_name_for_predict_method
+    from domains.crowdnav.reporting import load_candidate_dict
+    from raise_core.validate import Stage3Config, _make_full_env_config, _parse_stage3_algo_args
     from rl.evaluation import evaluate
     from rl.networks.envs import make_vec_envs
     from rl.networks.model import Policy
