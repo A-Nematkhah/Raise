@@ -63,7 +63,7 @@ class PaperScaleSpec:
     human_counts: tuple = PAPER_HUMAN_COUNTS
     seeds: tuple = PAPER_DEFAULT_SEEDS
     score1_mode: str = "dataset"
-    stage1_dataset_path: str = "data/stage1_dataset"
+    stage1_dataset_path: str = "domains/crowdnav/data/stage1_dataset"
     device: str = "cuda"
     llm_provider: str = "seed"
     output_dir: str = "results/paper_scale"
@@ -156,7 +156,7 @@ def load_paper_scale_yaml(path: Optional[str] = None) -> PaperScaleSpec:
         human_counts=tuple(int(x) for x in (data.get("human_counts") or PAPER_HUMAN_COUNTS)),
         seeds=tuple(int(x) for x in (seeds or PAPER_DEFAULT_SEEDS)),
         score1_mode=str(data.get("score1_mode", "dataset")),
-        stage1_dataset_path=str(data.get("stage1_dataset_path", "data/stage1_dataset")),
+        stage1_dataset_path=str(data.get("stage1_dataset_path", "domains/crowdnav/data/stage1_dataset")),
         device=str(data.get("device", "cuda")),
         llm_provider=str(data.get("llm_provider", "seed")),
         output_dir=str(data.get("output_dir", "results/paper_scale")),

@@ -1,15 +1,26 @@
 # Local run artifacts (regenerate via scripts/; never commit warm models)
 results/
+
+# Per-domain datasets
+domains/crowdnav/data/stage1_dataset/
+domains/crowdnav/data/active_learning/queue.jsonl
+domains/crowdnav/data/active_learning/done.jsonl
+domains/crowdnav/data/active_learning/steps.jsonl
+domains/crowdnav/data/active_learning/manifest.json
+domains/crowdnav/data/active_learning/stage1_extra/
+!domains/crowdnav/data/active_learning/.gitkeep
+domains/crowdnav/data/surrogate_dataset/*.jsonl
+domains/crowdnav/data/surrogate_dataset/manifest.json
+
+domains/highway/data/stage1_dataset/
+!domains/highway/data/README.md
+
+# Legacy path aliases (if someone still writes under raise_env/data/)
 data/stage1_dataset/
 data/highway_stage1_dataset/
 data/surrogate_dataset/*.jsonl
 data/surrogate_dataset/manifest.json
-data/active_learning/queue.jsonl
-data/active_learning/done.jsonl
-data/active_learning/steps.jsonl
-data/active_learning/manifest.json
-data/active_learning/stage1_extra/
-!data/active_learning/.gitkeep
+data/active_learning/
 
 # All generated surrogate / experiment artifacts except tiny tracked fixtures
 artifacts/**
@@ -19,7 +30,7 @@ artifacts/**
 
 # Simulator / GST weight trees
 gst_datasets/
-gst_updated/scripts/data
+domains/crowdnav/runtime/gst_updated/scripts/data
 trained_models/
 figures/*.gif
 

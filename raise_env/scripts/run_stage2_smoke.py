@@ -13,6 +13,11 @@ Example (from ``raise_env/`` with the project venv active)::
 
 from __future__ import annotations
 
+import os as _os, sys as _sys
+_ROOT = _os.path.abspath(_os.path.join(_os.path.dirname(__file__), ".."))
+if _ROOT not in _sys.path:
+    _sys.path.insert(0, _ROOT)
+import raise_paths  # noqa: E402,F401 — arms domains/crowdnav/runtime on sys.path
 import argparse
 import logging
 import os

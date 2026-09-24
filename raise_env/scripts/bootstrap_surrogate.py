@@ -14,6 +14,11 @@ Defaults already match the 12h PROFILE (K2=8000, human_num=5, with_random):
 
 from __future__ import annotations
 
+import os as _os, sys as _sys
+_ROOT = _os.path.abspath(_os.path.join(_os.path.dirname(__file__), ".."))
+if _ROOT not in _sys.path:
+    _sys.path.insert(0, _ROOT)
+import raise_paths  # noqa: E402,F401 — arms domains/crowdnav/runtime on sys.path
 import argparse
 import json
 import os
@@ -26,7 +31,7 @@ if _ROOT not in sys.path:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Bootstrap Stage-II surrogate")
-    parser.add_argument("--stage1-dataset", default="data/stage1_dataset")
+    parser.add_argument("--stage1-dataset", default="domains/crowdnav/data/stage1_dataset")
     parser.add_argument("--out", default="artifacts/surr_warm/dataset")
     parser.add_argument("--model-out", default="artifacts/surr_warm/model")
     parser.add_argument(

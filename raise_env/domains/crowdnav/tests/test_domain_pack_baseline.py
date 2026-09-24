@@ -27,7 +27,7 @@ def test_load_crowdnav_pack():
     assert pack.name == "crowdnav"
     assert os.path.isfile(pack.spec_path)
     assert "compute_reward" in pack.seed_reward_source
-    assert pack.stage1_dataset_default == "data/stage1_dataset"
+    assert pack.stage1_dataset_default == "domains/crowdnav/data/stage1_dataset"
 
 
 def test_unknown_domain_raises():
@@ -67,7 +67,7 @@ def test_pack_formatters_match_legacy_strings():
 def test_pack_exposes_stage1_make_score_fn():
     pack = load_domain("crowdnav")
     assert pack.make_score_fn is not None
-    assert pack.stage1_dataset_default == "data/stage1_dataset"
+    assert pack.stage1_dataset_default == "domains/crowdnav/data/stage1_dataset"
     smoke_fn, dataset = pack.make_score_fn(mode="smoke")
     assert dataset is None
     assert callable(smoke_fn)

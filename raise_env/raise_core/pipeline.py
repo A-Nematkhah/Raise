@@ -72,7 +72,7 @@ class RaiseRunConfig:
     llm_model: Optional[str] = None
     # Stage I Score1: "dataset" (default, paper) | "smoke" (opt-in fast tests only)
     score1_mode: str = "dataset"
-    stage1_dataset_path: str = "data/stage1_dataset"
+    stage1_dataset_path: str = "domains/crowdnav/data/stage1_dataset"
 
     # Stage I (Table 5 / §5.1)
     stage1_population: int = 8
@@ -99,13 +99,13 @@ class RaiseRunConfig:
 
     # Surrogate / Active Learning (opt-in; off unless model dir set / flags).
     surrogate_model_dir: Optional[str] = None
-    surrogate_dataset: str = "data/surrogate_dataset"
+    surrogate_dataset: str = "domains/crowdnav/data/surrogate_dataset"
     surrogate_gate_stage3: bool = True
     surrogate_drop_fraction: float = 0.25
     surrogate_max_uncertainty_to_drop: float = 0.15
     surrogate_min_keep: int = 2
     active_learning: bool = False
-    active_learning_queue: str = "data/active_learning"
+    active_learning_queue: str = "domains/crowdnav/data/active_learning"
     active_learning_max_queries: int = 3
     active_learning_refit_every: int = 20
 

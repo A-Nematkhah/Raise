@@ -14,7 +14,7 @@ so Success / Other / Fail are represented and duplicate deterministic
 rollouts are avoided.
 
 Persists RewardState sequences only (no env reward scalars). Default format is
-a compact gzip+pickle archive ``data/stage1_dataset/stage1_dataset.npz``;
+a compact gzip+pickle archive ``domains/crowdnav/data/stage1_dataset/stage1_dataset.npz``;
 ``--format jsonl`` writes ``scenario_{j:03d}.jsonl`` instead.
 
 Examples::
@@ -25,6 +25,11 @@ Examples::
 
 from __future__ import annotations
 
+import os as _os, sys as _sys
+_ROOT = _os.path.abspath(_os.path.join(_os.path.dirname(__file__), ".."))
+if _ROOT not in _sys.path:
+    _sys.path.insert(0, _ROOT)
+import raise_paths  # noqa: E402,F401 — arms domains/crowdnav/runtime on sys.path
 import argparse
 import logging
 import os
@@ -251,7 +256,7 @@ def collect_dataset(
     n_scenarios: int = 100,
     n_traj: int = 10,
     base_seed: int = 425,
-    out_dir: str = "data/stage1_dataset",
+    out_dir: str = "domains/crowdnav/data/stage1_dataset",
     noise_stds: Tuple[float, float] = (0.25, 0.55),
     human_num: int = 20,
     fmt: str = "npz",
@@ -394,7 +399,7 @@ def main() -> int:
     parser.add_argument("--n-scenarios", type=int, default=100, help="M (paper=100)")
     parser.add_argument("--n-traj", type=int, default=10, help="N_traj (paper=10)")
     parser.add_argument("--seed", type=int, default=425)
-    parser.add_argument("--out", type=str, default="data/stage1_dataset")
+    parser.add_argument("--out", type=str, default="domains/crowdnav/data/stage1_dataset")
     parser.add_argument("--noise-std-low", type=float, default=0.25)
     parser.add_argument("--noise-std-high", type=float, default=0.55)
     parser.add_argument("--human-num", type=int, default=20)

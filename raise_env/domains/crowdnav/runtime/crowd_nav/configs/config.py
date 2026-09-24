@@ -131,16 +131,16 @@ class Config(object):
     data.render = False
     data.collect_train_data = False
     data.num_processes = 5
-    data.data_save_dir = 'gst_updated/datasets/orca_20humans_no_rand'
+    data.data_save_dir = 'domains/crowdnav/runtime/gst_updated/datasets/orca_20humans_no_rand'
     # number of seconds between each position in traj pred model
     data.pred_timestep = 0.25
 
     # config for the GST predictor
     pred = BaseConfig()
-    # see 'gst_updated/results/README.md' for how to set this variable
-    # If randomized humans: gst_updated/results/100-gumbel_social_transformer-faster_lstm-lr_0.001-init_temp_0.5-edge_head_0-ebd_64-snl_1-snh_8-seed_1000_rand/sj
-    # else: gst_updated/results/100-gumbel_social_transformer-faster_lstm-lr_0.001-init_temp_0.5-edge_head_0-ebd_64-snl_1-snh_8-seed_1000/sj
-    pred.model_dir = 'gst_updated/results/100-gumbel_social_transformer-faster_lstm-lr_0.001-init_temp_0.5-edge_head_0-ebd_64-snl_1-snh_8-seed_1000_rand/sj'
+    # see 'domains/crowdnav/runtime/gst_updated/results/README.md' for how to set this variable
+    # If randomized humans: domains/crowdnav/runtime/gst_updated/results/100-gumbel_social_transformer-faster_lstm-lr_0.001-init_temp_0.5-edge_head_0-ebd_64-snl_1-snh_8-seed_1000_rand/sj
+    # else: domains/crowdnav/runtime/gst_updated/results/100-gumbel_social_transformer-faster_lstm-lr_0.001-init_temp_0.5-edge_head_0-ebd_64-snl_1-snh_8-seed_1000/sj
+    pred.model_dir = 'domains/crowdnav/runtime/gst_updated/results/100-gumbel_social_transformer-faster_lstm-lr_0.001-init_temp_0.5-edge_head_0-ebd_64-snl_1-snh_8-seed_1000_rand/sj'
 
     # LIDAR config
     lidar = BaseConfig()

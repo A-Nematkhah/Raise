@@ -14,7 +14,7 @@ from typing import Any, Callable, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_STAGE1_DATASET = "data/stage1_dataset"
+DEFAULT_STAGE1_DATASET = "domains/crowdnav/data/stage1_dataset"
 
 
 def resolve_dataset_path(dataset_path: Optional[str] = None) -> str:

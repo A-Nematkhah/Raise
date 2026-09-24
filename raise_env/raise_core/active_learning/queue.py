@@ -1,7 +1,7 @@
 """
 Active-learning queue persistence (jsonl).
 
-Default: ``data/active_learning/queue.jsonl`` + ``done.jsonl`` + ``manifest.json``.
+Default: ``domains/crowdnav/data/active_learning/queue.jsonl`` + ``done.jsonl`` + ``manifest.json``.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ _MANIFEST = "manifest.json"
 
 
 def default_queue_root() -> str:
-    return "data/active_learning"
+    return "domains/crowdnav/data/active_learning"
 
 
 def _ensure_dir(root: str) -> None:

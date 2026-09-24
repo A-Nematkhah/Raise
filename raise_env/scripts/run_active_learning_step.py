@@ -8,6 +8,11 @@ Requires a fitted surrogate under ``--surrogate``.
 
 from __future__ import annotations
 
+import os as _os, sys as _sys
+_ROOT = _os.path.abspath(_os.path.join(_os.path.dirname(__file__), ".."))
+if _ROOT not in _sys.path:
+    _sys.path.insert(0, _ROOT)
+import raise_paths  # noqa: E402,F401 — arms domains/crowdnav/runtime on sys.path
 import argparse
 import json
 import os
@@ -21,10 +26,10 @@ if _ROOT not in sys.path:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Active learning step")
     parser.add_argument("--surrogate", default="artifacts/surrogate")
-    parser.add_argument("--queue-root", default="data/active_learning")
-    parser.add_argument("--surrogate-dataset", default="data/surrogate_dataset")
+    parser.add_argument("--queue-root", default="domains/crowdnav/data/active_learning")
+    parser.add_argument("--surrogate-dataset", default="domains/crowdnav/data/surrogate_dataset")
     parser.add_argument("--candidates", default=None, help="stage1_population.json path")
-    parser.add_argument("--stage1-dataset", default="data/stage1_dataset")
+    parser.add_argument("--stage1-dataset", default="domains/crowdnav/data/stage1_dataset")
     parser.add_argument("--max-queries", type=int, default=5)
     parser.add_argument("--refit-every", type=int, default=20)
     parser.add_argument("--force-refit", action="store_true")

@@ -229,8 +229,8 @@ def label_and_append_candidate(
 
 def run_bootstrap(
     *,
-    stage1_dataset_path: str = "data/stage1_dataset",
-    out_dir: str = "data/surrogate_dataset",
+    stage1_dataset_path: str = "domains/crowdnav/data/stage1_dataset",
+    out_dir: str = "domains/crowdnav/data/surrogate_dataset",
     model_dir: str = "artifacts/surrogate",
     n_candidates: int = 60,
     stage2_train_steps: int = 8_000,

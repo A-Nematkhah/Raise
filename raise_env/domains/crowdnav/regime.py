@@ -33,12 +33,12 @@ EVOLUTION_ENV_NAME_NONE: str = "CrowdSimVarNum-v0"
 
 # Upstream CrowdNav++ GST predictor trees (see config.py comments / README).
 GST_MODEL_DIR_WITHOUT_RANDOM = (
-    "gst_updated/results/"
+    "domains/crowdnav/runtime/gst_updated/results/"
     "100-gumbel_social_transformer-faster_lstm-lr_0.001-init_temp_0.5-"
     "edge_head_0-ebd_64-snl_1-snh_8-seed_1000/sj"
 )
 GST_MODEL_DIR_WITH_RANDOM = (
-    "gst_updated/results/"
+    "domains/crowdnav/runtime/gst_updated/results/"
     "100-gumbel_social_transformer-faster_lstm-lr_0.001-init_temp_0.5-"
     "edge_head_0-ebd_64-snl_1-snh_8-seed_1000_rand/sj"
 )

@@ -31,9 +31,9 @@ class ClosedLoopConfig:
     enable_refine: bool = False  # legacy alias; prefer proxy_feedback_d3_per_epoch
     final_stage2_rounds: int = 0
     surrogate_model_dir: str = "artifacts/surrogate"
-    surrogate_dataset: str = "data/surrogate_dataset"
-    al_root: str = "data/active_learning"
-    stage1_dataset_path: str = "data/stage1_dataset"
+    surrogate_dataset: str = "domains/crowdnav/data/surrogate_dataset"
+    al_root: str = "domains/crowdnav/data/active_learning"
+    stage1_dataset_path: str = "domains/crowdnav/data/stage1_dataset"
     label_rejected: bool = True
     seed: int = 425
     device: str = "cpu"

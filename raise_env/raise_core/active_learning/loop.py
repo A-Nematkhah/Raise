@@ -97,17 +97,17 @@ def _refit_surrogate(
 def run_active_learning_step(
     *,
     surrogate_model_dir: str = "artifacts/surrogate",
-    queue_root: str = "data/active_learning",
+    queue_root: str = "domains/crowdnav/data/active_learning",
     max_queries: int = 5,
     refit_every: int = 20,
     force_refit: bool = False,
     candidates: Optional[Sequence[Any]] = None,
     candidates_path: Optional[str] = None,
-    surrogate_dataset: str = "data/surrogate_dataset",
+    surrogate_dataset: str = "domains/crowdnav/data/surrogate_dataset",
     use_stub: bool = False,
     seed: int = 425,
     promote_threshold: float = 0.0,
-    stage1_dataset_path: str = "data/stage1_dataset",
+    stage1_dataset_path: str = "domains/crowdnav/data/stage1_dataset",
     enqueue_only: bool = False,
 ) -> Dict[str, Any]:
     """

@@ -52,7 +52,7 @@ def test_select_gen0_never_gates():
         al_enabled=True,
         al_max_per_epoch=4,
         al_allow_stage1_requests=False,
-        al_root="data/active_learning",
+        al_root="domains/crowdnav/data/active_learning",
     )
     assert gate.get("soft") is True
     assert len(to_label) == 3
@@ -84,7 +84,7 @@ def test_soft_gate_until_min_labels():
         al_enabled=False,
         al_max_per_epoch=2,
         al_allow_stage1_requests=False,
-        al_root="data/active_learning",
+        al_root="domains/crowdnav/data/active_learning",
     )
     assert gate.get("soft") is True
     assert len(to_label) == 4
@@ -138,7 +138,7 @@ def test_al_inside_epoch_hard_gate(monkeypatch):
         al_enabled=True,
         al_max_per_epoch=2,
         al_allow_stage1_requests=False,
-        al_root="data/active_learning",
+        al_root="domains/crowdnav/data/active_learning",
     )
     assert gate.get("enabled") is True
     assert gate.get("soft") is False

@@ -50,8 +50,8 @@ def _execute_stage2_label(item: QueryItem, *, config: Dict[str, Any]) -> Dict[st
     from raise_core.surrogate.dataset_io import existing_example_ids
 
     use_stub = bool(config.get("use_stub", False))
-    out_dir = str(config.get("surrogate_dataset") or "data/surrogate_dataset")
-    stage1_dataset = config.get("stage1_dataset_path") or "data/stage1_dataset"
+    out_dir = str(config.get("surrogate_dataset") or "domains/crowdnav/data/surrogate_dataset")
+    stage1_dataset = config.get("stage1_dataset_path") or "domains/crowdnav/data/stage1_dataset"
     score1_mode = "smoke" if use_stub else str(config.get("score1_mode") or "dataset")
 
     pack = load_domain("crowdnav")
@@ -107,7 +107,7 @@ def _execute_stage1_scenario(item: QueryItem, *, config: Dict[str, Any]) -> Dict
     Safe path (PLAN option A): record scenario requests under stage1_extra/
     without mutating the locked paper Stage I dataset.
     """
-    queue_root = str(config.get("queue_root") or "data/active_learning")
+    queue_root = str(config.get("queue_root") or "domains/crowdnav/data/active_learning")
     extra_dir = str(
         config.get("stage1_extra_dir")
         or os.path.join(queue_root, "stage1_extra")

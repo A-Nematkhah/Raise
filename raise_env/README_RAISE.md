@@ -6,10 +6,9 @@ Algorithm 1 (arXiv:2605.11859); AMFRS mechanisms are not included.
 | Package | Role |
 |---------|------|
 | `raise_core/` | RAISE search / evolution (env-agnostic) |
-| `domains/crowdnav/` | CrowdNav-specific prompts, Score1 wiring, state, GST regime |
-| `domains/highway/` | HighwayEnv diagnostic pack |
-| `crowd_nav/` | CrowdNav++ configs/policies + **compat shims** |
-| `crowd_sim/`, `rl/`, `gst_updated/` | CrowdNav++ simulator stack |
+| `domains/crowdnav/` | Pack + `data/` + `runtime/` (crowd_sim, crowd_nav, rl, gst) |
+| `domains/highway/` | HighwayEnv pack + `data/` |
+| `raise_paths.py` | Puts `domains/crowdnav/runtime` on `sys.path` |
 
 Upstream simulator docs: `README.md` in this directory.
 Repository layout map: [`../docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md).
@@ -96,7 +95,7 @@ After the fidelity collector fix (diverse ORCA/SF/noise/random), **recollect**
 before new Stage I science runs:
 
 ```bash
-python scripts/collect_stage1_dataset.py --out data/stage1_dataset
+python scripts/collect_stage1_dataset.py --out domains/crowdnav/data/stage1_dataset
 ```
 
 Older archives may have ~5 unique trajs / 10 (duplicate deterministic ORCA/SF).
@@ -118,4 +117,4 @@ Paper-scale YAML keeps `human_counts: [5, 10, 15, 20]`.
 
 ## Baseline checkpoints
 
-Pretrained ORCA/SF/GST under `trained_models/` (see `scripts/report.py`). GST weights under `gst_updated/results/`.
+Pretrained ORCA/SF/GST under `trained_models/` (see `scripts/report.py`). GST weights under `domains/crowdnav/runtime/gst_updated/results/`.

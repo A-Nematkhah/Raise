@@ -32,7 +32,7 @@ def _default_baseline_stage1_hint() -> str:
     return sibling
 
 
-def check_stage1_dataset(root: str, path: str = "data/stage1_dataset") -> List[str]:
+def check_stage1_dataset(root: str, path: str = "domains/crowdnav/data/stage1_dataset") -> List[str]:
     """Score1 needs the collected scenario dataset (npz archive or jsonl dir)."""
     target = os.path.normpath(path if os.path.isabs(path) else os.path.join(root, path))
     npz = os.path.join(target, "stage1_dataset.npz")
@@ -68,8 +68,8 @@ def check_gst_model(root: str, regime: str) -> List[str]:
         f"Missing GST predictor for regime={regime}: {rel}",
         f"  Expected directory: {target}",
         "  It must contain checkpoint/args.pickle (+ the trained weights).",
-        "  Fetch it via gst_updated/run/download_datasets_models.sh, or copy the",
-        "  tree from another checkout (see gst_updated/results/README.md).",
+        "  Fetch it via domains/crowdnav/runtime/gst_updated/run/download_datasets_models.sh, or copy the",
+        "  tree from another checkout (see domains/crowdnav/runtime/gst_updated/results/README.md).",
     ]
 
 

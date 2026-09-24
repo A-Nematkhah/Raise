@@ -21,7 +21,7 @@ G1: 10
 M: 100
 N_traj: 10
 score1_mode: dataset
-stage1_dataset_path: data/stage1_dataset
+stage1_dataset_path: domains/crowdnav/data/stage1_dataset
 
 # Stage II proxy refinement (Table 5)
 # Paper §4.3.2: K2 = 8000 gradient steps. Pipeline / CLI defaults match

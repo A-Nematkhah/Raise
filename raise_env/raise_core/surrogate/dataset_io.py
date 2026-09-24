@@ -1,7 +1,7 @@
 """
 Surrogate dataset I/O: jsonl features/labels + manifest.
 
-Default root: ``raise_env/data/surrogate_dataset/``.
+Default root: ``raise_env/domains/crowdnav/data/surrogate_dataset/``.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ _MANIFEST_NAME = "manifest.json"
 
 
 def default_dataset_root() -> str:
-    return "data/surrogate_dataset"
+    return "domains/crowdnav/data/surrogate_dataset"
 
 
 def _ensure_dir(root: str) -> None:

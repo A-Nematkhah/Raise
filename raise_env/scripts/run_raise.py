@@ -21,6 +21,11 @@ Examples (from ``raise_env/`` with system Python)::
 
 from __future__ import annotations
 
+import os as _os, sys as _sys
+_ROOT = _os.path.abspath(_os.path.join(_os.path.dirname(__file__), ".."))
+if _ROOT not in _sys.path:
+    _sys.path.insert(0, _ROOT)
+import raise_paths  # noqa: E402,F401 — arms domains/crowdnav/runtime on sys.path
 import argparse
 import logging
 import os
@@ -79,7 +84,7 @@ def main() -> int:
     parser.add_argument(
         "--stage1-dataset",
         type=str,
-        default="data/stage1_dataset",
+        default="domains/crowdnav/data/stage1_dataset",
         help="Path from scripts/collect_stage1_dataset.py",
     )
     parser.add_argument("--fast", action="store_true", help="Stub trainers + smoke Score1")
@@ -223,7 +228,7 @@ def main() -> int:
     parser.add_argument(
         "--surrogate-dataset",
         type=str,
-        default="data/surrogate_dataset",
+        default="domains/crowdnav/data/surrogate_dataset",
         help="Surrogate label jsonl root for AL append/refit",
     )
     parser.add_argument(
@@ -444,7 +449,7 @@ def main() -> int:
 
     # If caller left the CrowdNav Stage I default path, prefer the pack default.
     if (
-        str(cfg.stage1_dataset_path).replace("\\", "/") == "data/stage1_dataset"
+        str(cfg.stage1_dataset_path).replace("\\", "/") == "domains/crowdnav/data/stage1_dataset"
         and pack.stage1_dataset_default
         and pack.name != "crowdnav"
     ):
