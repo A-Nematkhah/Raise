@@ -25,7 +25,7 @@ from raise_core.scoring import Score1Result
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_STAGE1_DATASET = "data/highway_stage1_dataset"
+DEFAULT_STAGE1_DATASET = "domains/highway/data/stage1_dataset"
 
 
 @dataclass

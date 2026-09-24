@@ -33,12 +33,13 @@ def _require_highway_deps() -> None:
 
 
 def default_env_config() -> Dict[str, Any]:
+    # absolute=True: ego x is world frame so progress = Δx is well-defined.
     return {
         "observation": {
             "type": "Kinematics",
             "vehicles_count": MAX_OTHERS + 1,
             "features": ["presence", "x", "y", "vx", "vy", "heading"],
-            "absolute": False,
+            "absolute": True,
             "normalize": False,
             "see_behind": True,
         },
@@ -65,10 +66,18 @@ def make_base_env(*, seed: Optional[int] = None, config: Optional[Dict[str, Any]
 
     cfg = default_env_config()
     if config:
-        cfg.update(config)
-    env = gym.make(ENV_ID, render_mode=None, config=cfg)
-    if seed is not None:
-        env.reset(seed=int(seed))
+        nested = dict(cfg)
+        for key, value in config.items():
+            if isinstance(value, dict) and isinstance(nested.get(key), dict):
+                merged = dict(nested[key])
+                merged.update(value)
+                nested[key] = merged
+            else:
+                nested[key] = value
+        cfg = nested
+    env = gym.make(ENV_ID, render_mode=None)
+    env.unwrapped.configure(cfg)
+    env.reset(seed=int(seed) if seed is not None else None)
     return env
 
 
@@ -89,28 +98,28 @@ def kinematics_to_state(
     prev_ego_x: Optional[float],
 ) -> Tuple[HighwayRewardState, float]:
     """
-    Map Kinematics observation matrix to HighwayRewardState.
+    Map absolute Kinematics observation to HighwayRewardState.
 
-    Returns ``(state, ego_x_absolute_proxy)`` where the second value is the
-    ego x used for next-step progress (relative obs → cumulative).
+    ``progress`` is forward Δx since the previous frame (clamped at 0).
+    Nearby vehicles are stored ego-relative (x/y minus ego).
     """
     arr = np.asarray(obs, dtype=np.float64)
     if arr.ndim != 2 or arr.shape[1] < 6:
         raise ValueError(f"Expected kinematics matrix Nx>=6, got {arr.shape}")
 
     ego_row = arr[0]
-    # Relative kinematics: ego is at origin; track cumulative x via caller.
-    rel_x = float(ego_row[1]) if _row_presence(ego_row) else 0.0
-    ego_x = float(prev_ego_x or 0.0) + rel_x
-    # After first frame with relative obs, ego row x is usually ~0; progress
-    # comes from integrating vehicle speed * dt instead when rel_x≈0.
+    ego_x = float(ego_row[1]) if _row_presence(ego_row) else float(prev_ego_x or 0.0)
+    ego_y = float(ego_row[2]) if _row_presence(ego_row) else 0.0
     vx = float(ego_row[3]) if _row_presence(ego_row) else 0.0
     vy = float(ego_row[4]) if _row_presence(ego_row) else 0.0
     heading = float(ego_row[5]) if _row_presence(ego_row) else 0.0
     speed = float((vx ** 2 + vy ** 2) ** 0.5)
-    progress = speed * float(time_step)
-    if prev_ego_x is not None and abs(rel_x) > 1e-6:
-        progress = max(progress, rel_x)
+    if prev_ego_x is None:
+        progress = 0.0
+    else:
+        progress = max(0.0, ego_x - float(prev_ego_x))
+        if progress < 1e-6 and speed > 0.5:
+            progress = speed * float(time_step)
 
     others = []
     for row in arr[1 : MAX_OTHERS + 1]:
@@ -118,22 +127,21 @@ def kinematics_to_state(
             continue
         others.append(
             NearbyVehicle(
-                x=float(row[1]),
-                y=float(row[2]),
+                x=float(row[1]) - ego_x,
+                y=float(row[2]) - ego_y,
                 vx=float(row[3]),
                 vy=float(row[4]),
                 heading=float(row[5]),
             )
         )
 
-    # Lane index not in default features — use y banding as a soft proxy.
-    lane_index = float(max(0, min(DEFAULT_LANES - 1, int(round(float(ego_row[2]) / 4.0 + 1.5)))))
+    lane_index = float(max(0, min(DEFAULT_LANES - 1, int(round(ego_y / 4.0 + 1.5)))))
     on_road = not bool(off_road)
 
     state = HighwayRewardState(
         ego=EgoVehicle(
             x=ego_x,
-            y=float(ego_row[2]) if _row_presence(ego_row) else 0.0,
+            y=ego_y,
             vx=vx,
             vy=vy,
             heading=heading,
@@ -155,9 +163,15 @@ def kinematics_to_state(
     return state, ego_x
 
 
-class RewardInjectedHighwayEnv:
+def _gym_wrapper_base():
+    import gymnasium as gym
+
+    return gym.Wrapper
+
+
+class RewardInjectedHighwayEnv(_gym_wrapper_base()):  # type: ignore[misc,valid-type]
     """
-    Thin adapter around highway-fast-v0 that replaces the native reward with
+    Gymnasium Wrapper that replaces the native reward with
     ``reward_fn.compute(HighwayRewardState)``.
     """
 
@@ -168,34 +182,27 @@ class RewardInjectedHighwayEnv:
         seed: Optional[int] = None,
         config: Optional[Dict[str, Any]] = None,
     ) -> None:
+        env = make_base_env(seed=seed, config=config)
+        super().__init__(env)
         self.reward_fn = reward_fn
         self._seed = seed
-        self._config = config
-        self.env = make_base_env(seed=seed, config=config)
-        self._ego_x = 0.0
+        self._ego_x: Optional[float] = None
         self._global_time = 0.0
+        merged = default_env_config()
+        if config:
+            merged.update(config)
         self._time_step = float(
-            1.0 / float((config or default_env_config()).get("policy_frequency", DEFAULT_POLICY_FREQ))
+            1.0 / float(merged.get("policy_frequency", DEFAULT_POLICY_FREQ))
         )
-        self._time_limit = float(
-            (config or default_env_config()).get("duration", DEFAULT_DURATION)
-        )
+        self._time_limit = float(merged.get("duration", DEFAULT_DURATION))
         self._last_info: Dict[str, Any] = {}
-
-    @property
-    def observation_space(self):
-        return self.env.observation_space
-
-    @property
-    def action_space(self):
-        return self.env.action_space
 
     def reset(self, *, seed: Optional[int] = None, options: Optional[dict] = None):
         if hasattr(self.reward_fn, "reset"):
             self.reward_fn.reset()
-        self._ego_x = 0.0
+        self._ego_x = None
         self._global_time = 0.0
-        kwargs = {}
+        kwargs: Dict[str, Any] = {}
         if seed is not None:
             kwargs["seed"] = int(seed)
         elif self._seed is not None:
@@ -203,22 +210,24 @@ class RewardInjectedHighwayEnv:
         if options is not None:
             kwargs["options"] = options
         obs, info = self.env.reset(**kwargs)
+        arr = np.asarray(obs, dtype=np.float64)
+        if arr.ndim == 2 and arr.shape[0] > 0 and _row_presence(arr[0]):
+            self._ego_x = float(arr[0][1])
+        else:
+            self._ego_x = 0.0
         self._last_info = dict(info or {})
         return obs, info
 
     def step(self, action):
         obs, _native_r, terminated, truncated, info = self.env.step(action)
         info = dict(info or {})
-        collision = bool(info.get("crashed", False) or terminated and info.get("crashed", terminated))
-        # highway-env sets crashed on collision; off-road may truncate.
-        off_road = bool(info.get("rewards", {}).get("on_road_reward", 1.0) == 0.0) if isinstance(
-            info.get("rewards"), dict
-        ) else bool(info.get("off_road", False))
-        if truncated and not collision:
-            # Duration end vs off-road: prefer explicit flags.
-            off_road = off_road or bool(info.get("off_road", False))
+        collision = bool(info.get("crashed", False))
+        off_road = bool(info.get("off_road", False))
+        if isinstance(info.get("rewards"), dict):
+            if info["rewards"].get("on_road_reward", 1.0) == 0.0:
+                off_road = True
         timeout = bool(truncated) and not collision and not off_road
-        if terminated and collision:
+        if collision:
             timeout = False
 
         self._global_time = min(self._time_limit, self._global_time + self._time_step)
@@ -239,12 +248,6 @@ class RewardInjectedHighwayEnv:
         info["raise_timeout"] = timeout
         info["raise_progress"] = float(state.progress)
         info["raise_speed"] = float(state.speed)
-        info["raise_ego_x"] = float(self._ego_x)
+        info["raise_ego_x"] = float(self._ego_x if self._ego_x is not None else 0.0)
         self._last_info = info
         return obs, reward, bool(terminated), bool(truncated), info
-
-    def close(self) -> None:
-        self.env.close()
-
-    def render(self):
-        return self.env.render()

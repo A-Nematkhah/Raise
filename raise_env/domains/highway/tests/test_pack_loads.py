@@ -19,7 +19,7 @@ def test_load_highway_pack():
     assert pack.name == "highway"
     assert os.path.isfile(pack.spec_path)
     assert "compute_reward" in pack.seed_reward_source
-    assert pack.stage1_dataset_default == "data/highway_stage1_dataset"
+    assert pack.stage1_dataset_default == "domains/highway/data/stage1_dataset"
     assert pack.smoke_states_fn is not None
     assert pack.make_stage2_trainer is not None
     assert pack.make_score_fn is not None

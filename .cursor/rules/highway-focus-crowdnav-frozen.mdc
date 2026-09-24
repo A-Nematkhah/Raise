@@ -1,0 +1,17 @@
+---
+description: Freeze CrowdNav baseline; work only on highway domain until unfrozen
+alwaysApply: true
+---
+
+# Domain focus: highway only (CrowdNav frozen)
+
+Until the user explicitly says CrowdNav is unfrozen:
+
+- **Do not** modify CrowdNav baseline behavior, prompts, Score1 locks, GST/SRNN trainers, or CrowdNav-only regression tests (`test_score1_baseline_lock`, `test_prompt_schema_regression`, CrowdNav prompt bytes).
+- **Do not** change default `--domain crowdnav` semantics or weaken Algorithm 1 CrowdNav parity.
+- **All new work** targets the `highway` domain pack (`crowd_nav/domains/highway/`), highway Stage I dataset/scripts, SB3 trainers, and highway docs/tests.
+- Shared core (`pipeline`, `explore`, `domains/__init__`, sandbox) may change **only** when required for highway and must keep CrowdNav paths behavior-preserving (additive / guarded by `pack.name` or pack factories).
+- Prefer `--domain highway` for runs, smoke tests, and debugging algorithm convergence.
+- If a requested change would alter CrowdNav baseline, refuse or ask the user to unfreeze first.
+
+Unfreeze trigger: user explicitly says CrowdNav is no longer frozen / resume CrowdNav work.
