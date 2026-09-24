@@ -35,13 +35,30 @@ Mapped onto RAISE `ProxyMetrics`:
 - TR — off-road (or other early failure) rate when distinguished; else 0
 - NT / PL / ITR / SD — filled with highway proxies (time, distance, 0, min gap)
 
-Primary selection scalar: `SR - CR - 0.5·TR` (`navigation_scalar`).
+Primary selection scalar (highway):
+
+```
+SR - CR - 0.5·TR
++ 0.35·tanh(progress_m / 800)
++ 0.25·tanh(mean_speed / 25)
++ 0.15·soft_success
+- crawl_penalty   # if SR high but mean_speed < 12 m/s
+```
+
+`soft_success` = fraction of episodes that survive **and** average ≥15 m/s
+**and** travel ≥400 m. This stops “crawl forever to inflate SR”.
+
+Logged continuous fields: `mean_speed`, `mean_progress`, `lane_change_rate`,
+`high_speed_frac`, `speed_p10`/`speed_p90`. Surrogate labels remain SR/CR/TR.
 
 ## Env / policy
 
 - Gymnasium id: `highway-fast-v0`
 - Policy: Stable-Baselines3 PPO (MLP)
 - Stage II: short PPO proxy; Stage III: longer PPO; **no human H-sweep**
+- Full RAISE path: warm surrogate bootstrap + closed-loop (Score1 ↔ Stage II
+  short ↔ Surrogate gate / AL / proxy feedback) then Stage III
+  (`scripts/run_raise_highway_4h.py`)
 
 ## Pack layout
 

@@ -13,7 +13,16 @@ domains/crowdnav/data/surrogate_dataset/*.jsonl
 domains/crowdnav/data/surrogate_dataset/manifest.json
 
 domains/highway/data/stage1_dataset/
+domains/highway/data/active_learning/queue.jsonl
+domains/highway/data/active_learning/done.jsonl
+domains/highway/data/active_learning/steps.jsonl
+domains/highway/data/active_learning/manifest.json
+domains/highway/data/active_learning/stage1_extra/
+!domains/highway/data/active_learning/.gitkeep
+domains/highway/data/surrogate_dataset/*.jsonl
+domains/highway/data/surrogate_dataset/manifest.json
 !domains/highway/data/README.md
+!domains/highway/data/surrogate_dataset/.gitkeep
 
 # Legacy path aliases (if someone still writes under raise_env/data/)
 data/stage1_dataset/

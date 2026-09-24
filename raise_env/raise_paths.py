@@ -24,7 +24,10 @@ HIGHWAY_DATA = os.path.join(ROOT, "domains", "highway", "data")
 # Default relative paths (from raise_env cwd) for datasets / GST trees.
 CROWDNAV_STAGE1_DATASET = "domains/crowdnav/data/stage1_dataset"
 CROWDNAV_ACTIVE_LEARNING = "domains/crowdnav/data/active_learning"
+CROWDNAV_SURROGATE_DATASET = "domains/crowdnav/data/surrogate_dataset"
 HIGHWAY_STAGE1_DATASET = "domains/highway/data/stage1_dataset"
+HIGHWAY_ACTIVE_LEARNING = "domains/highway/data/active_learning"
+HIGHWAY_SURROGATE_DATASET = "domains/highway/data/surrogate_dataset"
 GST_RUNTIME_PREFIX = "domains/crowdnav/runtime/gst_updated"
 
 

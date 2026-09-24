@@ -29,6 +29,16 @@ def navigation_scalar(sr: float, cr: float, tr: float) -> float:
 def navigation_scalar_from_dict(metrics: Optional[Mapping[str, Any]]) -> float:
     if not metrics:
         return float("-inf")
+    # Highway trainers stash a richer scalar; prefer it when present.
+    if metrics.get("selection_scalar") is not None:
+        try:
+            return float(metrics["selection_scalar"])
+        except (TypeError, ValueError):
+            pass
+    if str(metrics.get("domain", "")).strip().lower() == "highway":
+        from domains.highway.metrics import highway_navigation_scalar
+
+        return float(highway_navigation_scalar(metrics))
     sr = float(metrics.get("SR", metrics.get("sr", 0.0)))
     cr = float(metrics.get("CR", metrics.get("cr", 0.0)))
     tr = float(metrics.get("TR", metrics.get("tr", 0.0)))
@@ -37,7 +47,13 @@ def navigation_scalar_from_dict(metrics: Optional[Mapping[str, Any]]) -> float:
 
 def candidate_nav_scalar(candidate: RewardCandidate) -> float:
     md = candidate.metadata or {}
+    if md.get("selection_scalar") is not None:
+        try:
+            return float(md["selection_scalar"])
+        except (TypeError, ValueError):
+            pass
     return navigation_scalar_from_dict(md.get("last_metrics"))
+
 
 
 def pick_best_trained(

@@ -148,6 +148,13 @@ class ClosedLoopRunner:
         resumed = ckpt is not None
 
         pack = load_domain(str(getattr(cfg, "domain", "crowdnav") or "crowdnav"))
+        from raise_core.surrogate.features import set_behavior_smoke_states
+
+        if pack.smoke_states_fn is not None:
+            set_behavior_smoke_states(pack.smoke_states_fn())
+        else:
+            set_behavior_smoke_states(None)
+
         score1_mode = "smoke" if cfg.use_stub else "dataset"
         if self.score_fn is None:
             self.score_fn, _ds = pack.make_score_fn(
@@ -161,7 +168,10 @@ class ClosedLoopRunner:
 
             self.validator = make_validator_for_domain(pack)
         if self.llm is None:
-            self.llm = make_llm_client(cfg.llm_provider)
+            self.llm = make_llm_client(
+                cfg.llm_provider,
+                base_code=getattr(pack, "seed_reward_source", None),
+            )
 
         n = int(cfg.population_size)
         n_crossover = int(cfg.n_crossover)
@@ -191,12 +201,24 @@ class ClosedLoopRunner:
             ),
         )
 
-        from domains.crowdnav.regime import env_name_for_predict_method
+        domain_key = str(getattr(cfg, "domain", "crowdnav") or "crowdnav").strip().lower()
+        if domain_key == "crowdnav":
+            from domains.crowdnav.regime import env_name_for_predict_method
+
+            env_name = env_name_for_predict_method(str(cfg.predict_method))
+        else:
+            env_name = str(pack.metadata.get("env_id") or domain_key)
+
+        eval_eps = getattr(cfg, "eval_episodes", None)
+        if eval_eps is None:
+            eval_eps = 8 if cfg.use_stub else (20 if domain_key == "highway" else 50)
+        else:
+            eval_eps = max(1, int(eval_eps))
 
         stage2_cfg = Stage2Config(
             train_env_steps=int(cfg.stage2_train_steps),
             k2_unit=str(cfg.k2_unit),
-            eval_episodes=8 if cfg.use_stub else 50,
+            eval_episodes=int(eval_eps),
             horizon_steps=20 if cfg.use_stub else max(1, int(cfg.horizon_steps)),
             seed=int(cfg.seed),
             device=str(cfg.device),
@@ -205,7 +227,7 @@ class ClosedLoopRunner:
             human_num=max(1, int(cfg.human_num)),
             predict_method=str(cfg.predict_method),
             randomization_regime=str(cfg.randomization_regime),
-            env_name=env_name_for_predict_method(str(cfg.predict_method)),
+            env_name=env_name,
         )
 
         known_ids = existing_example_ids(cfg.surrogate_dataset)
@@ -496,7 +518,10 @@ class ClosedLoopRunner:
                 targets = select_for_in_loop_d3(to_label, max_n=d3_n)
                 for old in targets:
                     new_c = apply_in_loop_d3(
-                        old, llm=self.llm, validator=self.validator
+                        old,
+                        llm=self.llm,
+                        validator=self.validator,
+                        prompts=pack.prompts,
                     )
                     if new_c is old or new_c.candidate_id == old.candidate_id:
                         continue

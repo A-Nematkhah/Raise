@@ -38,12 +38,17 @@ def get_pack(*, with_adapter: bool = True) -> DomainPack:
         smoke_states_fn=default_smoke_states,
         make_stage2_trainer=make_stage2_trainer if with_adapter else None,
         make_stage3_trainer=make_stage3_trainer if with_adapter else None,
-        selection_scalar_name="navigation_scalar",
+        selection_scalar_name="highway_navigation_scalar",
         metadata={
             "env_id": "highway-fast-v0",
             "policy": "sb3_ppo_mlp",
             "pipeline_profile": "highway",
             "stage1": "highway_spearman_rules",
             "diagnostic_only": True,
+            "selection_scalar": "highway_navigation_scalar",
+            "metrics_note": (
+                "SR/CR/TR = survival rates; PL=progress_m; ITR=mean_speed_m/s; "
+                "also soft_success, lane_change_rate, high_speed_frac"
+            ),
         },
     )

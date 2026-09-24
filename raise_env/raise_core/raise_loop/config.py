@@ -57,6 +57,8 @@ class ClosedLoopConfig:
     isolate_run_artifacts: bool = True
     # Domain pack name (default CrowdNav baseline).
     domain: str = "crowdnav"
+    # Stage II eval episodes (None → domain default: highway 20, crowdnav 50).
+    eval_episodes: Optional[int] = None
 
     def apply_fast_profile(self) -> None:
         self.use_stub = True

@@ -31,9 +31,10 @@ Function Interface (EXACT FIELD STRUCTURE):
   - Do NOT define classes. Persistent state must use the ``memory`` dict only.
 - Output:
   - A single finite float reward for the current frame.
-Design Principles:
-- Progress / speed: reward forward motion and reasonable high speed.
+- Design Principles:
+- Progress / speed: reward forward motion and reasonable high speed (≈15–30 m/s).
 - Safety: heavily penalize collision and off-road; shape clearance to nearby vehicles.
+- Do NOT reward crawling: surviving at near-zero speed is a failure mode.
 - Interpretability: clear local variables; no extra signature args.
 Episode memory example:
 ```python
@@ -147,23 +148,29 @@ D4_EXTERNAL_KNOWLEDGE = """# External Knowledge — Highway Fast
 - Domain: multi-lane highway driving (highway-fast-v0)
 - Ego must survive the episode without collision/off-road while making forward progress
 ## Metrics (mapped to RAISE ProxyMetrics)
-- SR: fraction of episodes completed without collision
-- CR: collision rate
-- TR: off-road / other early failure rate (when distinguished); else 0
-- Primary scalar: SR - CR - 0.5*TR
+- SR: fraction of episodes survived without collision/off-road
+- CR: collision rate; TR: off-road rate
+- Also optimize mean speed + forward progress (do NOT survive by crawling)
+- soft_success: survive AND cruise (~≥15 m/s) AND meaningful progress
+- Primary scalar mixes safety with throughput (progress/speed), with crawl penalty
 """
 
 D5_SEED_FUNCTION = '''def compute_reward(state, memory):
-    """Highway seed: progress + speed with collision/off-road penalties."""
+    """Highway seed: progress + speed; punish crash/off-road and crawling."""
     collision_penalty = -20.0
     off_road_penalty = -10.0
-    speed_coef = 0.05
+    speed_coef = 0.08
     progress_coef = 1.0
+    crawl_penalty = 0.15
     if state.collision:
         return float(collision_penalty)
     if state.off_road:
         return float(off_road_penalty)
-    return float(progress_coef * state.progress + speed_coef * state.speed)
+    reward = progress_coef * state.progress + speed_coef * state.speed
+    # Discourage surviving by nearly stopping on the road.
+    if (not state.timeout) and state.ego.on_road and state.speed < 8.0:
+        reward = reward - crawl_penalty * (8.0 - state.speed)
+    return float(reward)
 '''
 
 

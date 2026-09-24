@@ -12,6 +12,15 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from raise_core.surrogate import FEATURE_SCHEMA_VERSION
 
+# Domain smoke states for behavior fingerprint (set by closed-loop / bootstrap).
+_SMOKE_STATES_OVERRIDE: Optional[Sequence[Any]] = None
+
+
+def set_behavior_smoke_states(states: Optional[Sequence[Any]]) -> None:
+    """Override CrowdNav default smoke states for fingerprinting (highway, etc.)."""
+    global _SMOKE_STATES_OVERRIDE
+    _SMOKE_STATES_OVERRIDE = None if states is None else tuple(states)
+
 
 def feature_schema_version() -> str:
     return FEATURE_SCHEMA_VERSION
@@ -87,7 +96,11 @@ def _score1_fields(score1_result: Any) -> Dict[str, Any]:
     }
 
 
-def _behavior_fingerprint(candidate: Any) -> List[float]:
+def _behavior_fingerprint(
+    candidate: Any,
+    *,
+    smoke_states: Optional[Sequence[Any]] = None,
+) -> List[float]:
     from raise_core.sandbox.runtime import default_smoke_states
 
     reward_fn = getattr(candidate, "reward_fn", None)
@@ -99,8 +112,14 @@ def _behavior_fingerprint(candidate: Any) -> List[float]:
     if reward_fn is None:
         return []
 
+    states = smoke_states
+    if states is None:
+        states = _SMOKE_STATES_OVERRIDE
+    if states is None:
+        states = default_smoke_states()
+
     values: List[float] = []
-    for state in default_smoke_states():
+    for state in states:
         try:
             if hasattr(reward_fn, "reset"):
                 reward_fn.reset()
@@ -121,6 +140,7 @@ def extract_candidate_features(
     score1_result: Any = None,
     extra: Dict[str, Any] | None = None,
     label_budget: str = "stage2_short",
+    smoke_states: Optional[Sequence[Any]] = None,
 ) -> Dict[str, Any]:
     """
     Build a JSON-serializable feature dict for one reward candidate.
@@ -134,7 +154,9 @@ def extract_candidate_features(
         "code_hash": digest,
         "code_len": int(len(normalized)),
         "label_budget": str(label_budget),
-        "behavior_fingerprint": _behavior_fingerprint(candidate),
+        "behavior_fingerprint": _behavior_fingerprint(
+            candidate, smoke_states=smoke_states
+        ),
     }
     payload.update(_score1_fields(score1_result))
     if extra:

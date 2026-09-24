@@ -310,6 +310,11 @@ class RaisePipeline:
             ),
             enable_refine=bool(cfg.closed_loop_enable_refine),
             domain=str(pack.name),
+            eval_episodes=(
+                int(cfg.stage2_eval_episodes)
+                if getattr(cfg, "stage2_eval_episodes", None) is not None
+                else None
+            ),
         )
         if cfg.fast:
             cl_cfg.apply_fast_profile()

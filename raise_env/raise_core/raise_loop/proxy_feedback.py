@@ -12,11 +12,10 @@ from raise_core.explore import RewardCandidate
 
 
 def nav_scalar(metrics: Mapping[str, Any]) -> float:
-    """SR - CR - 0.5 * TR (same spirit as Refine ProxyMetrics.scalar_score)."""
-    sr = float(metrics.get("SR") or 0.0)
-    cr = float(metrics.get("CR") or 0.0)
-    tr = float(metrics.get("TR") or 0.0)
-    return float(sr - cr - 0.5 * tr)
+    """Selection scalar: highway-aware when continuous fields are present."""
+    from raise_core.selection import navigation_scalar_from_dict
+
+    return float(navigation_scalar_from_dict(metrics))
 
 
 def focus_note_from_metrics(metrics: Mapping[str, Any]) -> str:
@@ -24,6 +23,41 @@ def focus_note_from_metrics(metrics: Mapping[str, Any]) -> str:
     sr = float(metrics.get("SR") or 0.0)
     cr = float(metrics.get("CR") or 0.0)
     tr = float(metrics.get("TR") or 0.0)
+    speed = float(metrics.get("mean_speed", metrics.get("ITR") or 0.0) or 0.0)
+    progress = float(metrics.get("mean_progress", metrics.get("PL") or 0.0) or 0.0)
+    soft = float(metrics.get("soft_success") or 0.0)
+
+    if str(metrics.get("domain", "")).lower() == "highway" or "mean_speed" in metrics:
+        if cr >= 0.5:
+            return (
+                "high collision — keep safety penalties but do NOT remove progress/"
+                "speed shaping; reward clearance while cruising, not crawling"
+            )
+        if sr >= 0.5 and speed < 12.0:
+            return (
+                "survives by crawling — increase reward for forward progress and "
+                "moderate high speed; penalize near-zero velocity while on-road"
+            )
+        if sr >= 0.5 and progress < 300.0:
+            return (
+                "low forward progress — strengthen state.progress / speed terms; "
+                "avoid rewarding idle/lane-hold forever"
+            )
+        if soft < 0.3 and sr >= 0.4:
+            return (
+                "soft_success low — survive AND cruise (≥15 m/s) with meaningful "
+                "progress; balance safety with throughput"
+            )
+        if tr >= 0.5:
+            return (
+                "high off-road/timeout share — keep on_road shaping; still reward "
+                "forward progress at speed"
+            )
+        return (
+            "improve safe throughput: higher soft_success (survive+speed+progress) "
+            "without raising CR"
+        )
+
     if tr >= 0.5 and tr >= cr:
         return (
             "high timeout — strengthen dense goal progress / time pressure; "
@@ -58,9 +92,15 @@ def format_proxy_feedback_block(
     if score1 is not None and _finite(score1):
         s1_bit = f" | Score1={float(score1):.3f}"
     focus = focus_note_from_metrics(metrics)
+    extra = ""
+    if "mean_speed" in metrics or str(metrics.get("domain", "")).lower() == "highway":
+        spd = float(metrics.get("mean_speed", metrics.get("ITR") or 0.0) or 0.0)
+        pl = float(metrics.get("mean_progress", metrics.get("PL") or 0.0) or 0.0)
+        soft = float(metrics.get("soft_success") or 0.0)
+        extra = f" | speed={spd:.1f}m/s progress={pl:.0f}m soft={soft:.2f}"
     return (
         f"ProxyRefine: SR={sr:.2f} CR={cr:.2f} TR={tr:.2f} "
-        f"scalar={sc:.2f}{s1_bit}\nFocus: {focus}"
+        f"scalar={sc:.2f}{extra}{s1_bit}\nFocus: {focus}"
     )
 
 
@@ -78,6 +118,11 @@ def should_attach_proxy_feedback(
     cr = float(metrics.get("CR") or 0.0)
     tr = float(metrics.get("TR") or 0.0)
     if sr < 0.10 or tr >= 0.50 or cr >= 0.50:
+        return True
+    # Highway: surviving by crawling is also a failure mode worth muting on.
+    speed = float(metrics.get("mean_speed", metrics.get("ITR") or 0.0) or 0.0)
+    soft = float(metrics.get("soft_success") or 0.0)
+    if sr >= 0.5 and (speed < 12.0 or soft < 0.25):
         return True
     if (
         score1 is not None
@@ -210,6 +255,7 @@ def apply_in_loop_d3(
     *,
     llm: Any,
     validator: Any,
+    prompts: Any = None,
 ) -> RewardCandidate:
     """
     One D.3 rewrite using proxy metrics on the candidate.
@@ -219,7 +265,21 @@ def apply_in_loop_d3(
     from dataclasses import replace
 
     from raise_core.llm import extract_python_code, normalize_to_compute_reward
-    from domains.crowdnav.prompts import D3_SYSTEM_PROMPT, format_d3_refinement
+
+    if prompts is not None:
+        D3_SYSTEM_PROMPT = getattr(prompts, "D3_SYSTEM_PROMPT", None)
+        format_d3_refinement = getattr(prompts, "format_d3_refinement", None)
+    else:
+        D3_SYSTEM_PROMPT = None
+        format_d3_refinement = None
+    if D3_SYSTEM_PROMPT is None or format_d3_refinement is None:
+        from domains.crowdnav.prompts import (
+            D3_SYSTEM_PROMPT as _CN_D3,
+            format_d3_refinement as _cn_fmt,
+        )
+
+        D3_SYSTEM_PROMPT = D3_SYSTEM_PROMPT or _CN_D3
+        format_d3_refinement = format_d3_refinement or _cn_fmt
 
     md = dict(candidate.metadata or {})
     metrics = md.get("last_metrics") or {}

@@ -62,7 +62,7 @@ def configure_run_logging(*, verbose: bool = False) -> None:
     )
     set_verbose(bool(verbose))
     pkg_level = logging.DEBUG if verbose else logging.INFO
-    for name in ("crowd_nav", "crowd_sim", "rl"):
+    for name in ("crowd_nav", "crowd_sim", "rl", "domains", "raise_core", "domains.highway"):
         logging.getLogger(name).setLevel(pkg_level)
 
     # Third-party chatter (Groq/httpx dump entire prompts at DEBUG).
@@ -76,6 +76,7 @@ def configure_run_logging(*, verbose: bool = False) -> None:
         "matplotlib",
         "PIL",
         "filelock",
+        "stable_baselines3",
     ):
         logging.getLogger(name).setLevel(logging.WARNING)
 
@@ -86,6 +87,11 @@ def configure_run_logging(*, verbose: bool = False) -> None:
     warnings.filterwarnings(
         "ignore",
         message="An input array is constant; the correlation coefficient is not defined",
+    )
+    warnings.filterwarnings(
+        "ignore",
+        message="You are trying to run PPO on the GPU",
+        category=UserWarning,
     )
 
 

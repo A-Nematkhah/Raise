@@ -49,7 +49,11 @@ def _stage1_dataset_ready(path: str) -> bool:
     if not path or not os.path.isdir(path):
         return False
     npz = os.path.join(path, "stage1_dataset.npz")
-    return os.path.isfile(npz)
+    if os.path.isfile(npz):
+        return True
+    # Highway Stage I uses trajectories.jsonl (not CrowdNav npz).
+    traj = os.path.join(path, "trajectories.jsonl")
+    return os.path.isfile(traj) and os.path.getsize(traj) > 0
 
 
 def _stage1_config_like_pipeline(n_candidates: int) -> "StageIConfig":
@@ -76,6 +80,7 @@ def _build_population(
     n_candidates: int,
     llm_provider: str,
     seed: int,
+    pack: Any,
 ) -> List[RewardCandidate]:
     """
     Build bootstrap candidates with the **exact** Stage-I Gen0 path used by
@@ -83,15 +88,21 @@ def _build_population(
     validator, batch+regen). Not a parallel prompt reimplementation.
     """
     del seed  # reserved for Stage-II / model fit; Gen0 LLM has its own sampling.
+    from raise_core.domains import make_validator_for_domain
     from raise_core.explore import StageIEvolver
     from raise_core.llm import make_llm_client
     from raise_core.scoring import make_smoke_score_fn
 
-    llm = make_llm_client(llm_provider)
+    llm = make_llm_client(
+        llm_provider,
+        base_code=getattr(pack, "seed_reward_source", None),
+    )
     evolver = StageIEvolver(
         llm,
         score_fn=make_smoke_score_fn(),  # Gen0 only — Score1 not used here
+        validator=make_validator_for_domain(pack),
         config=_stage1_config_like_pipeline(n_candidates),
+        prompts=pack.prompts,
     )
     population = evolver.initialize_population()
     valid = [c for c in population if c.valid and c.reward_fn is not None]
@@ -160,6 +171,7 @@ def label_and_append_candidate(
     known_ids: Optional[set[str]] = None,
     label_rejected: bool = True,
     use_stub: bool = False,
+    smoke_states: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """
     Score1 → features → Stage II short → append jsonl.
@@ -179,6 +191,7 @@ def label_and_append_candidate(
         candidate,
         score1_result=score1_result,
         label_budget=LABEL_BUDGET,
+        smoke_states=smoke_states,
     )
     eid = example_id_for_features(features)
     if eid in known:
@@ -214,7 +227,16 @@ def label_and_append_candidate(
     # Keep Stage II metrics on the live candidate so R2 / proxy_consistency
     # / best_stage2 see SR/CR/TR (closed-loop has no separate Stage2Runner).
     md = dict(candidate.metadata or {})
-    md["last_metrics"] = metrics.as_dict()
+    # Highway trainer already wrote rich last_metrics + selection_scalar; keep them.
+    if md.get("selection_scalar") is None or not isinstance(md.get("last_metrics"), dict):
+        if hasattr(metrics, "_highway_extras"):
+            from domains.highway.adapter import metrics_to_highway_dict
+
+            rich = metrics_to_highway_dict(metrics)
+            md["last_metrics"] = rich
+            md["selection_scalar"] = float(rich["selection_scalar"])
+        else:
+            md["last_metrics"] = metrics.as_dict()
     md["last_stage2_ok"] = bool(ok)
     md["last_stage2_example_id"] = eid
     candidate.metadata = md
@@ -229,6 +251,7 @@ def label_and_append_candidate(
 
 def run_bootstrap(
     *,
+    domain: str = "crowdnav",
     stage1_dataset_path: str = "domains/crowdnav/data/stage1_dataset",
     out_dir: str = "domains/crowdnav/data/surrogate_dataset",
     model_dir: str = "artifacts/surrogate",
@@ -246,17 +269,16 @@ def run_bootstrap(
     predict_method: str = "inferred",
     randomization_regime: str = "with_random",
     horizon_steps: int = 100,
+    eval_episodes: Optional[int] = None,
 ) -> dict[str, Any]:
     """
     End-to-end surrogate bootstrap (idempotent unless ``force``).
 
-    ``num_processes`` defaults to 1 — Windows + GST + CUDA with the Stage II
-    default (up to 16 workers) can OOM the host / kill the IDE.
+    ``domain`` selects the pack (``crowdnav`` default preserves thesis CrowdNav
+    bootstrap; ``highway`` uses SB3 PPO + env_steps Score1 dataset).
 
-    Defaults match the 12h closed-loop profile: human_num=5, with_random,
-    inferred GST, K2=8000 gradient steps.
-
-    See ``PLAN.md`` §5.
+    Defaults match the 12h closed-loop profile for CrowdNav: human_num=5,
+    with_random, inferred GST, K2=8000 gradient steps.
     """
     if use_stub:
         n_candidates = min(int(n_candidates), 4)
@@ -283,24 +305,32 @@ def run_bootstrap(
     if score1_mode == "dataset" and not _stage1_dataset_ready(stage1_dataset_path):
         raise FileNotFoundError(
             f"Stage I dataset not found at {stage1_dataset_path!r}. "
-            "Run scripts/collect_stage1_dataset.py or pass --fast for smoke/stub bootstrap."
+            "Run the domain collect script or pass --fast for smoke/stub bootstrap."
         )
 
     from raise_core.domains import load_domain, make_stage2_trainer_for_domain
     from raise_core.refine import Stage2Config
-    from domains.crowdnav.regime import env_name_for_predict_method
+    from raise_core.surrogate.features import set_behavior_smoke_states
 
-    pack = load_domain("crowdnav")
+    domain_key = str(domain or "crowdnav").strip().lower() or "crowdnav"
+    pack = load_domain(domain_key)
+    if pack.smoke_states_fn is not None:
+        set_behavior_smoke_states(pack.smoke_states_fn())
+    else:
+        set_behavior_smoke_states(None)
+
     score_fn, _dataset = pack.make_score_fn(
         mode=score1_mode,
         dataset_path=None if score1_mode == "smoke" else stage1_dataset_path,
     )
     trainer = make_stage2_trainer_for_domain(pack, use_stub=use_stub)
+    smoke_states = pack.smoke_states_fn() if pack.smoke_states_fn is not None else None
 
     population = _build_population(
         n_candidates=n_candidates,
         llm_provider=llm_provider,
         seed=seed,
+        pack=pack,
     )
 
     os.makedirs(out_dir, exist_ok=True)
@@ -314,10 +344,21 @@ def run_bootstrap(
 
     nproc = 1 if use_stub else max(1, int(num_processes))
     pred = str(predict_method)
+    if eval_episodes is not None:
+        n_eval = max(1, int(eval_episodes))
+    else:
+        n_eval = 8 if use_stub else (20 if domain_key == "highway" else 50)
+
+    env_name = "highway-fast-v0"
+    if domain_key == "crowdnav":
+        from domains.crowdnav.regime import env_name_for_predict_method
+
+        env_name = env_name_for_predict_method(pred)
+
     stage2_cfg = Stage2Config(
         train_env_steps=int(stage2_train_steps),
         k2_unit=str(k2_unit),
-        eval_episodes=8 if use_stub else 50,
+        eval_episodes=n_eval,
         horizon_steps=20 if use_stub else max(1, int(horizon_steps)),
         seed=int(seed),
         device=str(device),
@@ -326,7 +367,7 @@ def run_bootstrap(
         human_num=max(1, int(human_num)),
         predict_method=pred,
         randomization_regime=str(randomization_regime),
-        env_name=env_name_for_predict_method(pred),
+        env_name=env_name,
     )
 
     labeled = 0
@@ -342,6 +383,19 @@ def run_bootstrap(
             known_ids=known_ids,
             label_rejected=label_rejected,
             use_stub=use_stub,
+            smoke_states=smoke_states,
+        )
+        status = result.get("status")
+        eid = result.get("example_id")
+        wall = float(result.get("wall_seconds") or 0.0)
+        from raise_core import console
+
+        console.status(
+            f"bootstrap label {round_index + 1}/{len(population)} "
+            f"{candidate.candidate_id} → {status}"
+            + (f" id={eid}" if eid else "")
+            + f" ({console.format_seconds(wall)})",
+            stage="surrogate",
         )
         if result.get("status") == "ok" or result.get("status") == "failed":
             # failed still appends a row; count as labeled attempt on disk
@@ -366,6 +420,7 @@ def run_bootstrap(
 
     manifest: Dict[str, Any] = {
         "n": len(feats),
+        "domain": domain_key,
         "feature_schema_version": FEATURE_SCHEMA_VERSION,
         "label_schema_version": LABEL_SCHEMA_VERSION,
         "label_budget": LABEL_BUDGET,
@@ -378,6 +433,7 @@ def run_bootstrap(
         "stage1_dataset_path": stage1_dataset_path if score1_mode == "dataset" else None,
         "stage2_train_steps": int(stage2_train_steps),
         "k2_unit": str(k2_unit),
+        "eval_episodes": int(n_eval),
         "human_num": max(1, int(human_num)),
         "predict_method": str(predict_method),
         "randomization_regime": str(randomization_regime),
@@ -398,4 +454,5 @@ def run_bootstrap(
         "n": len(feats),
         "metrics": fit_metrics,
         "manifest": manifest,
+        "domain": domain_key,
     }
