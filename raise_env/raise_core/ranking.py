@@ -71,17 +71,41 @@ def _metrics_block(candidates: Sequence[RewardCandidate]) -> str:
 
 def format_final_rank_prompt(candidates: Sequence[RewardCandidate]) -> str:
     ids = ", ".join(c.candidate_id for c in candidates)
+    highway = _looks_highway(candidates)
+    if highway:
+        polarity = (
+            "higher SR / soft_success / progress(PL) / speed(ITR) / SD better; "
+            "lower CR/TR better; NT secondary"
+        )
+    else:
+        polarity = (
+            "higher SR/SD better; lower CR/TR/NT/PL/ITR better"
+        )
     return (
         "You are ranking robot-navigation reward candidates after RL training "
         "(RAISE Algorithm 1 final ranking R2/R3).\n"
-        "Using the multi-objective metrics below (higher SR/SD better; lower "
-        "CR/TR/NT/PL/ITR better), produce a total order from best to worst.\n"
+        f"Using the multi-objective metrics below ({polarity}), produce a "
+        "total order from best to worst.\n"
         f"Candidate ids: {ids}\n"
         "Metrics:\n"
         f"{_metrics_block(candidates)}\n"
         "Return ONLY a comma-separated list of all candidate ids best-first, "
         "no other text."
     )
+
+
+def _looks_highway(candidates: Sequence[RewardCandidate]) -> bool:
+    for c in candidates:
+        md = (c.metadata or {}).get("last_metrics") or {}
+        if str(md.get("domain", "")).lower() == "highway":
+            return True
+        if "mean_speed" in md or "soft_success" in md:
+            return True
+        if (c.metadata or {}).get("selection_scalar") is not None and "PL" in md:
+            # Highway remap uses large PL (meters); CrowdNav PL is path length too
+            # but soft_success is highway-only — already covered above.
+            pass
+    return False
 
 
 def _parse_rank_response(text: str, valid_ids: Sequence[str]) -> Optional[List[str]]:
@@ -113,8 +137,11 @@ def multiobjective_lex_rank(candidates: Sequence[RewardCandidate]) -> List[str]:
     """
     Deterministic multi-metric order (stand-in when LLM rank is unavailable).
 
-    Key: SR ↓CR ↓TR ↓NT ↓PL ↓ITR ↑SD — closer to Alg. 1 M(r) than SR-CR-0.5TR alone.
+    CrowdNav: SR ↓CR ↓TR ↓NT ↓PL ↓ITR ↑SD.
+    Highway:  SR ↓CR ↓TR ↑PL ↑ITR ↑soft_success ↑SD ↓NT
+    (PL=progress_m, ITR=mean_speed — higher better).
     """
+    highway = _looks_highway(candidates)
 
     def key(c: RewardCandidate) -> tuple:
         md = (c.metadata or {}).get("last_metrics") or {}
@@ -123,8 +150,13 @@ def multiobjective_lex_rank(candidates: Sequence[RewardCandidate]) -> List[str]:
         tr = float(md.get("TR", md.get("tr", 0.0)))
         nt = float(md.get("NT", md.get("nt", 0.0)))
         pl = float(md.get("PL", md.get("pl", 0.0)))
-        itr = float(md.get("ITR", md.get("itr", 0.0)))
+        itr = float(
+            md.get("mean_speed", md.get("ITR", md.get("itr", 0.0)))
+        )
         sd = float(md.get("SD", md.get("sd", 0.0)))
+        soft = float(md.get("soft_success", 0.0))
+        if highway:
+            return (sr, -cr, -tr, pl, itr, soft, sd, -nt)
         return (sr, -cr, -tr, -nt, -pl, -itr, sd)
 
     return [c.candidate_id for c in sorted(candidates, key=key, reverse=True)]

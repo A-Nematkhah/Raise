@@ -95,12 +95,19 @@ def _refit_surrogate(
     *,
     seed: int,
     use_stub: bool,
+    domain: str = "crowdnav",
 ) -> Dict[str, Any]:
+    from raise_core.surrogate.targets import filter_ok_examples, target_keys_for_domain
+
     feats, labs = load_table(dataset_dir)
     if len(feats) < 1:
         raise RuntimeError("closed-loop refit: surrogate dataset is empty")
+    targets = target_keys_for_domain(domain)
+    feats, labs = filter_ok_examples(feats, labs, target_keys=targets)
+    if len(feats) < 1:
+        raise RuntimeError("closed-loop refit: no ok=True surrogate labels")
     model = SurrogateModel(random_seed=int(seed), n_bags=3 if use_stub else 5)
-    metrics = model.fit(feats, labs, target_keys=("SR", "CR", "TR"))
+    metrics = model.fit(feats, labs, target_keys=targets)
     os.makedirs(model_dir, exist_ok=True)
     model.save(model_dir)
     metrics_path = os.path.join(model_dir, "metrics.json")
@@ -288,16 +295,24 @@ class ClosedLoopRunner:
             evolver.reflection = str(ckpt.get("reflection") or "")
             saved_best = ckpt.get("global_best")
             if isinstance(saved_best, dict):
-                evolver.global_best = load_candidate_dict(dict(saved_best))
-            population = deserialize_population(ckpt.get("population"))
+                evolver.global_best = load_candidate_dict(
+                    dict(saved_best), validator=self.validator
+                )
+            population = deserialize_population(
+                ckpt.get("population"), validator=self.validator
+            )
             if str(ckpt.get("phase") or "") == "labeling" and start_epoch < generations:
-                resumed_to_label = deserialize_population(ckpt.get("to_label"))
+                resumed_to_label = deserialize_population(
+                    ckpt.get("to_label"), validator=self.validator
+                )
                 if resumed_to_label:
                     saved_extra = ckpt.get("extra") or {}
                     pending = {
                         "epoch": start_epoch,
                         "ranked": (
-                            deserialize_population(ckpt.get("ranked"))
+                            deserialize_population(
+                                ckpt.get("ranked"), validator=self.validator
+                            )
                             or list(resumed_to_label)
                         ),
                         "to_label": resumed_to_label,
@@ -376,6 +391,17 @@ class ClosedLoopRunner:
                         predictions = None
                         model_ready = False
 
+                loaded_fit_metrics = None
+                metrics_path = os.path.join(cfg.surrogate_model_dir, "metrics.json")
+                if os.path.isfile(metrics_path):
+                    try:
+                        with open(metrics_path, encoding="utf-8") as fh:
+                            import json as _json
+
+                            loaded_fit_metrics = _json.load(fh)
+                    except Exception:  # noqa: BLE001
+                        loaded_fit_metrics = None
+
                 score1_results = [
                     (c.metadata or {}).get("score1_result") for c in ranked
                 ]
@@ -396,6 +422,10 @@ class ClosedLoopRunner:
                     al_allow_stage1_requests=bool(cfg.al_allow_stage1_requests),
                     al_root=str(cfg.al_root),
                     score1_results=score1_results,
+                    fit_metrics=(
+                        loaded_fit_metrics if isinstance(loaded_fit_metrics, dict) else None
+                    ),
+                    max_val_mae_for_gate=getattr(cfg, "max_val_mae_for_gate", None),
                 )
 
                 if al_report.get("enabled"):
@@ -435,6 +465,15 @@ class ClosedLoopRunner:
 
             for i, cand in enumerate(to_label):
                 if str(cand.candidate_id) in labeled_this_epoch:
+                    continue
+                if cand.reward_fn is None:
+                    logger.warning(
+                        "skip label %s: no reward_fn (%s)",
+                        cand.candidate_id,
+                        (cand.validation_error or "invalid")[:120],
+                    )
+                    n_fail += 1
+                    labeled_this_epoch.add(str(cand.candidate_id))
                     continue
                 result = label_and_append_candidate(
                     cand,
@@ -563,6 +602,7 @@ class ClosedLoopRunner:
                         cfg.surrogate_model_dir,
                         seed=int(cfg.seed),
                         use_stub=bool(cfg.use_stub),
+                        domain=str(getattr(cfg, "domain", "crowdnav") or "crowdnav"),
                     )
                     labels_since_refit = 0
                     write_json(
@@ -589,6 +629,12 @@ class ClosedLoopRunner:
                 "n_proxy_feedback": n_proxy_fb,
                 "n_in_loop_d3": n_d3,
             }
+            try:
+                from raise_core.raise_loop.gate_policy import epoch_population_stats
+
+                epoch_rec["stats"] = epoch_population_stats(ranked)
+            except Exception:  # noqa: BLE001
+                pass
             if epoch_resumed:
                 # Counts cover only the labels this process produced.
                 epoch_rec["resumed"] = True

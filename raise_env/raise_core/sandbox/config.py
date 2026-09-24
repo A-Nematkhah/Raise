@@ -8,7 +8,7 @@ receive a RewardState argument named ``state``.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Tuple
+from typing import Optional, Tuple
 
 REQUIRED_FUNCTION_NAME = "compute_reward"
 REQUIRED_ARG_NAME = "state"
@@ -69,6 +69,22 @@ FORBIDDEN_NAME_IDS: Tuple[str, ...] = (
 )
 
 
+# Safe method names on memory dict / sequences (not state schema fields).
+SAFE_METHOD_ATTRIBUTES: Tuple[str, ...] = (
+    "get",
+    "pop",
+    "setdefault",
+    "clear",
+    "update",
+    "items",
+    "keys",
+    "values",
+    "append",
+    "extend",
+    "add",
+)
+
+
 @dataclass(frozen=True)
 class SandboxConfig:
     timeout_seconds: float = 1.0
@@ -80,3 +96,6 @@ class SandboxConfig:
     forbidden_names: Tuple[str, ...] = FORBIDDEN_NAME_IDS
     allow_while: bool = False
     allow_imports: bool = False
+    # When set (e.g. highway), only these Attribute names + SAFE_METHOD_ATTRIBUTES
+    # are allowed. None = CrowdNav / legacy (only underscore ban).
+    allowed_attributes: Optional[Tuple[str, ...]] = None

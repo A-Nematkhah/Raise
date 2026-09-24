@@ -116,11 +116,15 @@ def make_stage3_trainer_for_domain(
 
 
 def make_validator_for_domain(pack: DomainPack) -> Any:
-    """Build a RewardValidator with domain smoke states when provided."""
+    """Build a RewardValidator with domain smoke states / sandbox config."""
     from raise_core.sandbox import RewardValidator
 
-    if pack.smoke_states_fn is not None:
-        return RewardValidator(smoke_states=pack.smoke_states_fn())
+    config = getattr(pack, "sandbox_config", None)
+    smoke = pack.smoke_states_fn() if pack.smoke_states_fn is not None else None
+    if smoke is not None:
+        return RewardValidator(config=config, smoke_states=smoke)
+    if config is not None:
+        return RewardValidator(config=config)
     return RewardValidator()
 
 

@@ -52,6 +52,16 @@ Constraints (CRITICAL):
 - Signature: exactly one function def {func_name}(state, memory): returning a finite float.
 - Sandbox: no import/from, no classes, no while loops, no reflection builtins.
 - Access fields only via dot notation. Iterate others with `for v in state.others:`.
+- AST allowlist: ONLY the fields listed above (+ memory.get / memory['k']). Any other
+  attribute (lane_position, distance, robot, humans, gx, history, …) is REJECTED.
+Negative examples (DO NOT write these — they fail validation):
+```python
+# BAD — hallucinated fields
+state.lane_position   # use state.ego.lane_index
+state.distance        # compute ((v.x)**2+(v.y)**2)**0.5 for v in state.others
+state.robot.px        # CrowdNav-only; use state.ego.x
+state.humans          # does not exist; use state.others
+```
 - Output Format: only the Python function in a single code block.
 {seed_block}
 {reflection_block}
@@ -72,6 +82,7 @@ HighwayRewardState access (dot notation only — never getattr/hasattr/__import_
 - state.collision, state.off_road, state.timeout
 - state.action, state.time_step, state.global_time, state.time_limit, state.progress, state.speed
 - memory: plain dict for episode-local state; cleared on reset
+- FORBIDDEN (rejected by AST): lane_position, distance, robot, humans, gx/gy, history, px/py
 - Math: no import math; use ** 0.5. No getattr/hasattr/__import__.
 """
 
@@ -125,7 +136,7 @@ D3_SYSTEM_PROMPT = (
     "state.others is a tuple; iterate with 'for v in state.others:'. "
     "state.collision / state.off_road / state.timeout (bool). "
     "state.progress and state.speed are available. "
-    "NO state.robot, NO state.humans, NO state.gx. "
+    "NO state.robot, NO state.humans, NO state.gx, NO state.lane_position, NO state.distance. "
     "SANDBOX: never getattr/hasattr/__import__/eval; use ** 0.5; always return a finite float. "
     "Output only valid Python code (no markdown fences or commentary)."
 )
@@ -208,6 +219,7 @@ def format_d1_initial(
 D1_BATCH_USER_PROMPT = """Please write **{n} diverse** Python reward functions for highway-fast-v0 driving.
 Each function: def {func_name}_vK(state, memory) for K=1..{n}, returning a finite float.
 Use HighwayRewardState fields only (state.ego.*, state.others, state.collision/off_road/timeout, state.progress, state.speed, memory).
+FORBIDDEN fields (will be rejected): lane_position, distance, robot, humans, gx, gy, history.
 No imports, classes, getattr/hasattr. Prefer ** 0.5 for roots.
 {seed_block}
 {reflection_block}
@@ -307,13 +319,54 @@ def format_d3_repair(
     bad_code: str,
     validation_error: str,
 ) -> str:
+    from domains.highway.sandbox_fields import HIGHWAY_FORBIDDEN_HALLUCINATIONS
+
+    blob = f"{bad_code}\n{validation_error}".lower()
+    seen = [name for name in HIGHWAY_FORBIDDEN_HALLUCINATIONS if name in blob]
+    remap = {
+        "lane_position": "state.ego.lane_index",
+        "distance": "((v.x)**2 + (v.y)**2) ** 0.5 for v in state.others",
+        "robot": "state.ego (e.g. state.ego.x, state.ego.speed)",
+        "humans": "state.others",
+        "gx": "(no goal x — use state.progress / state.ego.x)",
+        "gy": "(no goal y — use state.ego.y)",
+        "px": "state.ego.x",
+        "py": "state.ego.y",
+        "history": "memory dict only",
+        "reaching_goal": "(no goal flag — use progress/speed shaping)",
+        "position": "state.ego.x / state.ego.y",
+        "velocity": "state.ego.vx / state.ego.vy or state.speed",
+        "vehicles": "state.others",
+        "nearby": "state.others",
+        "lane_id": "state.ego.lane_index",
+        "ego_vehicle": "state.ego",
+        "vx_ego": "state.ego.vx",
+    }
+    fix_lines = []
+    for name in seen:
+        alt = remap.get(name, "a documented HighwayRewardState field")
+        fix_lines.append(f"- Replace `{name}` → {alt}")
+    if not fix_lines:
+        fix_lines.append(
+            "- If ERROR mentions an attribute, delete it and use only "
+            "state.ego.* / state.others / state.collision|off_road|timeout / "
+            "state.progress / state.speed / memory."
+        )
+    fix_block = "\n".join(fix_lines)
     return (
-        "The following highway reward failed validation:\n\n"
+        "The following highway reward failed validation. Repair it in ONE shot.\n\n"
         f"ERROR: {validation_error}\n\n"
         f"ORIGINAL CODE:\n{bad_code}\n\n"
-        "Fix it. Keep signature def compute_reward(state, memory):. "
-        "Use only HighwayRewardState fields (state.ego.*, state.others, "
-        "state.collision/off_road/timeout, state.progress, state.speed, memory). "
+        "MANDATORY FIELD FIXES (hallucinated names are rejected by AST allowlist):\n"
+        f"{fix_block}\n\n"
+        "Allowed fields only:\n"
+        "  state.ego.{x,y,vx,vy,heading,speed,lane_index,on_road}\n"
+        "  state.others → for v in state.others: v.{x,y,vx,vy,heading}\n"
+        "  state.collision, state.off_road, state.timeout\n"
+        "  state.progress, state.speed, state.action, state.time_step, "
+        "state.global_time, state.time_limit\n"
+        "  memory.get / memory['key']\n\n"
+        "Keep signature def compute_reward(state, memory):. "
         "No imports, getattr, hasattr. Always return a finite float. "
         "Output only the fixed function (no markdown)."
     )

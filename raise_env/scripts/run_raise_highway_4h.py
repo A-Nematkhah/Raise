@@ -9,8 +9,8 @@ This is the thesis RAISE path (not Stage I→II→III without surrogate):
 Locked PROFILE (SB3 PPO, env_steps):
 
   Warm:   n=16 labels @ K2=15_000 env steps
-  Loop:   N=6, G=4, K2=15_000, min_labels_gate=12, AL=2/epoch
-  Stage III: R=1, K3=80_000, E3=30, no H-sweep
+  Loop:   N=6, G=4, K2=15_000, min_labels_gate=16 (or MAE≤0.35), E2=20, AL=2/epoch
+  Stage III: R=1, K3=80_000, E3=30, no H-sweep; elites=kept∪best_s2∪best_scalar
 
 From raise_env/:
 
@@ -70,14 +70,15 @@ PROFILE = {
     "generations": 4,
     "k2": 15_000,
     "k2_unit": "env_steps",
-    "min_labels_gate": 12,
+    "min_labels_gate": 16,
     "al_max": 2,
     "min_stage2": 3,
     "refit_every": 6,
     "proxy_feedback": True,
     "proxy_feedback_min_labels": 12,
     "proxy_d3_per_epoch": 1,
-    "stage2_eval": 15,
+    "stage2_eval": 20,
+    "max_val_mae_gate": 0.35,
     "stage3_k3": 80_000,
     "stage3_eval": 30,
     "stage3_rounds": 1,
@@ -210,6 +211,7 @@ def _print_profile(args, *, warm_n=None) -> None:
         "k2",
         "k2_unit",
         "min_labels_gate",
+        "max_val_mae_gate",
         "al_max",
         "min_stage2",
         "refit_every",
@@ -368,6 +370,8 @@ def main() -> int:
         PROFILE["k2_unit"],
         "--closed-loop-min-labels-gate",
         str(PROFILE["min_labels_gate"]),
+        "--closed-loop-max-val-mae-gate",
+        str(PROFILE["max_val_mae_gate"]),
         "--closed-loop-al-max",
         str(PROFILE["al_max"]),
         "--closed-loop-min-stage2",

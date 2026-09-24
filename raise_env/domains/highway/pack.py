@@ -15,7 +15,8 @@ from domains.highway.stage1 import (
     DEFAULT_STAGE1_DATASET,
     make_score_fn as highway_make_score_fn,
 )
-from domains.highway.state import default_smoke_states
+from domains.highway.sandbox_fields import highway_sandbox_config
+from domains.highway.state import fingerprint_smoke_states
 
 _PACK_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -35,7 +36,8 @@ def get_pack(*, with_adapter: bool = True) -> DomainPack:
         adapter=adapter,
         stage1_dataset_default=DEFAULT_STAGE1_DATASET,
         make_score_fn=highway_make_score_fn,
-        smoke_states_fn=default_smoke_states,
+        smoke_states_fn=fingerprint_smoke_states,
+        sandbox_config=highway_sandbox_config(),
         make_stage2_trainer=make_stage2_trainer if with_adapter else None,
         make_stage3_trainer=make_stage3_trainer if with_adapter else None,
         selection_scalar_name="highway_navigation_scalar",

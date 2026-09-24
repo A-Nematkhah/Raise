@@ -49,8 +49,29 @@ def format_epoch_summary(rec: Dict[str, Any]) -> str:
     gate = rec.get("gate") or {}
     al = rec.get("al") or {}
     refit = "yes" if rec.get("refit") else "no"
+    stats = rec.get("stats") or {}
+    spread = stats.get("score1_spread")
+    soft_m = stats.get("soft_success_mean")
+    sc_m = stats.get("scalar_mean")
+    bits = []
+    if spread is not None:
+        try:
+            bits.append(f"spread={float(spread):.3f}")
+        except (TypeError, ValueError):
+            pass
+    if soft_m is not None:
+        try:
+            bits.append(f"softμ={float(soft_m):.2f}")
+        except (TypeError, ValueError):
+            pass
+    if sc_m is not None:
+        try:
+            bits.append(f"scalarμ={float(sc_m):.3f}")
+        except (TypeError, ValueError):
+            pass
+    stats_s = (" | " + " ".join(bits)) if bits else ""
     return (
-        f"epoch {g}: best={best} Score1={score_s} | "
+        f"epoch {g}: best={best} Score1={score_s}{stats_s} | "
         f"label {len(labeled)}/{rec.get('n_population', '?')} [{label_s}] | "
         f"{_gate_line(gate)} | {_al_line(al)} | "
         f"dataset={rec.get('n_labeled_dataset', '?')} refit={refit} "

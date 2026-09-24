@@ -59,6 +59,8 @@ class ClosedLoopConfig:
     domain: str = "crowdnav"
     # Stage II eval episodes (None → domain default: highway 20, crowdnav 50).
     eval_episodes: Optional[int] = None
+    # Optional early hard-gate when val MAE is already low (highway Phase 4).
+    max_val_mae_for_gate: Optional[float] = None
 
     def apply_fast_profile(self) -> None:
         self.use_stub = True

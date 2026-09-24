@@ -117,8 +117,11 @@ def kinematics_to_state(
     if prev_ego_x is None:
         progress = 0.0
     else:
-        progress = max(0.0, ego_x - float(prev_ego_x))
-        if progress < 1e-6 and speed > 0.5:
+        dx = ego_x - float(prev_ego_x)
+        progress = max(0.0, dx)
+        # Only synthesize progress from speed when moving forward (vx>0).
+        # Reversing previously got free progress via speed*dt — wrong for PL.
+        if progress < 1e-6 and speed > 0.5 and vx > 0.5:
             progress = speed * float(time_step)
 
     others = []
@@ -129,8 +132,9 @@ def kinematics_to_state(
             NearbyVehicle(
                 x=float(row[1]) - ego_x,
                 y=float(row[2]) - ego_y,
-                vx=float(row[3]),
-                vy=float(row[4]),
+                # Ego-relative velocities (spec: relative kinematics).
+                vx=float(row[3]) - vx,
+                vy=float(row[4]) - vy,
                 heading=float(row[5]),
             )
         )
@@ -186,6 +190,7 @@ class RewardInjectedHighwayEnv(_gym_wrapper_base()):  # type: ignore[misc,valid-
         super().__init__(env)
         self.reward_fn = reward_fn
         self._seed = seed
+        self._seed_consumed = False
         self._ego_x: Optional[float] = None
         self._global_time = 0.0
         merged = default_env_config()
@@ -205,8 +210,13 @@ class RewardInjectedHighwayEnv(_gym_wrapper_base()):  # type: ignore[misc,valid-
         kwargs: Dict[str, Any] = {}
         if seed is not None:
             kwargs["seed"] = int(seed)
-        elif self._seed is not None:
+            self._seed_consumed = True
+        elif self._seed is not None and not self._seed_consumed:
+            # Apply construction seed ONCE so training episodes advance RNG.
+            # Re-passing the same seed every reset made all episodes identical
+            # → SR/CR only {0,1} under deterministic eval.
             kwargs["seed"] = int(self._seed)
+            self._seed_consumed = True
         if options is not None:
             kwargs["options"] = options
         obs, info = self.env.reset(**kwargs)
@@ -226,6 +236,13 @@ class RewardInjectedHighwayEnv(_gym_wrapper_base()):  # type: ignore[misc,valid-
         if isinstance(info.get("rewards"), dict):
             if info["rewards"].get("on_road_reward", 1.0) == 0.0:
                 off_road = True
+        # highway-env often omits info['off_road']; trust the vehicle flag.
+        try:
+            veh = getattr(self.env.unwrapped, "vehicle", None)
+            if veh is not None and hasattr(veh, "on_road") and not bool(veh.on_road):
+                off_road = True
+        except Exception:  # noqa: BLE001
+            pass
         timeout = bool(truncated) and not collision and not off_road
         if collision:
             timeout = False

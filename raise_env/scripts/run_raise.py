@@ -263,6 +263,15 @@ def main() -> int:
         help="Soft Surrogate gate until this many labels exist (default 24)",
     )
     parser.add_argument(
+        "--closed-loop-max-val-mae-gate",
+        type=float,
+        default=None,
+        help=(
+            "Optional: enable hard gate early when mean surrogate val MAE "
+            "≤ this (highway Phase 4; default off)"
+        ),
+    )
+    parser.add_argument(
         "--closed-loop-refit-every",
         type=int,
         default=8,
@@ -399,6 +408,11 @@ def main() -> int:
         closed_loop_no_al=bool(args.closed_loop_no_al),
         closed_loop_al_max_per_epoch=int(args.closed_loop_al_max),
         closed_loop_min_labels_for_gate=int(args.closed_loop_min_labels_gate),
+        closed_loop_max_val_mae_for_gate=(
+            float(args.closed_loop_max_val_mae_gate)
+            if args.closed_loop_max_val_mae_gate is not None
+            else None
+        ),
         closed_loop_k2=int(args.closed_loop_k2),
         closed_loop_refit_every_new_labels=int(args.closed_loop_refit_every),
         closed_loop_min_stage2_per_gen=int(args.closed_loop_min_stage2),

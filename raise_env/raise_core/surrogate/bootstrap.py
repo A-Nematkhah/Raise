@@ -80,7 +80,7 @@ def _build_population(
     n_candidates: int,
     llm_provider: str,
     seed: int,
-    pack: Any,
+    pack: Any = None,
 ) -> List[RewardCandidate]:
     """
     Build bootstrap candidates with the **exact** Stage-I Gen0 path used by
@@ -88,11 +88,13 @@ def _build_population(
     validator, batch+regen). Not a parallel prompt reimplementation.
     """
     del seed  # reserved for Stage-II / model fit; Gen0 LLM has its own sampling.
-    from raise_core.domains import make_validator_for_domain
+    from raise_core.domains import load_domain, make_validator_for_domain
     from raise_core.explore import StageIEvolver
     from raise_core.llm import make_llm_client
     from raise_core.scoring import make_smoke_score_fn
 
+    if pack is None:
+        pack = load_domain("crowdnav")
     llm = make_llm_client(
         llm_provider,
         base_code=getattr(pack, "seed_reward_source", None),
@@ -129,8 +131,16 @@ def _labels_from_metrics(
     seed: int,
     ok: bool,
 ) -> Dict[str, Any]:
-    if hasattr(metrics, "as_dict"):
+    if hasattr(metrics, "_highway_extras") and not isinstance(metrics, dict):
+        from domains.highway.adapter import metrics_to_highway_dict
+
+        md = metrics_to_highway_dict(metrics)
+    elif hasattr(metrics, "as_dict"):
         md = metrics.as_dict()
+        extras = getattr(metrics, "_highway_extras", None)
+        if isinstance(extras, dict):
+            md = dict(md)
+            md.update({k: float(v) for k, v in extras.items()})
     elif isinstance(metrics, dict):
         md = dict(metrics)
     else:
@@ -138,6 +148,38 @@ def _labels_from_metrics(
     sr = float(md.get("SR", md.get("sr", 0.0)))
     cr = float(md.get("CR", md.get("cr", 0.0)))
     tr = float(md.get("TR", md.get("tr", 0.0)))
+    pl = float(md.get("PL", md.get("pl", 0.0)))
+    itr = float(md.get("ITR", md.get("itr", 0.0)))
+    mean_speed = float(md.get("mean_speed", itr))
+    mean_progress = float(md.get("mean_progress", pl))
+    soft_success = float(md.get("soft_success", 0.0))
+    # CrowdNav log scalar stays SR−CR−0.5·TR; highway also stores selection_scalar.
+    classic = float(navigation_scalar(sr, cr, tr))
+    if (
+        str(md.get("domain", "")).lower() == "highway"
+        or "soft_success" in md
+        or "mean_speed" in md
+        or md.get("selection_scalar") is not None
+    ):
+        from domains.highway.metrics import highway_navigation_scalar
+
+        selection = float(
+            md.get("selection_scalar")
+            if md.get("selection_scalar") is not None
+            else highway_navigation_scalar(
+                {
+                    "SR": sr,
+                    "CR": cr,
+                    "TR": tr,
+                    "PL": pl,
+                    "mean_speed": mean_speed,
+                    "mean_progress": mean_progress,
+                    "soft_success": soft_success,
+                }
+            )
+        )
+    else:
+        selection = classic
     return {
         "example_id": example_id,
         "schema_version": LABEL_SCHEMA_VERSION,
@@ -145,10 +187,14 @@ def _labels_from_metrics(
         "CR": cr,
         "TR": tr,
         "NT": float(md.get("NT", md.get("nt", 0.0))),
-        "PL": float(md.get("PL", md.get("pl", 0.0))),
-        "ITR": float(md.get("ITR", md.get("itr", 0.0))),
+        "PL": pl,
+        "ITR": itr,
         "SD": float(md.get("SD", md.get("sd", 0.0))),
-        "scalar": float(navigation_scalar(sr, cr, tr)),
+        "mean_speed": mean_speed,
+        "mean_progress": mean_progress,
+        "soft_success": soft_success,
+        "selection_scalar": selection,
+        "scalar": classic,
         "env_steps": int(env_steps),
         "k2_unit": str(k2_unit),
         "train_steps_config": int(train_steps_config),
@@ -210,6 +256,14 @@ def label_and_append_candidate(
 
         metrics = ProxyMetrics()
     wall = time.perf_counter() - t0
+
+    if not ok:
+        # Do not poison the surrogate with all-zero fake metrics.
+        return {
+            "status": "failed",
+            "reason": "train_and_eval_exception",
+            "wall_seconds": wall,
+        }
 
     labels = _labels_from_metrics(
         metrics,
@@ -284,6 +338,11 @@ def run_bootstrap(
         n_candidates = min(int(n_candidates), 4)
         stage2_train_steps = min(int(stage2_train_steps), 64)
 
+    from raise_core.surrogate.targets import filter_ok_examples, target_keys_for_domain
+
+    domain_key = str(domain or "crowdnav").strip().lower() or "crowdnav"
+    targets = list(target_keys_for_domain(domain_key))
+
     metrics_path = os.path.join(model_dir, "metrics.json")
     prior = read_manifest(out_dir)
     if (
@@ -291,7 +350,7 @@ def run_bootstrap(
         and os.path.isfile(metrics_path)
         and prior
         and str(prior.get("feature_schema_version")) == FEATURE_SCHEMA_VERSION
-        and list(prior.get("target_keys") or []) == ["SR", "CR", "TR"]
+        and list(prior.get("target_keys") or []) == targets
     ):
         logger.info("bootstrap idempotent hit — returning existing artifacts")
         return {
@@ -312,7 +371,6 @@ def run_bootstrap(
     from raise_core.refine import Stage2Config
     from raise_core.surrogate.features import set_behavior_smoke_states
 
-    domain_key = str(domain or "crowdnav").strip().lower() or "crowdnav"
     pack = load_domain(domain_key)
     if pack.smoke_states_fn is not None:
         set_behavior_smoke_states(pack.smoke_states_fn())
@@ -397,12 +455,8 @@ def run_bootstrap(
             + f" ({console.format_seconds(wall)})",
             stage="surrogate",
         )
-        if result.get("status") == "ok" or result.get("status") == "failed":
-            # failed still appends a row; count as labeled attempt on disk
-            if result.get("example_id"):
-                labeled += 1
-            else:
-                skipped += 1
+        if result.get("status") == "ok" and result.get("example_id"):
+            labeled += 1
         else:
             skipped += 1
 
@@ -410,8 +464,11 @@ def run_bootstrap(
     if len(feats) < 1:
         raise RuntimeError("no surrogate examples on disk after bootstrap labeling")
 
+    feats, labs = filter_ok_examples(feats, labs, target_keys=targets)
+    if len(feats) < 1:
+        raise RuntimeError("no ok=True surrogate examples after bootstrap labeling")
     model = SurrogateModel(random_seed=int(seed), n_bags=3 if use_stub else 5)
-    fit_metrics = model.fit(feats, labs, target_keys=("SR", "CR", "TR"))
+    fit_metrics = model.fit(feats, labs, target_keys=tuple(targets))
     os.makedirs(model_dir, exist_ok=True)
     model.save(model_dir)
     with open(metrics_path, "w", encoding="utf-8") as fh:
@@ -424,7 +481,7 @@ def run_bootstrap(
         "feature_schema_version": FEATURE_SCHEMA_VERSION,
         "label_schema_version": LABEL_SCHEMA_VERSION,
         "label_budget": LABEL_BUDGET,
-        "target_keys": ["SR", "CR", "TR"],
+        "target_keys": list(targets),
         "n_candidates_requested": int(n_candidates),
         "n_labeled_this_run": int(labeled),
         "n_skipped": int(skipped),

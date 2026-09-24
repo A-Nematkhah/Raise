@@ -189,12 +189,13 @@ def candidate_to_dict(cand) -> Dict[str, Any]:
     }
 
 
-def load_candidate_dict(d: Dict[str, Any]):
+def load_candidate_dict(d: Dict[str, Any], *, validator: Any = None):
     from raise_core.explore import RewardCandidate
     from raise_core.sandbox import RewardValidator
 
     code = d["code"]
-    reward_fn, err = RewardValidator().try_validate(code)
+    val = validator if validator is not None else RewardValidator()
+    reward_fn, err = val.try_validate(code)
     return RewardCandidate(
         candidate_id=d.get("candidate_id", "loaded"),
         code=code,

@@ -128,6 +128,8 @@ class RaiseRunConfig:
     # Max in-loop D.3 rewrites per epoch (0 = off; needs proxy_feedback).
     closed_loop_proxy_feedback_d3_per_epoch: int = 0
     closed_loop_enable_refine: bool = False  # legacy → d3_per_epoch=1 when set
+    # Phase 4: allow hard gate early when mean val MAE ≤ this (None = labels only).
+    closed_loop_max_val_mae_for_gate: Optional[float] = None
     # Crash-safe Stage III resume from output_dir/stage3/checkpoint.json (+ mid-PPO).
     stage3_resume: bool = True
     stage3_save_interval_updates: int = 50
@@ -313,6 +315,11 @@ class RaisePipeline:
             eval_episodes=(
                 int(cfg.stage2_eval_episodes)
                 if getattr(cfg, "stage2_eval_episodes", None) is not None
+                else None
+            ),
+            max_val_mae_for_gate=(
+                float(cfg.closed_loop_max_val_mae_for_gate)
+                if getattr(cfg, "closed_loop_max_val_mae_for_gate", None) is not None
                 else None
             ),
         )
@@ -726,43 +733,108 @@ class RaisePipeline:
         stage3_input_pop = list(stage2_pop)
         surrogate_gate_report: Optional[Dict[str, Any]] = None
         surrogate_preds_s2: Optional[List[Dict[str, Any]]] = None
+        stage3_elite_report: Optional[Dict[str, Any]] = None
         if (
             surrogate_model_ready(cfg.surrogate_model_dir)
             and bool(cfg.surrogate_gate_stage3)
         ):
+            from raise_core.raise_loop.gate_policy import surrogate_hard_gate_ready
+
+            n_lab = 0
             try:
-                surrogate_preds_s2, _m2 = predict_population(
-                    stage3_input_pop,
-                    str(cfg.surrogate_model_dir),
-                    score_fn=self._score_fn(),
-                )
-                write_json(
-                    os.path.join(cfg.output_dir, "surrogate_preds_stage2.json"),
-                    {"predictions": surrogate_preds_s2},
-                )
-                stage3_input_pop, surrogate_gate_report = gate_population(
-                    stage3_input_pop,
-                    surrogate_preds_s2,
-                    drop_fraction=float(cfg.surrogate_drop_fraction),
-                    max_uncertainty_to_drop=float(
-                        cfg.surrogate_max_uncertainty_to_drop
-                    ),
-                    min_keep=int(cfg.surrogate_min_keep),
-                )
-                write_json(
-                    os.path.join(cfg.output_dir, "surrogate_gate_stage3.json"),
-                    surrogate_gate_report,
-                )
+                from raise_core.surrogate.dataset_io import existing_example_ids
+
+                n_lab = len(existing_example_ids(str(cfg.surrogate_dataset)))
+            except Exception:  # noqa: BLE001
+                n_lab = 0
+            fit_m = None
+            mpath = os.path.join(str(cfg.surrogate_model_dir or ""), "metrics.json")
+            if os.path.isfile(mpath):
+                try:
+                    with open(mpath, encoding="utf-8") as fh:
+                        fit_m = json.load(fh)
+                except Exception:  # noqa: BLE001
+                    fit_m = None
+            min_lab = int(cfg.closed_loop_min_labels_for_gate)
+            max_mae = getattr(cfg, "closed_loop_max_val_mae_for_gate", None)
+            ready, ready_reason = surrogate_hard_gate_ready(
+                n_labeled=n_lab,
+                min_labels=min_lab,
+                fit_metrics=fit_m if isinstance(fit_m, dict) else None,
+                max_val_mae=float(max_mae) if max_mae is not None else None,
+            )
+            if not ready:
+                surrogate_gate_report = {
+                    "enabled": False,
+                    "soft": True,
+                    "reason": ready_reason,
+                    "n_kept": len(stage3_input_pop),
+                    "n_dropped": 0,
+                }
                 console.status(
-                    f"Surrogate Stage III gate: kept={surrogate_gate_report['n_kept']} "
-                    f"dropped={surrogate_gate_report['n_dropped']}",
+                    f"Surrogate Stage III gate soft ({ready_reason})",
                     stage="pipeline",
                 )
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("Surrogate Stage III gate failed: %s", exc)
-                console.warn(f"Surrogate gate skipped: {exc}", stage="pipeline")
-                stage3_input_pop = list(stage2_pop)
-                surrogate_gate_report = {"enabled": False, "error": str(exc)}
+            else:
+                try:
+                    surrogate_preds_s2, _m2 = predict_population(
+                        stage3_input_pop,
+                        str(cfg.surrogate_model_dir),
+                        score_fn=self._score_fn(),
+                    )
+                    write_json(
+                        os.path.join(cfg.output_dir, "surrogate_preds_stage2.json"),
+                        {"predictions": surrogate_preds_s2},
+                    )
+                    stage3_input_pop, surrogate_gate_report = gate_population(
+                        stage3_input_pop,
+                        surrogate_preds_s2,
+                        drop_fraction=float(cfg.surrogate_drop_fraction),
+                        max_uncertainty_to_drop=float(
+                            cfg.surrogate_max_uncertainty_to_drop
+                        ),
+                        min_keep=int(cfg.surrogate_min_keep),
+                    )
+                    write_json(
+                        os.path.join(cfg.output_dir, "surrogate_gate_stage3.json"),
+                        surrogate_gate_report,
+                    )
+                    console.status(
+                        f"Surrogate Stage III gate: kept={surrogate_gate_report['n_kept']} "
+                        f"dropped={surrogate_gate_report['n_dropped']}",
+                        stage="pipeline",
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("Surrogate Stage III gate failed: %s", exc)
+                    console.warn(f"Surrogate gate skipped: {exc}", stage="pipeline")
+                    stage3_input_pop = list(stage2_pop)
+                    surrogate_gate_report = {"enabled": False, "error": str(exc)}
+
+        # Force elites: kept ∪ best_s2 ∪ best_scalar; Score1-best if strong (highway).
+        try:
+            from raise_core.raise_loop.gate_policy import assemble_stage3_population
+
+            stage3_input_pop, stage3_elite_report = assemble_stage3_population(
+                stage3_input_pop,
+                full_pool=list(stage2_pop),
+                best_s2=best_s2,
+                best_s1=best_s1,
+                domain=str(pack.name),
+            )
+            write_json(
+                os.path.join(cfg.output_dir, "stage3_elite_assembly.json"),
+                stage3_elite_report,
+            )
+            if stage3_elite_report.get("forced_elites") or stage3_elite_report.get(
+                "score1_best_added"
+            ):
+                console.status(
+                    f"Stage III elites: {stage3_elite_report.get('forced_elites')} "
+                    f"score1_added={stage3_elite_report.get('score1_best_added')}",
+                    stage="pipeline",
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Stage III elite assembly failed: %s", exc)
 
         # ----- Stage III -----
         # H-sweep only for CrowdNav (human counts). Other domains skip it.

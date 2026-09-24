@@ -1,9 +1,12 @@
 #!/usr/bin/env python
 """Collect a Stage I trajectory dataset for the highway domain pack.
 
-Produces a mix of ``success`` / ``collision`` / ``timeout`` labels. Dense
-default traffic makes naive random/idle policies crash-only; this collector
-uses per-behavior env + action presets so Score1 has preference diversity.
+Balanced labels for hybrid Score1:
+
+- ``safe`` / ``safe_fast`` → success with cruise speed (reward these)
+- ``crawl`` → success but low speed (Score1 must *not* prefer these)
+- ``aggressive`` / ``random`` → collisions
+- ``swerve`` → collisions / rare off-road; synth timeout fill if needed
 """
 
 from __future__ import annotations
@@ -18,10 +21,11 @@ import raise_paths  # noqa: E402,F401
 import argparse
 import os
 import sys
+from collections import Counter
+from dataclasses import replace as dc_replace
 
 import numpy as np
 
-# DiscreteMetaAction indices (highway-env): LANE_LEFT, IDLE, LANE_RIGHT, FASTER, SLOWER
 _IDLE = 1
 _FASTER = 3
 _SLOWER = 4
@@ -34,33 +38,36 @@ def _clip_action(action: int, action_n: int) -> int:
 
 
 def _behavior_action(behavior: str, step: int, action_n: int) -> int:
-    if behavior == "safe":
-        # Prefer slow cruise; rare idle — maximize survival to timeout=success.
-        return _clip_action(_SLOWER if step % 7 else _IDLE, action_n)
+    if behavior in ("safe", "safe_fast"):
+        # Cruise: mostly FASTER with occasional IDLE.
+        return _clip_action(_FASTER if step % 4 else _IDLE, action_n)
+    if behavior == "crawl":
+        # Survive by crawling — for Score1 negative example.
+        return _clip_action(_SLOWER, action_n)
     if behavior == "idle":
         return _clip_action(_IDLE, action_n)
     if behavior == "aggressive":
-        return _clip_action(_FASTER if step % 3 else _IDLE, action_n)
+        return _clip_action(_FASTER if step % 2 else _IDLE, action_n)
     if behavior == "swerve":
-        # Alternate lane changes → often off-road / unstable → timeout label.
-        return _clip_action(_LEFT if (step // 4) % 2 == 0 else _RIGHT, action_n)
+        return _clip_action(_LEFT if (step // 3) % 2 == 0 else _RIGHT, action_n)
     if behavior == "random":
         return int(np.random.randint(0, action_n))
     return _clip_action(_IDLE, action_n)
 
 
 def _env_overrides(behavior: str) -> dict:
-    """Ease traffic for success; densify for collisions."""
-    if behavior == "safe":
+    if behavior in ("safe", "safe_fast"):
         return {"vehicles_count": 6, "lanes_count": 4, "duration": 40}
+    if behavior == "crawl":
+        return {"vehicles_count": 4, "lanes_count": 4, "duration": 40}
     if behavior == "idle":
-        return {"vehicles_count": 10, "duration": 40}
+        return {"vehicles_count": 8, "duration": 40}
     if behavior == "aggressive":
-        return {"vehicles_count": 25, "duration": 30}
+        return {"vehicles_count": 28, "duration": 30}
     if behavior == "swerve":
-        return {"vehicles_count": 8, "duration": 25}
+        return {"vehicles_count": 10, "duration": 25}
     if behavior == "random":
-        return {"vehicles_count": 20, "duration": 30}
+        return {"vehicles_count": 22, "duration": 30}
     return {}
 
 
@@ -71,14 +78,20 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=425)
     parser.add_argument(
         "--behaviors",
-        default="safe,aggressive,swerve,random",
-        help="Comma-separated behavior names (default targets label diversity)",
+        default="safe_fast,safe_fast,crawl,aggressive,random,swerve",
+        help="Comma-separated behaviors (repeat safe_fast for more cruise successes)",
     )
     parser.add_argument(
         "--min-per-label",
         type=int,
         default=5,
-        help="Warn (and exit 2) if any of success/collision/timeout is below this",
+        help="Warn/exit 2 if success/collision/timeout below this",
+    )
+    parser.add_argument(
+        "--min-crawl-success",
+        type=int,
+        default=5,
+        help="Need at least this many crawl-tagged success trajs",
     )
     args = parser.parse_args()
 
@@ -126,6 +139,7 @@ def main() -> int:
             done = False
             step = 0
             action_n = int(env.action_space.n)
+            speed_sum = 0.0
             while not done:
                 action = _behavior_action(behavior, step, action_n)
                 obs, _r, terminated, truncated, info = env.step(action)
@@ -150,42 +164,84 @@ def main() -> int:
                 )
                 _ = reward_fn.compute(state)
                 states.append(state)
+                speed_sum += float(state.speed)
                 if collision:
                     label = "collision"
                 elif off_road:
                     label = "timeout"
                 elif timeout:
-                    # Survived full horizon without crash/off-road → success for Score1.
                     label = "success"
                 done = bool(terminated or truncated)
                 step += 1
             env.close()
             if hasattr(reward_fn, "reset"):
                 reward_fn.reset()
+
+            mean_speed = speed_sum / float(max(1, len(states)))
+            mean_progress = float(sum(float(s.progress) for s in states))
+            beh_out = behavior
+            states_out = list(states)
+
+            # highway-env SLOWER often still cruises ~20 m/s; synthesize a true
+            # crawl profile for Score1 negative examples while keeping success.
+            if label == "success" and behavior == "crawl":
+                beh_out = "crawl"
+                scale_v = 7.0 / max(mean_speed, 1e-3)
+                scale_v = float(min(max(scale_v, 0.15), 0.45))
+                new_states = []
+                x = float(states[0].ego.x) if states else 0.0
+                for s in states:
+                    spd = max(4.0, float(s.speed) * scale_v)
+                    prog = float(s.progress) * scale_v
+                    x = x + prog
+                    new_states.append(
+                        dc_replace(
+                            s,
+                            progress=prog,
+                            speed=spd,
+                            ego=dc_replace(
+                                s.ego,
+                                x=x,
+                                vx=spd,
+                                speed=spd,
+                            ),
+                        )
+                    )
+                states_out = new_states
+                mean_speed = float(sum(float(s.speed) for s in states_out) / max(1, len(states_out)))
+                mean_progress = float(sum(float(s.progress) for s in states_out))
+            elif label == "success" and (
+                behavior in ("safe", "safe_fast") or mean_speed >= 15.0
+            ):
+                beh_out = "safe_fast"
+
             trajs.append(
                 HighwayTrajectoryRecord(
                     trajectory_id=f"hw_{tid:04d}",
                     scenario_id=f"beh_{behavior}",
                     seed=seed,
-                    states=tuple(states) if states else tuple(),
+                    states=tuple(states_out) if states_out else tuple(),
                     label=label,
-                    behavior=behavior,
+                    behavior=beh_out,
+                    metadata={
+                        "mean_speed": float(mean_speed),
+                        "mean_progress": float(mean_progress),
+                        "n_steps": int(len(states_out)),
+                        "requested_behavior": behavior,
+                        "crawl_synthesized": bool(behavior == "crawl" and label == "success"),
+                    },
                 )
             )
             tid += 1
             print(
                 f"collected {trajs[-1].trajectory_id} label={label} "
-                f"behavior={behavior} steps={len(states)}"
+                f"behavior={beh_out} steps={len(states)} "
+                f"speed={mean_speed:.1f} progress={mean_progress:.1f}"
             )
 
     trajs = [t for t in trajs if len(t.states) >= 1]
 
-    from collections import Counter
-    from dataclasses import replace as dc_replace
-
     counts = Counter(t.label for t in trajs)
-    # DiscreteMetaAction rarely leaves the road; synthesize timeout trajs for Score1
-    # preference diversity when rollouts yielded none.
     need_to = max(0, int(args.min_per_label) - int(counts.get("timeout", 0)))
     if need_to > 0:
         donors = [t for t in trajs if t.label == "success" and len(t.states) >= 4]
@@ -196,7 +252,6 @@ def main() -> int:
                 break
             src = donors[i % len(donors)]
             frames = list(src.states)
-            # Mark the last 2 frames as off-road / timeout terminal.
             for j in (-2, -1):
                 s = frames[j]
                 frames[j] = dc_replace(
@@ -214,6 +269,7 @@ def main() -> int:
                     states=tuple(frames),
                     label="timeout",
                     behavior="synth_timeout",
+                    metadata=dict(src.metadata or {}),
                 )
             )
             print(
@@ -223,10 +279,23 @@ def main() -> int:
             tid += 1
 
     save_highway_dataset(str(args.out), trajs)
-
     counts = Counter(t.label for t in trajs)
+    crawl_n = sum(
+        1
+        for t in trajs
+        if t.label == "success"
+        and ("crawl" in str(t.behavior).lower() or float((t.metadata or {}).get("mean_speed") or 99) < 12.0)
+    )
+    fast_n = sum(
+        1
+        for t in trajs
+        if t.label == "success"
+        and float((t.metadata or {}).get("mean_speed") or 0) >= 15.0
+    )
     print(f"Wrote {len(trajs)} trajectories -> {args.out}")
     print(f"label counts: {dict(counts)}")
+    print(f"success_crawl~={crawl_n} success_fast~={fast_n}")
+
     min_n = int(args.min_per_label)
     missing = [
         lab
@@ -235,8 +304,20 @@ def main() -> int:
     ]
     if missing:
         print(
-            f"WARNING: labels below --min-per-label={min_n}: {missing}. "
-            "Re-run with more episodes or different --behaviors.",
+            f"WARNING: labels below --min-per-label={min_n}: {missing}",
+            file=sys.stderr,
+        )
+        return 2
+    if crawl_n < int(args.min_crawl_success):
+        print(
+            f"WARNING: crawl successes {crawl_n} < --min-crawl-success="
+            f"{args.min_crawl_success}",
+            file=sys.stderr,
+        )
+        return 2
+    if fast_n < 3:
+        print(
+            f"WARNING: few fast successes ({fast_n}); Score1 throughput term weak",
             file=sys.stderr,
         )
         return 2

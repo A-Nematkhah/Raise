@@ -56,6 +56,8 @@ class DomainPack:
     make_score_fn: Optional[Callable[..., Any]] = None
     # Optional factory: () -> Sequence[smoke state objects] for RewardValidator.
     smoke_states_fn: Optional[Callable[[], Sequence[Any]]] = None
+    # Optional SandboxConfig (highway Attribute allowlist); None = default CrowdNav.
+    sandbox_config: Optional[Any] = None
     # Pack-local Stage II/III trainer factories (preferred over name branches).
     make_stage2_trainer: Optional[Callable[..., Any]] = None
     make_stage3_trainer: Optional[Callable[..., Any]] = None

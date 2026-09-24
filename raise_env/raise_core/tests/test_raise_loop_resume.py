@@ -199,3 +199,30 @@ def test_resume_mid_labeling_continues(tmp_path, monkeypatch):
     ckpt = load_checkpoint(out)
     assert ckpt is not None
     assert ckpt["status"] == "completed"
+
+def test_highway_deserialize_uses_domain_validator():
+    """Resume must not re-validate highway code against CrowdNav RewardState."""
+    from domains.highway.prompts import D5_SEED_FUNCTION
+    from raise_core.domains import load_domain, make_validator_for_domain
+    from raise_core.raise_loop.checkpoint import deserialize_population
+    from domains.crowdnav.reporting import load_candidate_dict
+
+    pack = load_domain("highway")
+    v = make_validator_for_domain(pack)
+    rows = [
+        {
+            "candidate_id": "hw0",
+            "code": D5_SEED_FUNCTION,
+            "score": 0.5,
+            "valid": True,
+            "origin": "test",
+            "parent_ids": [],
+            "metadata": {},
+        }
+    ]
+    bad = load_candidate_dict(rows[0])
+    assert bad.reward_fn is None
+
+    good = deserialize_population(rows, validator=v)
+    assert len(good) == 1
+    assert good[0].reward_fn is not None

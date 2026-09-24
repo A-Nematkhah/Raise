@@ -64,10 +64,18 @@ def _serialize_pop(population: Optional[Sequence[Any]]) -> List[Dict[str, Any]]:
     return out
 
 
-def deserialize_population(rows: Optional[Sequence[Dict[str, Any]]]) -> List[RewardCandidate]:
+def deserialize_population(
+    rows: Optional[Sequence[Dict[str, Any]]],
+    *,
+    validator: Any = None,
+) -> List[RewardCandidate]:
     if not rows:
         return []
-    return [load_candidate_dict(dict(row)) for row in rows if isinstance(row, dict)]
+    return [
+        load_candidate_dict(dict(row), validator=validator)
+        for row in rows
+        if isinstance(row, dict)
+    ]
 
 
 def build_checkpoint(

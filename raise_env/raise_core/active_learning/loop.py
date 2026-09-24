@@ -77,21 +77,27 @@ def _refit_surrogate(
     surrogate_dataset: str,
     surrogate_model_dir: str,
     seed: int,
+    domain: str = "crowdnav",
 ) -> Dict[str, Any]:
     from raise_core.surrogate.dataset_io import load_table
+    from raise_core.surrogate.targets import filter_ok_examples, target_keys_for_domain
 
     feats, labs = load_table(surrogate_dataset)
     if len(feats) < 1:
         return {"status": "skipped", "reason": "empty_dataset"}
+    targets = target_keys_for_domain(domain)
+    feats, labs = filter_ok_examples(feats, labs, target_keys=targets)
+    if len(feats) < 1:
+        return {"status": "skipped", "reason": "no_ok_labels"}
     model = SurrogateModel(random_seed=int(seed))
-    metrics = model.fit(feats, labs, target_keys=("SR", "CR", "TR"))
+    metrics = model.fit(feats, labs, target_keys=targets)
     os.makedirs(surrogate_model_dir, exist_ok=True)
     model.save(surrogate_model_dir)
     metrics_path = os.path.join(surrogate_model_dir, "metrics.json")
     with open(metrics_path, "w", encoding="utf-8") as fh:
         json.dump(metrics, fh, indent=2)
         fh.write("\n")
-    return {"status": "ok", "n": len(feats), "metrics": metrics}
+    return {"status": "ok", "n": len(feats), "metrics": metrics, "target_keys": list(targets)}
 
 
 def run_active_learning_step(
@@ -109,6 +115,7 @@ def run_active_learning_step(
     promote_threshold: float = 0.0,
     stage1_dataset_path: str = "domains/crowdnav/data/stage1_dataset",
     enqueue_only: bool = False,
+    domain: str = "crowdnav",
 ) -> Dict[str, Any]:
     """
     One AL iteration. See PLAN.md §5.
@@ -212,6 +219,7 @@ def run_active_learning_step(
             surrogate_dataset=surrogate_dataset,
             surrogate_model_dir=surrogate_model_dir,
             seed=int(seed),
+            domain=str(domain or "crowdnav"),
         )
         did_refit = refit_info.get("status") == "ok"
         if did_refit:

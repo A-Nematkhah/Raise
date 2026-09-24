@@ -73,10 +73,16 @@ def format_highway_metrics_line(metrics: Mapping[str, Any]) -> str:
     soft = _finite(metrics.get("soft_success"))
     lc = _finite(metrics.get("lane_change_rate"))
     sc = highway_navigation_scalar(metrics)
+    n_ok = metrics.get("n_success")
+    n_cr = metrics.get("n_collision")
+    n_ep = metrics.get("n_eval_episodes")
+    counts = ""
+    if n_ok is not None and n_cr is not None and n_ep is not None:
+        counts = f" [{int(n_ok)}ok/{int(n_cr)}cr/{int(n_ep)}ep]"
     return (
-        f"SR={sr:.3f} CR={cr:.3f} TR={tr:.3f} | "
+        f"SR={sr:.3f} CR={cr:.3f} TR={tr:.3f}{counts} | "
         f"progress={pl:.1f}m speed={spd:.1f}m/s soft={soft:.3f} "
-        f"lane_chg={lc:.2f}/s | scalar={sc:.3f}"
+        f"lane_chg={lc:.2f} | scalar={sc:.3f}"
     )
 
 

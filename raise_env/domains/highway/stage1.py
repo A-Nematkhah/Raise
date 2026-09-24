@@ -18,7 +18,6 @@ from domains.highway.state import (
 from raise_core.rules import (
     TrajectoryCategory,
     label_to_category,
-    rule_preference_score,
     spearman_correlation,
 )
 from raise_core.scoring import Score1Result
@@ -181,15 +180,48 @@ def load_highway_dataset(path: str) -> List[HighwayTrajectoryRecord]:
     return out
 
 
+def _traj_mean_speed(traj: HighwayTrajectoryRecord) -> float:
+    if traj.metadata.get("mean_speed") is not None:
+        try:
+            return float(traj.metadata["mean_speed"])
+        except (TypeError, ValueError):
+            pass
+    speeds = [float(s.speed) for s in traj.states]
+    return float(np.mean(speeds)) if speeds else 0.0
+
+
+def _traj_mean_progress(traj: HighwayTrajectoryRecord) -> float:
+    if traj.metadata.get("mean_progress") is not None:
+        try:
+            return float(traj.metadata["mean_progress"])
+        except (TypeError, ValueError):
+            pass
+    # Sum of per-frame progress ≈ net forward travel.
+    return float(sum(float(s.progress) for s in traj.states))
+
+
 def _rule_score_at_frame(traj: HighwayTrajectoryRecord, frame: int) -> float:
+    """
+    Highway analytical preference along a trajectory (higher = better).
+
+    Unlike CrowdNav's near-monotonic ``1e6 - t``, this rewards instantaneous
+    progress and cruise speed and collapses on collision / off-road frames.
+    """
     idx = min(frame, len(traj.states) - 1)
     st = traj.states[idx]
-    # Prefer progress: rule_preference uses -dist_goal for Other/Fail, so pass
-    # negative progress so larger progress → better.
-    dist_goal = -float(st.ego.x) - 0.1 * float(st.speed)
-    nav = float(min(frame + 1, traj.length)) * float(st.time_step)
-    return rule_preference_score(
-        traj.category, nav_length=nav, dist_goal=dist_goal
+    if st.collision:
+        return -1e6 - float(idx)
+    if st.off_road:
+        return -5e5 - float(idx)
+
+    # Dense shaping: forward progress + band-limited speed + position trend.
+    speed = float(st.speed)
+    progress = float(st.progress)
+    speed_term = float(np.clip(speed / 25.0, 0.0, 1.5))
+    crawl = max(0.0, 12.0 - speed) / 12.0
+    # Include ego.x so within-traj ranks are non-constant when progress is flat.
+    return float(
+        3.0 * progress + 2.0 * speed_term - 1.5 * crawl + 0.05 * float(st.ego.x)
     )
 
 
@@ -204,51 +236,181 @@ def _reward_cumulatives(reward_fn: Any, traj: HighwayTrajectoryRecord) -> List[f
     return vals
 
 
-def score_highway_dataset(
-    reward_fn: Any,
-    trajectories: Sequence[HighwayTrajectoryRecord],
-    *,
-    candidate_id: str = "",
-) -> Score1Result:
-    """Mean Spearman(rule ranks, cumulative reward ranks) over trajectories."""
-    if not trajectories:
-        return Score1Result(score=0.0, degenerate_fraction=1.0, rejected=True, reject_reason="empty")
+def _episode_return(reward_fn: Any, traj: HighwayTrajectoryRecord) -> float:
+    vals = _reward_cumulatives(reward_fn, traj)
+    return float(vals[-1]) if vals else 0.0
 
+
+def _spearman_component(
+    reward_fn: Any, trajectories: Sequence[HighwayTrajectoryRecord]
+) -> Tuple[float, float, int, int]:
+    """Return (mean_rho, deg_frac, n_pairs, n_deg)."""
     pair_scores: List[float] = []
     n_deg = 0
     n_pairs = 0
     for traj in trajectories:
-        n = len(traj.states)
-        rules = [_rule_score_at_frame(traj, f) for f in range(n)]
+        rules = [_rule_score_at_frame(traj, f) for f in range(len(traj.states))]
         rewards = _reward_cumulatives(reward_fn, traj)
-        # Pad freeze already implicit (one frame per state).
         rho = spearman_correlation(rules, rewards)
         n_pairs += 1
         if rho is None or (isinstance(rho, float) and (rho != rho)):
             n_deg += 1
             continue
         pair_scores.append(float(rho))
-
     deg_frac = float(n_deg) / float(max(1, n_pairs))
     if not pair_scores:
-        return Score1Result(
-            score=-1.0,
-            degenerate_fraction=deg_frac,
-            n_pairs=n_pairs,
-            n_degenerate=n_deg,
-            rejected=True,
-            reject_reason="all_degenerate",
-        )
-    score = float(np.mean(pair_scores))
-    rejected = deg_frac >= 0.5
+        return 0.0, deg_frac, n_pairs, n_deg
+    return float(np.mean(pair_scores)), deg_frac, n_pairs, n_deg
+
+
+def _preference_auc(
+    returns: Dict[str, float],
+    trajectories: Sequence[HighwayTrajectoryRecord],
+) -> float:
+    """
+    Pairwise preference: success ≻ timeout ≻ collision on episode returns.
+
+    Returns fraction of correctly ordered pairs in [-1, 1] mapped to [0, 1]
+    then shifted to roughly [-1, 1] via ``2*auc - 1`` for mixing.
+    """
+    by_label: Dict[str, List[float]] = {"success": [], "timeout": [], "collision": []}
+    for traj in trajectories:
+        if traj.label in by_label:
+            by_label[traj.label].append(float(returns[traj.trajectory_id]))
+
+    pairs = (
+        ("success", "timeout"),
+        ("success", "collision"),
+        ("timeout", "collision"),
+    )
+    correct = 0
+    total = 0
+    for better, worse in pairs:
+        for a in by_label[better]:
+            for b in by_label[worse]:
+                total += 1
+                if a > b:
+                    correct += 1
+                elif a == b:
+                    correct += 0.5
+    if total < 1:
+        return 0.0
+    auc = float(correct) / float(total)
+    return float(2.0 * auc - 1.0)  # [-1, 1]
+
+
+def _throughput_alignment(
+    returns: Dict[str, float],
+    trajectories: Sequence[HighwayTrajectoryRecord],
+) -> float:
+    """
+    Among success trajs, Spearman(episode_return, throughput_score).
+
+    throughput = 0.6·norm(progress) + 0.4·norm(speed). Rewards that only
+    like crawling lose here against progress/speed-aligned rewards.
+    """
+    succ = [t for t in trajectories if t.label == "success"]
+    if len(succ) < 3:
+        return 0.0
+    rets = [float(returns[t.trajectory_id]) for t in succ]
+    speeds = [_traj_mean_speed(t) for t in succ]
+    progs = [_traj_mean_progress(t) for t in succ]
+    s_max = max(speeds) if max(speeds) > 1e-6 else 1.0
+    p_max = max(progs) if max(progs) > 1e-6 else 1.0
+    thr = [0.6 * (p / p_max) + 0.4 * (s / s_max) for p, s in zip(progs, speeds)]
+    rho = spearman_correlation(rets, thr)
+    if rho is None or (isinstance(rho, float) and rho != rho):
+        return 0.0
+    return float(rho)
+
+
+def _crawl_penalty(
+    returns: Dict[str, float],
+    trajectories: Sequence[HighwayTrajectoryRecord],
+) -> float:
+    """
+    Positive penalty if mean return on crawl successes ≥ mean return on fast ones.
+
+    Crawl trajs are tagged via behavior containing 'crawl' or mean_speed < 12.
+    """
+    crawl_rets: List[float] = []
+    fast_rets: List[float] = []
+    for t in trajectories:
+        if t.label != "success":
+            continue
+        r = float(returns[t.trajectory_id])
+        spd = _traj_mean_speed(t)
+        beh = str(t.behavior or "").lower()
+        if "crawl" in beh or spd < 12.0:
+            crawl_rets.append(r)
+        elif "safe" in beh or "fast" in beh or spd >= 15.0:
+            fast_rets.append(r)
+    if not crawl_rets or not fast_rets:
+        return 0.0
+    gap = float(np.mean(crawl_rets) - np.mean(fast_rets))
+    # Only punish when crawl is preferred or tied.
+    return float(max(0.0, gap) / (abs(float(np.mean(fast_rets))) + 1.0))
+
+
+def score_highway_dataset(
+    reward_fn: Any,
+    trajectories: Sequence[HighwayTrajectoryRecord],
+    *,
+    candidate_id: str = "",
+) -> Score1Result:
+    """
+    Hybrid highway Score1 (higher better, roughly in [-1, 1] before reject).
+
+    Components (weights sum to 1 before crawl penalty)::
+
+        0.25 · within-traj Spearman(highway_rule, cum_reward)
+        0.40 · preference AUC (success ≻ timeout ≻ collision)
+        0.35 · throughput alignment on success trajs
+        − 0.50 · crawl_penalty
+    """
+    del candidate_id  # reserved for logging / future per-candidate caches
+    if not trajectories:
+        return Score1Result(score=0.0, degenerate_fraction=1.0, rejected=True, reject_reason="empty")
+
+    spearman_mean, deg_frac, n_pairs, n_deg = _spearman_component(reward_fn, trajectories)
+    returns = {t.trajectory_id: _episode_return(reward_fn, t) for t in trajectories}
+    pref = _preference_auc(returns, trajectories)
+    thr = _throughput_alignment(returns, trajectories)
+    crawl = _crawl_penalty(returns, trajectories)
+
+    raw = (
+        0.25 * float(spearman_mean)
+        + 0.40 * float(pref)
+        + 0.35 * float(thr)
+        - 0.50 * float(crawl)
+    )
+    # Keep a bit of headroom; clamp for stability in evolution logs.
+    score = float(np.clip(raw, -1.5, 1.5))
+
+    # Hybrid Score1: do not hard-reject solely on within-traj Spearman
+    # degeneracy when preference/throughput still provide signal.
+    rejected = False
+    reject_reason = None
+    if deg_frac >= 0.95 and abs(pref) < 1e-9 and abs(thr) < 1e-9:
+        rejected = True
+        reject_reason = "no_signal"
+        score = -1.0
+
+    scenario_scores = {
+        "spearman": float(spearman_mean),
+        "preference_auc": float(pref),
+        "throughput": float(thr),
+        "crawl_penalty": float(crawl),
+    }
     return Score1Result(
-        score=-1.0 if rejected else score,
+        score=score if not rejected else -1.0,
         degenerate_fraction=deg_frac,
         n_pairs=n_pairs,
         n_degenerate=n_deg,
         rejected=rejected,
-        reject_reason="degenerate_fraction" if rejected else None,
-        raw_score=score,
+        reject_reason=reject_reason,
+        raw_score=float(np.clip(raw, -1.5, 1.5)),
+        scenario_scores=scenario_scores,
     )
 
 
@@ -385,7 +547,7 @@ def make_smoke_score_fn() -> Callable[..., Score1Result]:
 
     def _fn(reward_fn: Any, *, candidate_id: str = "") -> Score1Result:
         result = score_highway_dataset(reward_fn, trajs, candidate_id=candidate_id)
-        # Smoke fixture: never hard-reject on degeneracy; keep raw_score for ranking.
+        # Smoke fixture: never hard-reject; keep raw_score for ranking.
         if result.raw_score is not None:
             return Score1Result(
                 score=float(result.raw_score),
@@ -395,6 +557,7 @@ def make_smoke_score_fn() -> Callable[..., Score1Result]:
                 rejected=False,
                 reject_reason=None,
                 raw_score=result.raw_score,
+                scenario_scores=result.scenario_scores,
             )
         return result
 

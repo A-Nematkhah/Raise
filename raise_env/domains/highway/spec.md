@@ -26,6 +26,56 @@ Episode memory: plain `dict` cleared on reset.
 - Collision / off-road penalties and clearance shaping
 - Interpretability (locals only; no extra signature args)
 
+## Stage I (Score1)
+
+Hybrid Score1 (not Spearman-only):
+
+```
+0.25 · within-traj Spearman(highway_rule, cum_reward)
+0.40 · preference AUC (success ≻ timeout ≻ collision)
+0.35 · throughput alignment on success (speed/progress)
+− 0.50 · crawl_penalty
+```
+
+Dataset should include **safe_fast** successes and **crawl** successes so
+Score1 can punish “survive by going slow”. Collect with:
+
+```bash
+python scripts/collect_highway_stage1_dataset.py
+```
+
+## Surrogate (Stage II labels)
+
+Fit targets (highway only; CrowdNav stays SR/CR/TR):
+
+```
+SR, CR, TR, mean_speed, mean_progress, soft_success
+```
+
+Gate / AL quality uses `highway_navigation_scalar` on predicted `y_hat`
+(not SR−CR−0.5·TR alone). Labels also store `selection_scalar` for logging.
+
+Warm bootstrap (optional) and closed-loop refit pick these targets via
+`--domain highway` / `ClosedLoopConfig.domain`.
+
+## LLM sandbox (Phase 3)
+
+Highway `RewardValidator` enables an **AST Attribute allowlist**: only
+`HighwayRewardState` / `EgoVehicle` / `NearbyVehicle` fields (+ `memory.get`).
+Hallucinated names (`lane_position`, `distance`, `robot`, …) are rejected
+before smoke. D.1 includes negative few-shots; D.3 repair maps them to
+legal substitutes. SeedVariant rotates clearance / lane / speed-band /
+crawl structures (not only coef tweaks).
+
+## Closed-loop / Stage III (Phase 4)
+
+- Hard Surrogate gate: `n_labeled ≥ 16` **or** mean val MAE ≤ `0.35`
+  (`--closed-loop-max-val-mae-gate`). Until then gate is soft.
+- Stage III input = gated kept ∪ best Stage II ∪ best selection_scalar;
+  Score1-best is forced only if `soft_success` / scalar look strong.
+- Stage II eval default for 4h profile: **E2=20** (K2 stays 15k).
+- Epoch logs include Score1 spread, soft_success μ, scalar μ.
+
 ## Evaluation metrics
 
 Mapped onto RAISE `ProxyMetrics`:

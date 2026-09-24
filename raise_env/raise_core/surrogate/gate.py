@@ -11,9 +11,9 @@ import logging
 import os
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from raise_core.selection import navigation_scalar
 from raise_core.surrogate.features import extract_candidate_features
 from raise_core.surrogate.model import SurrogateModel, SurrogatePrediction
+from raise_core.surrogate.targets import quality_from_y_hat
 
 logger = logging.getLogger(__name__)
 
@@ -51,11 +51,7 @@ def predict_population(
                 )
         feats = extract_candidate_features(cand, score1_result=s1)
         pred = model.predict(feats)
-        quality = navigation_scalar(
-            float(pred.y_hat.get("SR", 0.0)),
-            float(pred.y_hat.get("CR", 0.0)),
-            float(pred.y_hat.get("TR", 0.0)),
-        )
+        quality = float(quality_from_y_hat(pred.y_hat))
         rows.append(
             {
                 "candidate_id": getattr(cand, "candidate_id", ""),

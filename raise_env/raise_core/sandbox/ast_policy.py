@@ -7,9 +7,9 @@ Ported from mobile_robot_env.rewards.sandbox.ast_policy.
 from __future__ import annotations
 
 import ast
-from typing import List
+from typing import List, Optional
 
-from raise_core.sandbox.config import SandboxConfig
+from raise_core.sandbox.config import SAFE_METHOD_ATTRIBUTES, SandboxConfig
 from raise_core.sandbox.errors import RewardSandboxError
 
 
@@ -17,6 +17,11 @@ class _PolicyVisitor(ast.NodeVisitor):
     def __init__(self, config: SandboxConfig) -> None:
         self.config = config
         self.reasons: List[str] = []
+        self._allowed_attrs: Optional[set[str]] = None
+        if config.allowed_attributes is not None:
+            self._allowed_attrs = set(config.allowed_attributes) | set(
+                SAFE_METHOD_ATTRIBUTES
+            )
 
     def visit_Import(self, node: ast.Import) -> None:
         if not self.config.allow_imports:
@@ -89,6 +94,12 @@ class _PolicyVisitor(ast.NodeVisitor):
     def visit_Attribute(self, node: ast.Attribute) -> None:
         if node.attr.startswith("_"):
             self.reasons.append(f"attribute {node.attr!r} is forbidden")
+        elif self._allowed_attrs is not None and node.attr not in self._allowed_attrs:
+            self.reasons.append(
+                f"attribute {node.attr!r} is not on the domain allowlist "
+                f"(hallucinated field?). Use only documented state/ego/others "
+                f"fields and memory dict methods (get/items/...)."
+            )
         self.generic_visit(node)
 
     def visit_Name(self, node: ast.Name) -> None:

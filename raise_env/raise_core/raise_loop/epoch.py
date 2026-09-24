@@ -78,34 +78,49 @@ def select_to_label(
     al_allow_stage1_requests: bool,
     al_root: str,
     score1_results: Optional[Sequence[Any]] = None,
+    fit_metrics: Optional[Dict[str, Any]] = None,
+    max_val_mae_for_gate: Optional[float] = None,
 ) -> Tuple[List[RewardCandidate], Dict[str, Any], Dict[str, Any]]:
     """
     Gen0 / soft-gate: label everyone.
     Hard gate: survivors ∪ AL stage2 picks (+ optional stage1_scenario side requests).
     """
+    from raise_core.raise_loop.gate_policy import surrogate_hard_gate_ready
+
     pop = list(population)
     gate_report: Dict[str, Any] = {"enabled": False, "soft": True}
     al_report: Dict[str, Any] = {"enabled": False, "n_al_stage2": 0, "n_stage1_requests": 0}
 
+    ready, ready_reason = surrogate_hard_gate_ready(
+        n_labeled=int(n_labeled),
+        min_labels=int(min_labels_for_gate),
+        fit_metrics=fit_metrics,
+        max_val_mae=max_val_mae_for_gate,
+    )
     soft = (
         epoch <= 0
         or not model_ready
         or predictions is None
-        or n_labeled < int(min_labels_for_gate)
+        or not ready
     )
     if soft:
+        reason = (
+            "gen0"
+            if epoch <= 0
+            else (
+                "no_model"
+                if not model_ready
+                else (
+                    "no_predictions"
+                    if predictions is None
+                    else ready_reason
+                )
+            )
+        )
         gate_report = {
             "enabled": False,
             "soft": True,
-            "reason": (
-                "gen0"
-                if epoch <= 0
-                else (
-                    "no_model"
-                    if not model_ready
-                    else f"n_labeled={n_labeled}<{min_labels_for_gate}"
-                )
-            ),
+            "reason": reason,
             "n_kept": len(pop),
             "n_dropped": 0,
         }

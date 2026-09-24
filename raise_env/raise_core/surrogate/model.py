@@ -15,7 +15,9 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
-DEFAULT_TARGET_KEYS: Tuple[str, ...] = ("SR", "CR", "TR")
+from raise_core.surrogate.targets import DEFAULT_TARGET_KEYS, HIGHWAY_TARGET_KEYS
+
+__all__ = ("DEFAULT_TARGET_KEYS", "HIGHWAY_TARGET_KEYS", "SurrogateModel", "SurrogatePrediction")
 
 
 @dataclass
@@ -193,6 +195,8 @@ class SurrogateModel:
     model_id: str = "surrogate_rf_v1"
     feature_columns: List[str] = field(default_factory=list)
     _bags: List[Any] = field(default_factory=list, repr=False)
+    # Per-target scale (train std) so uncertainty is unitless / comparable.
+    _target_scales: List[float] = field(default_factory=list, repr=False)
 
     def fit(
         self,
@@ -224,6 +228,24 @@ class SurrogateModel:
         else:
             x_val, y_val = x_train, y_train
 
+        # Scale for uncertainty: max(std, floor) so m/s and rates share a [0,1]-ish u.
+        scales: List[float] = []
+        for j in range(y_train.shape[1]):
+            std = float(np.std(y_train[:, j]))
+            # Floors: rates ~0.05, continuous targets use larger floors so
+            # raw std of mean_progress (~100s) does not dominate gate u.
+            key = self.target_keys[j] if j < len(self.target_keys) else ""
+            if key in ("SR", "CR", "TR", "soft_success", "scalar"):
+                floor = 0.05
+            elif key in ("mean_speed", "ITR", "itr"):
+                floor = 5.0
+            elif key in ("mean_progress", "PL", "pl"):
+                floor = 100.0
+            else:
+                floor = 0.05
+            scales.append(max(std, floor))
+        self._target_scales = scales
+
         self._bags = []
         for bag in range(int(self.n_bags)):
             seed = int(self.random_seed) + bag
@@ -251,6 +273,7 @@ class SurrogateModel:
             "target_keys": list(self.target_keys),
             "n_bags": int(self.n_bags),
             "model_id": self.model_id,
+            "target_scales": list(self._target_scales),
             "per_target": {},
         }
         for j, key in enumerate(self.target_keys):
@@ -258,10 +281,13 @@ class SurrogateModel:
             y_hat = pred_val[:, j]
             err = y_hat - y_true
             spearman = _spearman(y_hat, y_true)
+            scale = float(self._target_scales[j]) if j < len(self._target_scales) else 1.0
             metrics["per_target"][key] = {
                 "mae": float(np.mean(np.abs(err))),
+                "mae_normalized": float(np.mean(np.abs(err)) / scale),
                 "rmse": float(np.sqrt(np.mean(err ** 2))),
                 "spearman": float(spearman) if math.isfinite(spearman) else None,
+                "scale": scale,
             }
         return metrics
 
@@ -279,7 +305,20 @@ class SurrogateModel:
         y_hat = {
             key: float(mean[0, j]) for j, key in enumerate(self.target_keys)
         }
-        uncertainty = float(np.mean(std[0])) if std.size else 0.0
+        # Normalize per-target bag-std by train scale so multi-unit targets
+        # (SR vs mean_progress) do not inflate gate uncertainty.
+        if std.size:
+            scales = list(self._target_scales) if self._target_scales else []
+            norms: List[float] = []
+            for j in range(std.shape[1]):
+                s = float(std[0, j])
+                scale = float(scales[j]) if j < len(scales) else 1.0
+                if scale < 1e-9:
+                    scale = 1.0
+                norms.append(s / scale)
+            uncertainty = float(np.mean(norms)) if norms else 0.0
+        else:
+            uncertainty = 0.0
         if not math.isfinite(uncertainty) or uncertainty < 0.0:
             uncertainty = 0.0
         return SurrogatePrediction(
@@ -300,6 +339,7 @@ class SurrogateModel:
             "model_id": self.model_id,
             "feature_columns": list(self.feature_columns),
             "bags": self._bags,
+            "target_scales": list(self._target_scales),
         }
         joblib.dump(payload, os.path.join(directory, "model.joblib"))
         with open(os.path.join(directory, "feature_columns.json"), "w", encoding="utf-8") as fh:
@@ -313,6 +353,7 @@ class SurrogateModel:
                     "rf_estimators": int(self.rf_estimators),
                     "random_seed": int(self.random_seed),
                     "model_id": self.model_id,
+                    "target_scales": list(self._target_scales),
                 },
                 fh,
                 indent=2,
@@ -336,6 +377,10 @@ class SurrogateModel:
             feature_columns=list(payload.get("feature_columns") or []),
         )
         model._bags = list(payload.get("bags") or [])
+        model._target_scales = [float(x) for x in (payload.get("target_scales") or [])]
         if not model._bags:
             raise ValueError(f"no bags in saved model: {path}")
+        # Old models without scales: fall back to unit scale (raw std).
+        if not model._target_scales:
+            model._target_scales = [1.0] * len(model.target_keys)
         return model

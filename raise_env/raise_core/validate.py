@@ -883,6 +883,19 @@ class Stage3Runner:
 
         source_id = str(candidate.candidate_id)
         snap_index = len(self.trained_snapshots)
+        snapshot_metrics: Dict[str, Any]
+        if hasattr(bundle.metrics, "_highway_extras"):
+            from domains.highway.adapter import metrics_to_highway_dict
+
+            snapshot_metrics = metrics_to_highway_dict(bundle.metrics)
+        elif isinstance(getattr(candidate, "metadata", None), dict) and isinstance(
+            (candidate.metadata or {}).get("last_metrics"), dict
+        ):
+            # Prefer rich Stage II/III metrics already on the live candidate.
+            snapshot_metrics = dict((candidate.metadata or {}).get("last_metrics") or {})
+        else:
+            snapshot_metrics = bundle.metrics.as_dict()
+
         snapshot = replace(
             candidate,
             candidate_id=_unique_trained_snapshot_id(
@@ -890,7 +903,12 @@ class Stage3Runner:
             ),
             metadata={
                 **(candidate.metadata or {}),
-                "last_metrics": bundle.metrics.as_dict(),
+                "last_metrics": snapshot_metrics,
+                "selection_scalar": float(
+                    snapshot_metrics.get("selection_scalar")
+                    if snapshot_metrics.get("selection_scalar") is not None
+                    else bundle.metrics.scalar_score()
+                ),
                 "checkpoint_path": bundle.checkpoint_path,
                 "trained_round": int(round_index),
                 "trained_snapshot": True,
@@ -901,9 +919,9 @@ class Stage3Runner:
         self.trained_snapshots.append(snapshot)
         self.last_bundles[source_id] = bundle
         self.last_bundles[snapshot.candidate_id] = bundle
-        score = bundle.metrics.scalar_score()
+        score = float(candidate_nav_scalar(snapshot))
         prev = (
-            candidate_nav_scalar(self.best_trained)
+            float(candidate_nav_scalar(self.best_trained))
             if self.best_trained is not None
             else float("-inf")
         )
@@ -917,7 +935,7 @@ class Stage3Runner:
             )
             console.status(
                 f"new best-ever {snapshot.candidate_id} "
-                f"SR-CR-0.5TR={score:.3f}",
+                f"nav_scalar={score:.3f}",
                 stage="Stage III",
             )
         return snapshot
@@ -1411,19 +1429,26 @@ class Stage3Runner:
                 )
                 self._restore_history_from_payload(payload.get("history") or [])
                 if payload.get("best_trained"):
-                    self.best_trained = load_candidate_dict(payload["best_trained"])
-                snaps = deserialize_population(payload.get("trained_snapshots") or [])
+                    self.best_trained = load_candidate_dict(
+                        payload["best_trained"], validator=self.validator
+                    )
+                snaps = deserialize_population(
+                    payload.get("trained_snapshots") or [],
+                    validator=self.validator,
+                )
                 if snaps:
                     self.trained_snapshots = snaps
                 start_round = int(payload.get("round_index", 0))
                 start_index = int(payload.get("candidate_index", 0))
                 round_in = deserialize_population(
-                    payload.get("round_input_population") or []
+                    payload.get("round_input_population") or [],
+                    validator=self.validator,
                 )
                 if round_in:
                     pop = round_in
                 partial_next = deserialize_population(
-                    payload.get("round_output_partial") or []
+                    payload.get("round_output_partial") or [],
+                    validator=self.validator,
                 )
                 train_progress = payload.get("train_progress")
                 if not train_progress and partial_next is not None:
@@ -1446,12 +1471,18 @@ class Stage3Runner:
                 finished = deserialize_population(
                     payload.get("round_output_partial")
                     or payload.get("round_input_population")
-                    or []
+                    or [],
+                    validator=self.validator,
                 )
                 self._restore_history_from_payload(payload.get("history") or [])
                 if payload.get("best_trained"):
-                    self.best_trained = load_candidate_dict(payload["best_trained"])
-                snaps = deserialize_population(payload.get("trained_snapshots") or [])
+                    self.best_trained = load_candidate_dict(
+                        payload["best_trained"], validator=self.validator
+                    )
+                snaps = deserialize_population(
+                    payload.get("trained_snapshots") or [],
+                    validator=self.validator,
+                )
                 if snaps:
                     self.trained_snapshots = snaps
                 if finished:

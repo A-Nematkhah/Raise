@@ -404,24 +404,7 @@ class SeedVariantLLMClient(LLMClient):
     def complete(self, prompt: str, *, max_tokens: Optional[int] = None) -> str:
         self._n += 1
         if self._highway:
-            speed_coef = 0.05 + 0.002 * ((self._n % 20) - 10)
-            progress_coef = 1.0 + 0.05 * ((self._n % 10) - 5)
-            code = (
-                "```python\n"
-                "def compute_reward(state, memory):\n"
-                "    collision_penalty = -20.0\n"
-                "    off_road_penalty = -10.0\n"
-                f"    speed_coef = {speed_coef:.4f}\n"
-                f"    progress_coef = {progress_coef:.4f}\n"
-                "    if state.collision:\n"
-                "        return float(collision_penalty)\n"
-                "    if state.off_road:\n"
-                "        return float(off_road_penalty)\n"
-                "    return float(progress_coef * state.progress + "
-                "speed_coef * state.speed)\n"
-                "```\n"
-            )
-            return code
+            return self._highway_variant(self._n)
         pot = 2.0 + 0.05 * ((self._n % 20) - 10)
         # Tiny localized tweak so Stage I/II/III see distinct codes.
         code = (
@@ -446,6 +429,94 @@ class SeedVariantLLMClient(LLMClient):
             "```\n"
         )
         return code
+
+    def _highway_variant(self, n: int) -> str:
+        """Structural diversity: clearance / lane / speed-band / crawl / coef."""
+        kind = int(n) % 5
+        if kind == 0:
+            speed_coef = 0.05 + 0.002 * ((n % 20) - 10)
+            progress_coef = 1.0 + 0.05 * ((n % 10) - 5)
+            body = (
+                f"    speed_coef = {speed_coef:.4f}\n"
+                f"    progress_coef = {progress_coef:.4f}\n"
+                "    if state.collision:\n"
+                "        return float(-20.0)\n"
+                "    if state.off_road:\n"
+                "        return float(-10.0)\n"
+                "    return float(progress_coef * state.progress + "
+                "speed_coef * state.speed)\n"
+            )
+        elif kind == 1:
+            # Clearance to nearest other vehicle.
+            w = 0.4 + 0.05 * ((n % 8) - 4)
+            body = (
+                f"    clear_w = {w:.4f}\n"
+                "    if state.collision:\n"
+                "        return float(-20.0)\n"
+                "    if state.off_road:\n"
+                "        return float(-10.0)\n"
+                "    nearest = 50.0\n"
+                "    for v in state.others:\n"
+                "        d = (float(v.x) ** 2 + float(v.y) ** 2) ** 0.5\n"
+                "        if d < nearest:\n"
+                "            nearest = d\n"
+                "    clear = nearest / (nearest + 10.0)\n"
+                "    return float(state.progress + 0.05 * state.speed + "
+                "clear_w * clear)\n"
+            )
+        elif kind == 2:
+            # Prefer center-ish lane_index == 1.
+            lane_w = 0.3 + 0.05 * ((n % 6) - 3)
+            body = (
+                f"    lane_w = {lane_w:.4f}\n"
+                "    if state.collision:\n"
+                "        return float(-20.0)\n"
+                "    if state.off_road:\n"
+                "        return float(-10.0)\n"
+                "    lane_term = 1.0 - abs(float(state.ego.lane_index) - 1.0)\n"
+                "    return float(state.progress + 0.06 * state.speed + "
+                "lane_w * lane_term)\n"
+            )
+        elif kind == 3:
+            # Speed band 15–30 m/s.
+            band = 0.2 + 0.03 * ((n % 7) - 3)
+            body = (
+                f"    band_w = {band:.4f}\n"
+                "    if state.collision:\n"
+                "        return float(-20.0)\n"
+                "    if state.off_road:\n"
+                "        return float(-10.0)\n"
+                "    spd = float(state.speed)\n"
+                "    if spd < 15.0:\n"
+                "        band = (spd - 15.0) / 15.0\n"
+                "    elif spd > 30.0:\n"
+                "        band = (30.0 - spd) / 30.0\n"
+                "    else:\n"
+                "        band = 1.0\n"
+                "    return float(state.progress + band_w * band + "
+                "0.04 * spd)\n"
+            )
+        else:
+            # Explicit crawl penalty + progress.
+            crawl = 0.1 + 0.02 * ((n % 5) - 2)
+            body = (
+                f"    crawl_pen = {crawl:.4f}\n"
+                "    if state.collision:\n"
+                "        return float(-20.0)\n"
+                "    if state.off_road:\n"
+                "        return float(-10.0)\n"
+                "    reward = float(state.progress) + 0.08 * float(state.speed)\n"
+                "    if state.ego.on_road and state.speed < 8.0 and "
+                "(not state.timeout):\n"
+                "        reward = reward - crawl_pen * (8.0 - state.speed)\n"
+                "    return float(reward)\n"
+            )
+        return (
+            "```python\n"
+            "def compute_reward(state, memory):\n"
+            f"{body}"
+            "```\n"
+        )
 
 
 def make_llm_client(

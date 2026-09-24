@@ -110,7 +110,13 @@ class HighwayStage3Trainer:
         )
 
 
-def _eval_metrics(env: Any, model: Any, *, n_episodes: int) -> ProxyMetrics:
+def _eval_metrics(
+    env: Any,
+    model: Any,
+    *,
+    n_episodes: int,
+    seed: int = 0,
+) -> ProxyMetrics:
     """
     Evaluate a highway policy.
 
@@ -122,6 +128,9 @@ def _eval_metrics(env: Any, model: Any, *, n_episodes: int) -> ProxyMetrics:
     - ITR = mean ego speed (m/s)   [highway remap; CrowdNav uses intrusion %]
     - SD  = mean nearest-vehicle gap proxy (m)
     - NT  = mean episode duration (s)
+
+    Each episode uses a distinct ``reset(seed=…)`` so SR/CR are real rates
+    over varied traffic, not 20 copies of one trajectory.
     """
     import numpy as np
 
@@ -134,13 +143,17 @@ def _eval_metrics(env: Any, model: Any, *, n_episodes: int) -> ProxyMetrics:
     lane_changes = 0
     total_steps = 0
     high_speed_steps = 0
+    outcomes: list[str] = []
 
     # Soft-success thresholds: survive AND move like a real driver.
     min_speed_for_soft = 15.0  # m/s
     min_progress_for_soft = 400.0  # m over a typical 40s episode
+    n_eps = max(1, int(n_episodes))
+    base = int(seed)
 
-    for _ in range(max(1, int(n_episodes))):
-        obs, _info = env.reset()
+    for ep in range(n_eps):
+        # Offset well above train seeds so eval scenarios differ from train.
+        obs, _info = env.reset(seed=base + 10_003 + ep * 97)
         done = False
         ep_t = 0.0
         ep_dist = 0.0
@@ -169,7 +182,6 @@ def _eval_metrics(env: Any, model: Any, *, n_episodes: int) -> ProxyMetrics:
             if spd >= min_speed_for_soft:
                 ep_high += 1
 
-            # Gap proxy: min |x| among others in observation (ego-relative stored in state).
             gap = _nearest_gap_from_obs(obs)
             if gap is not None:
                 ep_gap_sum += gap
@@ -182,13 +194,21 @@ def _eval_metrics(env: Any, model: Any, *, n_episodes: int) -> ProxyMetrics:
 
         if crashed:
             cr += 1
+            outcomes.append("collision")
         elif off:
             tr += 1
+            outcomes.append("off_road")
         else:
             sr += 1
+            outcomes.append("success")
 
         mean_spd = ep_speed_sum / float(max(1, ep_steps))
-        if (not crashed) and (not off) and mean_spd >= min_speed_for_soft and ep_dist >= min_progress_for_soft:
+        if (
+            (not crashed)
+            and (not off)
+            and mean_spd >= min_speed_for_soft
+            and ep_dist >= min_progress_for_soft
+        ):
             soft_ok += 1
 
         times.append(ep_t)
@@ -199,18 +219,16 @@ def _eval_metrics(env: Any, model: Any, *, n_episodes: int) -> ProxyMetrics:
         total_steps += ep_steps
         high_speed_steps += ep_high
 
-    n = float(max(1, int(n_episodes)))
+    n = float(n_eps)
     metrics = ProxyMetrics(
         sr=sr / n,
         cr=cr / n,
         tr=tr / n,
         nt=float(np.mean(times)) if times else 0.0,
         pl=float(np.mean(dists)) if dists else 0.0,
-        # Highway: ITR slot = mean speed (m/s). Documented in pack spec.
         itr=float(np.mean(speeds)) if speeds else 0.0,
         sd=float(np.mean(gaps)) if gaps else 0.0,
     )
-    # Stash continuous extras on the instance for the trainer to merge into dicts.
     metrics._highway_extras = {  # type: ignore[attr-defined]
         "mean_speed": float(np.mean(speeds)) if speeds else 0.0,
         "mean_progress": float(np.mean(dists)) if dists else 0.0,
@@ -219,6 +237,12 @@ def _eval_metrics(env: Any, model: Any, *, n_episodes: int) -> ProxyMetrics:
         "high_speed_frac": float(high_speed_steps) / float(max(1, total_steps)),
         "speed_p10": float(np.percentile(speeds, 10)) if speeds else 0.0,
         "speed_p90": float(np.percentile(speeds, 90)) if speeds else 0.0,
+        "progress_std": float(np.std(dists)) if len(dists) > 1 else 0.0,
+        "n_success": int(sr),
+        "n_collision": int(cr),
+        "n_off_road": int(tr),
+        "n_eval_episodes": int(n_eps),
+        "outcome_unique": int(len(set(outcomes))),
     }
     return metrics
 
@@ -392,7 +416,9 @@ class HighwayPPOTrainer:
             stage=stage_tag,
         )
         t1 = time.perf_counter()
-        metrics = _eval_metrics(env, model, n_episodes=eval_episodes)
+        metrics = _eval_metrics(
+            env, model, n_episodes=eval_episodes, seed=seed
+        )
         eval_wall = time.perf_counter() - t1
         env.close()
 

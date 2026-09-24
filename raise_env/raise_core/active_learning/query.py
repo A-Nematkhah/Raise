@@ -8,7 +8,6 @@ import math
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from raise_core.selection import navigation_scalar
 
 
 @dataclass
@@ -85,11 +84,9 @@ def _quality_from_pred(pred: Any) -> float:
         y_hat = pred.get("y_hat", pred)
     if not isinstance(y_hat, dict):
         return float("-inf")
-    return navigation_scalar(
-        _finite(y_hat.get("SR", y_hat.get("sr")), 0.0),
-        _finite(y_hat.get("CR", y_hat.get("cr")), 0.0),
-        _finite(y_hat.get("TR", y_hat.get("tr")), 0.0),
-    )
+    from raise_core.surrogate.targets import quality_from_y_hat
+
+    return float(quality_from_y_hat(y_hat))
 
 
 def _uncertainty_from_pred(pred: Any) -> float:
