@@ -277,9 +277,9 @@ def main() -> int:
         choices=("", "score1", "scalar", "hybrid", "pareto"),
         help=(
             "Parent order for next generation after an epoch: score1 (CrowdNav "
-            "default), pareto (highway default: auto thresholds + NSGA-II), "
-            "scalar / hybrid (legacy weighted). Empty → pareto for highway, "
-            "score1 otherwise"
+            "default), scalar (highway default: highway_fitness), "
+            "pareto (diagnostic NSGA-II), hybrid. "
+            "Empty → scalar for highway, score1 otherwise"
         ),
     )
     parser.add_argument(

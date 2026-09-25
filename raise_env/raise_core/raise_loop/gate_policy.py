@@ -135,11 +135,10 @@ def _soft_success(cand: RewardCandidate) -> float:
 
 def pick_best_by_scalar(pool: Sequence[RewardCandidate]) -> Optional[RewardCandidate]:
     """
-    Best elite for Stage III forcing.
+    Best elite for Stage III forcing / selection.
 
-    If every labeled candidate has a fresh ``pareto_rank``, use lowest rank.
-    Otherwise fall back to cached ``fitness`` / nav scalar (never let a lone
-    stamped genome beat a higher-fitness unstamped one).
+    Always uses cached ``fitness`` / nav scalar — never ``pareto_rank``
+    (Pareto is diagnostic only; breeding uses the official fitness).
     """
     labeled = [
         c
@@ -148,9 +147,6 @@ def pick_best_by_scalar(pool: Sequence[RewardCandidate]) -> Optional[RewardCandi
     ]
     if not labeled:
         return None
-    all_stamped = all((c.metadata or {}).get("pareto_rank") is not None for c in labeled)
-    if all_stamped:
-        return min(labeled, key=lambda c: int((c.metadata or {}).get("pareto_rank", 10**9)))
     best = None
     best_v = float("-inf")
     for c in labeled:
@@ -164,20 +160,50 @@ def pick_best_by_scalar(pool: Sequence[RewardCandidate]) -> Optional[RewardCandi
 def score1_elite_ok(
     cand: Optional[RewardCandidate],
     *,
-    soft_success_min: float = 0.25,
+    soft_success_min: float = 0.5,
     scalar_min: Optional[float] = None,
 ) -> bool:
-    """Whether Score1-best is good enough to force into Stage III."""
+    """
+    Whether Score1-best is good enough to force into Stage III.
+
+    Highway: require real Stage-II soft_success / fitness — never force an
+    unlabeled Score1 champion or a high-Score1 crasher (soft=0, fitness<0).
+    """
     if cand is None:
+        return False
+    # No Stage II metrics yet — do not force Score1-only genomes as "strong".
+    if not _metrics_of(cand) and not _has_cached_fitness(cand):
         return False
     if _soft_success(cand) >= float(soft_success_min):
         return True
     if scalar_min is not None and _selection_scalar(cand) >= float(scalar_min):
         return True
-    # No Stage II metrics yet — do not force Score1-only crawl survivors.
-    if not _metrics_of(cand) and not _has_cached_fitness(cand):
-        return False
-    return _selection_scalar(cand) >= 0.0
+    return _selection_scalar(cand) >= 0.0 and _soft_success(cand) >= 0.25
+
+
+def protect_unlabeled_score1_best(
+    gated: Sequence[RewardCandidate],
+    *,
+    best_s1: Optional[RewardCandidate],
+    domain: str = "crowdnav",
+) -> Tuple[List[RewardCandidate], bool]:
+    """
+    Keep unlabeled Score1-best in the Stage III pool (highway).
+
+    Surrogate gate must not drop a genome that never received a Stage II
+    label — force it back into ``gated`` so it can still be trained in III
+    or labeled later. CrowdNav: no-op (return gated unchanged).
+    """
+    out = list(gated)
+    if str(domain or "").strip().lower() != "highway" or best_s1 is None:
+        return out, False
+    if _metrics_of(best_s1) or _has_cached_fitness(best_s1):
+        return out, False
+    seen = {str(c.candidate_id) for c in out}
+    if str(best_s1.candidate_id) in seen:
+        return out, False
+    out.append(best_s1)
+    return out, True
 
 
 def assemble_stage3_population(
@@ -187,13 +213,14 @@ def assemble_stage3_population(
     best_s2: Optional[RewardCandidate] = None,
     best_s1: Optional[RewardCandidate] = None,
     domain: str = "crowdnav",
-    soft_success_min: float = 0.25,
+    soft_success_min: float = 0.5,
 ) -> Tuple[List[RewardCandidate], Dict[str, Any]]:
     """
     Stage III input = kept ∪ best_s2 ∪ best_fitness; Score1-best only if strong.
 
     CrowdNav: still unions elites (behavior-preserving additive). Highway uses
-    soft_success / fitness to gate Score1-best.
+    soft_success / fitness to gate Score1-best (never force unlabeled / crashers).
+    Unlabeled Score1-best is still *protected* from surrogate drop (stays in pool).
     """
     out: List[RewardCandidate] = []
     seen_h: set[str] = set()
@@ -213,8 +240,14 @@ def assemble_stage3_population(
             added.append(f"{label}:{cand.candidate_id}")
 
     s1_added = False
+    protected = False
     domain_key = str(domain or "crowdnav").strip().lower()
     if domain_key == "highway":
+        out, protected = protect_unlabeled_score1_best(
+            out, best_s1=best_s1, domain=domain_key
+        )
+        seen_h = {code_sha256(str(c.code or "")) for c in out}
+        seen_i = {str(c.candidate_id) for c in out}
         scalars = [
             _selection_scalar(c)
             for c in full_pool
@@ -232,8 +265,6 @@ def assemble_stage3_population(
             _unique_append(out, best_s1, seen_hash=seen_h, seen_ids=seen_i)
             s1_added = len(out) > before
     else:
-        # CrowdNav: keep historical behavior — Score1-best may already be in gated;
-        # still ensure it is present (additive, never drops).
         before = len(out)
         _unique_append(out, best_s1, seen_hash=seen_h, seen_ids=seen_i)
         s1_added = len(out) > before
@@ -244,16 +275,21 @@ def assemble_stage3_population(
         "forced_elites": added,
         "score1_best_added": bool(s1_added),
         "score1_best_id": None if best_s1 is None else str(best_s1.candidate_id),
+        "score1_unlabeled_protected": bool(protected),
         "domain": domain_key,
     }
     return out, report
 
 
 def epoch_population_stats(population: Sequence[Any]) -> Dict[str, Any]:
-    """Score1 spread + soft_success / fitness summary for logs."""
+    """Score1 spread + soft_success / fitness + convergence fingerprints."""
     scores: List[float] = []
     softs: List[float] = []
     scalars: List[float] = []
+    fingerprints: set = set()
+    n_cruise = 0
+    n_high_cr = 0
+    n_labeled = 0
     for c in population:
         if getattr(c, "score", None) is not None:
             s = _finite(c.score, float("nan"))
@@ -265,13 +301,32 @@ def epoch_population_stats(population: Sequence[Any]) -> Dict[str, Any]:
         elif isinstance(getattr(c, "metadata", None), dict):
             raw = (c.metadata or {}).get("last_metrics")
             m = dict(raw) if isinstance(raw, dict) else {}
-        if "soft_success" in m:
-            softs.append(_finite(m.get("soft_success"), 0.0))
+        if m:
+            n_labeled += 1
+            soft = _finite(m.get("soft_success"), 0.0) if "soft_success" in m else 0.0
+            if "soft_success" in m:
+                softs.append(soft)
+            spd = _finite(m.get("mean_speed", m.get("ITR", 0.0)), 0.0)
+            cr = _finite(m.get("CR", m.get("cr", 0.0)), 0.0)
+            # Soft@20 plateau fingerprint (pre soft@25 lock): SR≈1, spd≈20, soft high.
+            if soft >= 0.9 and 19.0 <= spd <= 21.0 and cr < 0.1:
+                n_cruise += 1
+            if cr >= 0.5:
+                n_high_cr += 1
+            try:
+                from raise_core.raise_loop.diversity import metrics_fingerprint
+
+                fp = metrics_fingerprint(c) if isinstance(c, RewardCandidate) else None
+                if fp is not None:
+                    fingerprints.add(fp)
+            except Exception:  # noqa: BLE001
+                pass
         has_scalar = bool(m) or (
             isinstance(c, RewardCandidate) and _has_cached_fitness(c)
         )
         if has_scalar and isinstance(c, RewardCandidate):
             scalars.append(_selection_scalar(c))
+    n_lab = max(1, n_labeled)
     return {
         "n": len(list(population)),
         "score1_mean": float(sum(scores) / len(scores)) if scores else None,
@@ -288,4 +343,7 @@ def epoch_population_stats(population: Sequence[Any]) -> Dict[str, Any]:
         "scalar_mean": float(sum(scalars) / len(scalars)) if scalars else None,
         "scalar_max": float(max(scalars)) if scalars else None,
         "n_with_proxy": len(scalars),
+        "n_unique_fingerprints": int(len(fingerprints)),
+        "frac_cruise_plateau": float(n_cruise) / float(n_lab) if n_labeled else None,
+        "frac_high_cr": float(n_high_cr) / float(n_lab) if n_labeled else None,
     }

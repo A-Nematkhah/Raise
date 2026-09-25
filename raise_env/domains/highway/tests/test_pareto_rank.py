@@ -100,6 +100,41 @@ def test_crowding_does_not_scramble_caller_front():
     assert [m.candidate_id for m in front] == before
 
 
+def test_reference_cr_near_one_rejected():
+    import numpy as np
+    from domains.highway.pareto_rank import calibrate_from_reference_rollout
+
+    # IDLE-like: high speeds + CR=1 must not produce v_floor=25 / cr_ceiling=1.
+    ref = calibrate_from_reference_rollout(
+        np.full(100, 25.0), reference_cr=1.0, reference_tr=0.0
+    )
+    assert ref is None
+
+
+def test_sane_reference_clamps_v_floor():
+    import numpy as np
+    from domains.highway.metrics import V_MIN, V_TARGET
+    from domains.highway.pareto_rank import calibrate_from_reference_rollout
+
+    ref = calibrate_from_reference_rollout(
+        np.full(100, 30.0), reference_cr=0.1, reference_tr=0.0
+    )
+    assert ref is not None
+    assert V_MIN <= ref.v_floor <= V_TARGET
+    assert ref.cr_ceiling <= 0.5
+
+
+def test_broken_run_thresholds_would_invert_feasibility():
+    """Document the failure mode that scalar breeding replaces."""
+    from domains.highway.pareto_rank import Metrics, ReferenceStats, is_feasible
+
+    bad = ReferenceStats(v_floor=25.0, cr_ceiling=1.0, tr_ceiling=0.05)
+    cruise = Metrics("cruise", 1.0, 0.0, 0.0, 803.0, 20.06, 1.0)
+    crash = Metrics("crash", 0.0, 1.0, 0.0, 400.0, 25.0, 0.0)
+    assert not is_feasible(cruise, bad)
+    assert is_feasible(crash, bad)
+
+
 def test_crawler_infeasible_under_population_calib():
     pop = [
         Metrics("crawler", 1.0, 0.0, 0.0, 15.0, 1.5, 1.0),

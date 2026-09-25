@@ -39,9 +39,18 @@ def _c(
 
 def test_parse_defaults():
     assert parse_evolve_rank("", domain="crowdnav") == "score1"
-    assert parse_evolve_rank(None, domain="highway") == "pareto"
+    assert parse_evolve_rank(None, domain="highway") == "scalar"
     assert parse_evolve_rank("hybrid", domain="crowdnav") == "hybrid"
     assert parse_evolve_rank("scalar", domain="highway") == "scalar"
+    assert parse_evolve_rank("pareto", domain="highway") == "pareto"
+
+
+def test_scalar_prefers_cruise_fitness_over_crash():
+    """Bimodal run fingerprint: cruise@20 soft=1 must beat crash@25 for parents."""
+    cruise = _c("cruise", score1=0.3, nav=1.039)
+    crash = _c("crash", score1=0.92, nav=-0.632)
+    ranked = rank_population_for_evolution([crash, cruise], mode="scalar")
+    assert [c.candidate_id for c in ranked] == ["cruise", "crash"]
 
 
 def test_score1_mode_ignores_nav():

@@ -583,10 +583,17 @@ class StageIEvolver:
     ) -> RewardCandidate:
         proxy_fb = (parent.metadata or {}).get("proxy_feedback")
         if proxy_fb:
+            hack = (parent.metadata or {}).get("proxy_hack_mode")
+            hack_bit = (
+                f" Parent exhibited reward-hacking mode={hack}; "
+                f"edit the reward to eliminate that exploit.\n"
+                if hack
+                else ""
+            )
             weakness = (
                 f"Parent {parent.candidate_id} Score1={parent.score}. "
                 f"Use the Stage-II proxy feedback below (higher priority than "
-                f"Score1 alone).\n{proxy_fb}\n"
+                f"Score1 alone).{hack_bit}\n{proxy_fb}\n"
                 f"Global reflection: {reflection}"
             )
         else:

@@ -81,6 +81,18 @@ def format_epoch_summary(rec: Dict[str, Any]) -> str:
             bits.append(f"fitnessμ={float(sc_m):.3f}")
         except (TypeError, ValueError):
             pass
+    be = rec.get("best_ever_fitness")
+    if be is not None:
+        try:
+            bits.append(f"best_ever={float(be):.3f}")
+        except (TypeError, ValueError):
+            pass
+    cruise_f = stats.get("frac_cruise_plateau")
+    if cruise_f is not None:
+        try:
+            bits.append(f"cruise∅={float(cruise_f):.2f}")
+        except (TypeError, ValueError):
+            pass
     stats_s = (" | " + " ".join(bits)) if bits else ""
     return (
         f"epoch {g}: best={best} Score1={score_s}{evo_bit}{stats_s} | "

@@ -26,8 +26,12 @@ K_GATE = 8.0  # sigmoid steepness around v_min
 HACK_PENALTY = 10.0  # magnitude when v_eff < v_floor (F = −HACK_PENALTY)
 LOW_SPEED_WEIGHT = 0.50  # weight on (v_min − v_eff)+ / v_target
 
-# Lag vs surrounding traffic (~≥20 m/s).
+# Lag vs surrounding traffic (~≥20 m/s historically; soft@25 uses V_TARGET).
 _LAG_SPEED_MPS = 18.0
+# Constant-cruise detector extras (progress_std ≈ 0 + flat speed band).
+_CRUISE_PROGRESS_STD_MAX = 1.0
+_CRUISE_SPEED_SPREAD_MAX = 0.35
+_CONSTANT_CRUISE_PENALTY = 0.35
 
 
 def _finite(x: Any, default: float = 0.0) -> float:
@@ -66,11 +70,12 @@ def _degeneracy_penalty(metrics: Mapping[str, Any]) -> float:
     pen = 0.0
     p10 = metrics.get("speed_p10")
     p90 = metrics.get("speed_p90")
+    spread = None
     if p10 is not None and p90 is not None:
         spread = abs(_finite(p90) - _finite(p10))
         # Near-constant speed band while surviving → likely idle cruise hack.
-        if spread < 0.35:
-            pen += 0.25 * (1.0 - spread / 0.35)
+        if spread < _CRUISE_SPEED_SPREAD_MAX:
+            pen += 0.25 * (1.0 - spread / _CRUISE_SPEED_SPREAD_MAX)
     lc = metrics.get("lane_change_rate")
     if lc is not None and _finite(lc) < 0.02 and sr >= 0.9:
         # Perfect survival with almost no lane changes on dense holdout is suspicious.
@@ -78,7 +83,17 @@ def _degeneracy_penalty(metrics: Mapping[str, Any]) -> float:
     ou = metrics.get("outcome_unique")
     if ou is not None and int(_finite(ou)) <= 1 and sr >= 0.99:
         pen += 0.10
-    return float(min(0.55, pen))
+    # Flat progress across episodes + flat speed + no lane Δ → soft@threshold lock.
+    pstd = metrics.get("progress_std")
+    if (
+        pstd is not None
+        and _finite(pstd) <= _CRUISE_PROGRESS_STD_MAX
+        and sr >= 0.95
+        and (spread is None or spread < _CRUISE_SPEED_SPREAD_MAX)
+        and (lc is None or _finite(lc) < 0.02)
+    ):
+        pen += float(_CONSTANT_CRUISE_PENALTY)
+    return float(min(0.85, pen))
 
 
 def _metrics_for_fitness(metrics: Mapping[str, Any]) -> Mapping[str, Any]:

@@ -340,12 +340,40 @@ python scripts/run_raise.py --domain highway --closed-loop `
 
 **بعد (فقط highway):**
 - `DummyVecEnv` با `--highway-n-envs` (پروفایل 4h: ۴)
-- لیبل موازی با `--highway-label-workers` (پروفایل: ۲) + قفل append دیتاست
+- لیبل موازی اختیاری با `--highway-label-workers` (پروفایل پیش‌فرض: ۱؛
+  ۲ را فقط بعد از سنجش wall-clock بگذار)
 - warm-start: وزن policy والد روی PPO تازه با `n_steps`/`batch` درست
   (نه `PPO.load` + mutate — آن با VecEnv باعث `IndexError` در buffer می‌شد)
 - `--highway-eval-mode both|holdout_only`
+- فیلتر هشدار GPUی SB3 یک‌بار در سطح ماژول (نه `catch_warnings` داخل
+  worker ترد — آن thread-safe نیست)
 
 CrowdNav بدون تغییر رفتار. بودجه env-step همان است.
+
+---
+
+## Highway generation convergence (scalar evolve) — ۲۰۲۶-۰۹-۲۵
+
+**قبل (ران `highway_4h_20260925_151711`):** سه سیگنال متناقض —
+`evolve_rank=pareto` با مرجع IDLE (`v_floor≈25`, `cr_ceiling=1`) والدین
+crash@۲۵ را ترجیح می‌داد؛ `final_rank`/`fitness` برنده‌ی cruise soft@۲۰
+می‌شد؛ Score1 اغلب وارونه با ناوبری بود. نسل‌ها بهتر نمی‌شدند.
+
+**بعد (فقط highway):**
+- پیش‌فرض breeding: `evolve_rank=scalar` (= `highway_fitness` holdout)؛
+  unlabeled فقط Score1؛ آرشیو `best_ever_fitness` برای elite
+- `soft_success` آستانهٔ **۲۵ m/s** (= `V_TARGET`) + جریمهٔ constant-cruise
+  (`progress_std≈0` و باند سرعت تخت)
+- مرجع Pareto: اگر `reference_cr>0.5` رد می‌شود؛ `v_floor` به
+  `[V_MIN, V_TARGET]` clamp؛ Pareto فقط diagnostic
+- Score1-best بدون لیبل Stage II از gate حذف نمی‌شود؛ force به Stage III
+  فقط با soft/fitness قوی
+- لاگ epoch: `best_ever`, `frac_cruise_plateau`, `n_unique_fingerprints`
+
+```powershell
+python scripts/run_raise_highway_4h.py
+# پیش‌فرض PROFILE: evolve_rank=scalar
+```
 
 ---
 

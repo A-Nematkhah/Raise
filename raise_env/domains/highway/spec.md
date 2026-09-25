@@ -71,13 +71,15 @@ crawl structures (not only coef tweaks).
 
 - Hard Surrogate gate: `n_labeled ≥ 16` **or** mean val MAE ≤ `0.35`
   (`--closed-loop-max-val-mae-gate`). Until then gate is soft.
-- Parent order for next gen (`evolve_rank=pareto`, highway default):
-  auto-calibrated feasibility (IDM/IDLE reference or generation percentiles)
-  + NSGA-II Pareto fronts + crowding distance — **no hand-tuned weights**.
-- Stage III input = gated kept ∪ best Stage II ∪ best fitness/Pareto;
-  Score1-best is forced only if `soft_success` / fitness look strong.
+- Parent order for next gen (`evolve_rank=scalar`, highway default):
+  labeled genomes by official `highway_fitness` (holdout); unlabeled by Score1.
+  Optional diagnostic: `evolve_rank=pareto` (feasibility + NSGA-II).
+- Stage III input = gated kept ∪ best Stage II ∪ best fitness;
+  Score1-best is forced only if `soft_success` / fitness look strong;
+  unlabeled Score1-best is protected from surrogate drop.
 - Stage II eval default for 4h profile: **E2=20** (K2 stays 15k).
-- Epoch logs include Score1 spread, soft_success μ, fitness μ.
+- Epoch logs include Score1 spread, soft_success μ, fitness μ, best_ever,
+  cruise-plateau fraction.
 
 ## Evaluation metrics
 
@@ -88,18 +90,11 @@ Mapped onto RAISE `ProxyMetrics`:
 - TR — off-road (or other early failure) rate when distinguished; else 0
 - NT / PL / ITR / SD — filled with highway proxies (time, distance, 0, min gap)
 
-Primary **selection** for the next generation is **Pareto ranking**
-(`domains/highway/pareto_rank.py`, `evolve_rank=pareto`) — not a weighted sum.
-Feasibility thresholds (`v_floor`, `cr_ceiling`, `tr_ceiling`) come from an
-IDM/IDLE reference rollout when available, else from the current generation's
-percentiles. Objectives maximized: SR, −CR, −TR, progress, mean_speed,
-soft_success.
+Primary **selection** for the next generation is **`highway_fitness`**
+(`evolve_rank=scalar`). Pareto ranking remains available as a diagnostic mode.
 
-A legacy scalar `highway_fitness` may still be logged for surrogate / plots;
-it is **not** used for parent ordering under `evolve_rank=pareto`.
-
-`soft_success` = fraction of episodes that survive **and** average ≥20 m/s
-**and** travel ≥400 m (eval diagnostic).
+`soft_success` = fraction of episodes that survive **and** average ≥25 m/s
+(= `V_TARGET`) **and** travel ≥400 m (eval diagnostic).
 
 Logged continuous fields: `mean_speed`, `mean_progress`, `lane_change_rate`,
 `high_speed_frac`, `speed_p10`/`speed_p90`. Surrogate labels remain SR/CR/TR.

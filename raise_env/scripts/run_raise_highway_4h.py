@@ -89,15 +89,15 @@ PROFILE = {
     # Carry Score1-best into next gen so best-so-far cannot vanish when
     # every slot is overwritten by children (Alg.1 default is off).
     "elitism": True,
-    # After Stage-II labels, parent order = Pareto (auto thresholds + NSGA-II).
-    # Score1 only for unlabeled genomes.
-    "evolve_rank": "pareto",
+    # Parent order = official highway_fitness (holdout). Pareto is diagnostic only.
+    "evolve_rank": "scalar",
     "evolve_rank_score1_weight": 0.4,
-    # Wall-clock speed (same K2/K3): DummyVecEnv + parallel Stage II labels.
-    "highway_n_envs": 4,
-    "highway_label_workers": 2,
+    # Wall-clock: DummyVecEnv n_envs>1 was slower on this CPU (serial envs).
+    # holdout_only skips train-dist eval; selection still uses holdout fitness.
+    "highway_n_envs": 1,
+    "highway_label_workers": 1,
     "highway_warm_start": True,
-    "highway_eval_mode": "both",
+    "highway_eval_mode": "holdout_only",
 }
 
 
@@ -444,7 +444,7 @@ def main() -> int:
             "--highway-n-envs",
             str(int(PROFILE.get("highway_n_envs", 4))),
             "--highway-label-workers",
-            str(int(PROFILE.get("highway_label_workers", 2))),
+            str(int(PROFILE.get("highway_label_workers", 1))),
             "--highway-eval-mode",
             str(PROFILE.get("highway_eval_mode") or "both"),
         ]

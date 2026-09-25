@@ -111,6 +111,39 @@ def test_score1_elite_ok():
     assert not score1_elite_ok(
         _cand("b", soft=0.0, scalar=-0.5), soft_success_min=0.25
     )
+    # Unlabeled Score1 champ must not count as "strong".
+    unlab = RewardCandidate(
+        candidate_id="u",
+        code="def compute_reward(state, memory):\n    return 0.0\n",
+        valid=True,
+        score=0.99,
+        metadata={},
+    )
+    assert not score1_elite_ok(unlab)
+
+
+def test_protect_unlabeled_score1_best():
+    from raise_core.raise_loop.gate_policy import protect_unlabeled_score1_best
+
+    gated = [_cand("kept", score=0.4, soft=0.8, scalar=0.9)]
+    unlab = RewardCandidate(
+        candidate_id="s1_unlab",
+        code="def compute_reward(state, memory):\n    return 1.0\n",
+        valid=True,
+        score=0.95,
+        metadata={},
+    )
+    out, protected = protect_unlabeled_score1_best(
+        gated, best_s1=unlab, domain="highway"
+    )
+    assert protected
+    assert any(c.candidate_id == "s1_unlab" for c in out)
+    # CrowdNav no-op
+    out2, prot2 = protect_unlabeled_score1_best(
+        gated, best_s1=unlab, domain="crowdnav"
+    )
+    assert not prot2
+    assert len(out2) == 1
 
 
 def test_epoch_stats_and_summary_line():

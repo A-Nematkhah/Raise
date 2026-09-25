@@ -2,11 +2,11 @@
 
 CrowdNav / paper path keeps Score1-only ranking (``evolve_rank=score1``).
 
-Highway diagnostic defaults to Pareto ranking (``evolve_rank=pareto``):
-auto-calibrated feasibility + NSGA-II on raw metrics — no hand-tuned
-weighted fitness for parent selection.
+Highway defaults to ``evolve_rank=scalar``: labeled parents ordered by
+``highway_fitness`` (holdout) so each generation breeds from the best
+navigation objective. Unlabeled seats stay Score1-ordered.
 
-Legacy modes ``scalar`` / ``hybrid`` remain available if explicitly set.
+``pareto`` remains available as an explicit diagnostic mode (not the default).
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from __future__ import annotations
 from typing import Any, List, Literal, Optional, Sequence, Tuple
 
 from raise_core.explore import RewardCandidate
-from raise_core.selection import candidate_nav_scalar
+from raise_core.selection import candidate_fitness, candidate_nav_scalar
 
 EvolveRankMode = Literal["score1", "scalar", "hybrid", "pareto"]
 
@@ -22,12 +22,12 @@ _VALID = frozenset({"score1", "scalar", "hybrid", "pareto"})
 
 
 def parse_evolve_rank(value: object, *, domain: str = "crowdnav") -> EvolveRankMode:
-    """Default: score1 for crowdnav; pareto for highway when unset/empty."""
+    """Default: score1 for crowdnav; scalar (fitness) for highway when unset/empty."""
     raw = str(value or "").strip().lower()
     if raw in _VALID:
         return raw  # type: ignore[return-value]
     if str(domain).strip().lower() == "highway":
-        return "pareto"
+        return "scalar"
     return "score1"
 
 
@@ -66,7 +66,7 @@ def rank_population_pareto(
 ) -> List[RewardCandidate]:
     """
     Order labeled candidates via highway Pareto pipeline; unlabeled by Score1
-    after all labeled.
+    after all labeled. Diagnostic / optional — not the highway breeding default.
     """
     from domains.highway.pareto_rank import (
         calibrate_from_population,
@@ -96,7 +96,7 @@ def rank_population_pareto(
                 float(reference_cr or 0.0),
                 float(reference_tr or 0.0),
             )
-        else:
+        if ref is None:
             ref = calibrate_from_population(metrics_list)
 
     ordered_m = rank_population(metrics_list, ref=ref)
@@ -128,10 +128,11 @@ def rank_population_for_evolution(
     -----
     score1
         Analytical Score1 only (CrowdNav / Alg.1 default).
-    pareto
-        Highway: auto-calibrated feasibility + Pareto / crowding (preferred).
     scalar
-        Legacy Stage-II scalar / fitness when present.
+        Highway default: labeled by ``highway_fitness`` / nav scalar; unlabeled
+        by Score1 after all labeled.
+    pareto
+        Diagnostic: auto-calibrated feasibility + Pareto / crowding.
     hybrid
         Among labeled: ``w·norm(Score1) + (1-w)·norm(fitness)``.
     """
@@ -159,7 +160,7 @@ def rank_population_for_evolution(
     if mode_key == "scalar":
 
         def _scalar_key(c: RewardCandidate) -> Tuple[float, float]:
-            return (candidate_nav_scalar(c), _score1(c))
+            return (candidate_fitness(c), _score1(c))
 
         ranked_l = sorted(labeled, key=_scalar_key, reverse=True)
         ranked_u = sorted(unlabeled, key=_score1, reverse=True)

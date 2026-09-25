@@ -12,6 +12,14 @@ from raise_core.refine import ProxyMetrics, StubPolicyTrainer
 
 logger = logging.getLogger(__name__)
 
+# Process-wide (thread-safe enough): do NOT use warnings.catch_warnings() inside
+# parallel Stage II label workers — that context manager mutates global filters.
+warnings.filterwarnings(
+    "ignore",
+    message="You are trying to run PPO on the GPU",
+    category=UserWarning,
+)
+
 
 class HighwayAdapter:
     """Domain train/eval surface for highway-fast-v0."""
@@ -117,7 +125,7 @@ def _eval_metrics(
     n_episodes: int,
     seed: int = 0,
     seed_offset: int = 10_003,
-    soft_speed_mps: float = 20.0,
+    soft_speed_mps: float = 25.0,
     soft_progress_m: float = 400.0,
 ) -> ProxyMetrics:
     """
@@ -148,7 +156,7 @@ def _eval_metrics(
     high_speed_steps = 0
     outcomes: list[str] = []
 
-    # Soft-success: survive AND traffic-speed cruise (~≥20 m/s) + progress.
+    # Soft-success: survive AND match traffic (~≥V_TARGET=25 m/s) + progress.
     min_speed_for_soft = float(soft_speed_mps)
     min_progress_for_soft = float(soft_progress_m)
     n_eps = max(1, int(n_episodes))
@@ -452,36 +460,32 @@ class HighwayPPOTrainer:
         # Per-env rollout length; keep ~256 total steps/env as before when n_envs=1.
         n_steps = min(256, max(16, train_steps // max(1, n_envs)))
         batch_size = min(64 * n_envs, max(8, n_steps * n_envs))
-        with warnings.catch_warnings():
-            warnings.filterwarnings(
-                "ignore",
-                message="You are trying to run PPO on the GPU",
-                category=UserWarning,
-            )
-            # Always build a fresh PPO so n_steps/batch_size match this VecEnv.
-            # PPO.load + mutating n_steps leaves a stale RolloutBuffer (IndexError).
-            model = PPO(
-                "MlpPolicy",
-                train_env,
-                verbose=0,
-                seed=seed,
-                device=device,
-                n_steps=n_steps,
-                batch_size=batch_size,
-                learning_rate=3e-4,
-            )
-            if warm_path:
-                try:
-                    donor = PPO.load(warm_path, device=device)
-                    model.policy.load_state_dict(donor.policy.state_dict())
-                    del donor
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning(
-                        "Warm-start load failed for %s (%s); training from scratch",
-                        cid,
-                        exc,
-                    )
-                    warm_path = None
+        # Always build a fresh PPO so n_steps/batch_size match this VecEnv.
+        # PPO.load + mutating n_steps leaves a stale RolloutBuffer (IndexError).
+        # Warm-start copies policy weights only (new model → _last_obs is None,
+        # so SB3 resets the env regardless of reset_num_timesteps).
+        model = PPO(
+            "MlpPolicy",
+            train_env,
+            verbose=0,
+            seed=seed,
+            device=device,
+            n_steps=n_steps,
+            batch_size=batch_size,
+            learning_rate=3e-4,
+        )
+        if warm_path:
+            try:
+                donor = PPO.load(warm_path, device=device)
+                model.policy.load_state_dict(donor.policy.state_dict())
+                del donor
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Warm-start load failed for %s (%s); training from scratch",
+                    cid,
+                    exc,
+                )
+                warm_path = None
 
         t0 = time.perf_counter()
         cb = _ppo_progress_callback(train_steps, desc=f"PPO {cid} ({stage_tag})")
@@ -489,7 +493,7 @@ class HighwayPPOTrainer:
             total_timesteps=max(1, train_steps),
             progress_bar=False,
             callback=cb,
-            reset_num_timesteps=warm_path is None,
+            reset_num_timesteps=True,
         )
         train_wall = time.perf_counter() - t0
         sps = float(train_steps) / max(train_wall, 1e-6)

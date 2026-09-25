@@ -8,11 +8,12 @@ Replaces hand-weighted ``highway_fitness`` for *population ordering*:
 2. Pareto non-dominated sorting (NSGA-II) on raw objectives + crowding
    distance — no hand-picked linear weights.
 
-``rank_population()`` returns candidates best → worst. Use it instead of
-sorting by a scalar fitness when selecting parents for the next generation.
+``rank_population()`` returns candidates best → worst for *diagnostic*
+Pareto mode. Highway breeding defaults to ``evolve_rank=scalar``
+(``highway_fitness``); see ``raise_core.raise_loop.evolve_rank``.
 
-Scalar ``highway_fitness`` may still exist for surrogate / legacy logs; it is
-not used by ``evolve_rank=pareto``.
+Scalar ``highway_fitness`` is the official parent / elite objective under
+``evolve_rank=scalar``.
 """
 
 from __future__ import annotations
@@ -53,21 +54,49 @@ def calibrate_from_reference_rollout(
     reference_tr: float = 0.0,
     floor_percentile: float = 10.0,
     safety_margin: float = 1.5,
-) -> ReferenceStats:
+    *,
+    max_usable_cr: float = 0.5,
+    default_cr_ceiling: float = 0.25,
+    default_tr_ceiling: float = 0.05,
+) -> Optional[ReferenceStats]:
     """
-    Derive thresholds from a short rollout of the env's built-in traffic
-    / non-RL ego policy instead of writing them by hand.
+    Derive thresholds from a short non-RL rollout.
+
+    Returns ``None`` when the reference ego is too crashy (e.g. IDLE with
+    CR≈1): that calibration made soft@20 cruise *infeasible* while crash@25
+    looked feasible. Callers should fall back to ``calibrate_from_population``.
+
+    When usable, ``v_floor`` is clamped to ``[V_MIN, V_TARGET]`` so soft@25
+    policies are not auto-rejected.
     """
+    cr = float(reference_cr)
+    if cr > float(max_usable_cr):
+        return None
+
     samples = np.asarray(reference_speed_samples, dtype=np.float64).ravel()
     if samples.size == 0:
         samples = np.asarray([0.0], dtype=np.float64)
-    v_floor = float(np.percentile(samples, floor_percentile))
-    cr = float(reference_cr)
+    v_raw = float(np.percentile(samples, floor_percentile))
+    try:
+        from domains.highway.metrics import V_MIN as _VMIN
+        from domains.highway.metrics import V_TARGET as _VT
+
+        v_lo, v_hi = float(_VMIN), float(_VT)
+    except Exception:  # noqa: BLE001
+        v_lo, v_hi = 10.0, 25.0
+    # Cap below soft@V_TARGET so matching-traffic survivors stay feasible.
+    v_floor = float(min(v_hi, max(v_lo, v_raw)))
     tr = float(reference_tr)
+    cr_ceiling = min(1.0, cr * float(safety_margin) + 0.05)
+    # Never open the CR gate fully from a weak reference.
+    cr_ceiling = min(cr_ceiling, float(default_cr_ceiling) * 2.0)
+    if cr_ceiling < 0.05:
+        cr_ceiling = float(default_cr_ceiling)
+    tr_ceiling = min(1.0, max(float(default_tr_ceiling), tr * float(safety_margin) + 0.05))
     return ReferenceStats(
         v_floor=v_floor,
-        cr_ceiling=min(1.0, cr * safety_margin + 0.05),
-        tr_ceiling=min(1.0, tr * safety_margin + 0.05),
+        cr_ceiling=float(cr_ceiling),
+        tr_ceiling=float(tr_ceiling),
     )
 
 
@@ -98,10 +127,26 @@ def calibrate_from_population(
     speeds = np.asarray([effective_speed(m) for m in population], dtype=np.float64)
     crs = np.asarray([m.cr for m in population], dtype=np.float64)
     trs = np.asarray([m.tr for m in population], dtype=np.float64)
-    v_floor = max(float(absolute_v_floor), float(np.percentile(speeds, floor_percentile)))
+    v_raw = float(np.percentile(speeds, floor_percentile))
+    try:
+        from domains.highway.metrics import V_MIN as _VMIN
+        from domains.highway.metrics import V_TARGET as _VT
+
+        v_lo, v_hi = float(_VMIN), float(_VT)
+    except Exception:  # noqa: BLE001
+        v_lo, v_hi = 10.0, 25.0
+    v_floor = float(
+        min(v_hi, max(float(absolute_v_floor), max(v_lo, v_raw)))
+    )
+    # Prefer CR from survivors so all-crash gens don't open the gate.
+    survivor_crs = [m.cr for m in population if m.sr >= 0.3]
+    if survivor_crs:
+        cr_ceiling = float(np.percentile(np.asarray(survivor_crs), safety_percentile))
+    else:
+        cr_ceiling = min(0.25, float(np.percentile(crs, safety_percentile)))
     return ReferenceStats(
         v_floor=v_floor,
-        cr_ceiling=float(np.percentile(crs, safety_percentile)),
+        cr_ceiling=float(cr_ceiling),
         tr_ceiling=float(np.percentile(trs, safety_percentile)),
     )
 
@@ -215,7 +260,7 @@ def rank_population(
                 float(reference_cr or 0.0),
                 float(reference_tr or 0.0),
             )
-        else:
+        if ref is None:
             ref = calibrate_from_population(pop)
 
     feasible = [m for m in pop if is_feasible(m, ref)]

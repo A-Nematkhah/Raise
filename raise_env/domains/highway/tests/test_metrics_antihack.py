@@ -158,6 +158,7 @@ def test_scalar_penalizes_constant_cruise_degeneracy():
         "speed_p10": 18.0,
         "speed_p90": 26.0,
         "outcome_unique": 2,
+        "progress_std": 40.0,
     }
     flat = {
         **varied,
@@ -165,5 +166,37 @@ def test_scalar_penalizes_constant_cruise_degeneracy():
         "speed_p10": 22.0,
         "speed_p90": 22.05,
         "outcome_unique": 1,
+        "progress_std": 0.0,
     }
     assert highway_fitness(varied) > highway_fitness(flat)
+
+
+def test_soft20_cruise_loses_to_traffic_matching_mid():
+    """Run fingerprint: locked soft@20 must not beat a mid policy at ~24 m/s."""
+    cruise20 = {
+        "SR": 1.0,
+        "CR": 0.0,
+        "TR": 0.0,
+        "mean_speed": 20.06,
+        "PL": 803.0,
+        "soft_success": 0.0,  # soft threshold is now 25 m/s
+        "lane_change_rate": 0.0,
+        "speed_p10": 20.06,
+        "speed_p90": 20.06,
+        "progress_std": 0.0,
+        "outcome_unique": 1,
+    }
+    mid = {
+        "SR": 0.8,
+        "CR": 0.15,
+        "TR": 0.05,
+        "mean_speed": 24.0,
+        "PL": 750.0,
+        "soft_success": 0.7,
+        "lane_change_rate": 0.04,
+        "speed_p10": 22.0,
+        "speed_p90": 26.0,
+        "progress_std": 30.0,
+        "outcome_unique": 3,
+    }
+    assert highway_fitness(mid) > highway_fitness(cruise20)

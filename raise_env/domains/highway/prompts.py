@@ -149,11 +149,11 @@ D3_SYSTEM_PROMPT = (
 
 D3_USER_PROMPT = """Current score (best so far): {last_score:.4f} (higher is better)
 Core components:
-- Forward progress + traffic-matching speed shaping (~20–30 m/s)
+- Forward progress + traffic-matching speed shaping (~25 m/s target, ~20–30 band)
 - Collision and off-road penalties
 - Clearance to nearby vehicles
-- Penalty for lagging below traffic speed (~20 m/s)
-- Stability (bounded magnitudes)
+- Penalty for lagging below traffic speed (~25 m/s)
+- Stability (bounded magnitudes); avoid flat constant ~20 m/s cruise
 Focus note: {feedback}
 {extra_context_if_any}
 Revise the function below.
@@ -164,14 +164,16 @@ Maintain signature def compute_reward(state, memory): and return a finite float.
 D4_EXTERNAL_KNOWLEDGE = """# External Knowledge — Highway Fast
 ## Task
 - Domain: multi-lane highway driving (highway-fast-v0)
-- Surrounding vehicles typically cruise at ≥~20 m/s (often ~20–30 m/s)
-- Ego must survive without collision/off-road while matching that flow and making forward progress
+- Surrounding vehicles typically cruise near ~25 m/s (often ~20–30 m/s)
+- Ego must survive without collision/off-road while matching that flow (~25 m/s)
+  and making forward progress — do NOT lock to a flat ~20 m/s lane-keep cruise
 ## Metrics (mapped to RAISE ProxyMetrics)
 - SR: fraction of episodes survived without collision/off-road
 - CR: collision rate; TR: off-road rate
-- Also optimize mean speed + forward progress (do NOT survive by lagging << traffic speed)
-- soft_success: survive AND traffic-speed cruise (~≥20 m/s) AND meaningful progress
-- Primary scalar mixes safety with throughput (progress/speed), with lag-behind-traffic penalty
+- Also optimize mean speed + forward progress (do NOT survive by lagging << traffic)
+- soft_success: survive AND traffic-speed cruise (~≥25 m/s) AND meaningful progress
+- Primary scalar mixes safety with throughput (progress/speed), with lag-behind-traffic
+  and constant-cruise penalties
 """
 
 D5_SEED_FUNCTION = '''def compute_reward(state, memory):
@@ -180,14 +182,14 @@ D5_SEED_FUNCTION = '''def compute_reward(state, memory):
     off_road_penalty = -10.0
     speed_coef = 0.08
     progress_coef = 1.0
-    traffic_speed = 20.0
+    traffic_speed = 25.0
     lag_penalty = 0.15
     if state.collision:
         return float(collision_penalty)
     if state.off_road:
         return float(off_road_penalty)
     reward = progress_coef * state.progress + speed_coef * state.speed
-    # Traffic already moves at ~20+ m/s; going slower lags the flow.
+    # Match traffic near ~25 m/s; slower than that lags the flow.
     if (not state.timeout) and state.ego.on_road and state.speed < traffic_speed:
         reward = reward - lag_penalty * (traffic_speed - state.speed)
     return float(reward)

@@ -709,17 +709,25 @@ class ClosedLoopRunner:
                             self._highway_pareto_ref = calibrate_from_reference_rollout(
                                 speeds, cr, tr
                             )
-                            write_json(
-                                ref_path,
-                                {
-                                    "v_floor": self._highway_pareto_ref.v_floor,
-                                    "cr_ceiling": self._highway_pareto_ref.cr_ceiling,
-                                    "tr_ceiling": self._highway_pareto_ref.tr_ceiling,
-                                    "n_speed_samples": int(len(speeds)),
-                                    "reference_cr": float(cr),
-                                    "reference_tr": float(tr),
-                                },
-                            )
+                            if self._highway_pareto_ref is None:
+                                logger.warning(
+                                    "Pareto IDM reference rejected "
+                                    "(reference_cr=%.3f too high); "
+                                    "using per-generation percentiles",
+                                    float(cr),
+                                )
+                            else:
+                                write_json(
+                                    ref_path,
+                                    {
+                                        "v_floor": self._highway_pareto_ref.v_floor,
+                                        "cr_ceiling": self._highway_pareto_ref.cr_ceiling,
+                                        "tr_ceiling": self._highway_pareto_ref.tr_ceiling,
+                                        "n_speed_samples": int(len(speeds)),
+                                        "reference_cr": float(cr),
+                                        "reference_tr": float(tr),
+                                    },
+                                )
                         except Exception as exc:  # noqa: BLE001
                             logger.warning(
                                 "Pareto IDM reference failed (%s); "
@@ -740,6 +748,33 @@ class ClosedLoopRunner:
                 from raise_core.raise_loop.diversity import diversify_ranking
 
                 ranked_for_evo = diversify_ranking(ranked_for_evo)
+                # Monotonic elite archive: best-ever fitness stays front for
+                # keep_runtime_elite / crossover parents.
+                for c in ranked_for_evo:
+                    fit = float(candidate_fitness(c))
+                    if fit > float(
+                        getattr(self, "_highway_best_ever_fitness", float("-inf"))
+                    ):
+                        self._highway_best_ever_fitness = fit
+                        self._highway_best_ever_cand = c
+                elite = getattr(self, "_highway_best_ever_cand", None)
+                if elite is not None and bool(cfg.keep_runtime_elite):
+                    eid = str(elite.candidate_id)
+                    rest = [
+                        c
+                        for c in ranked_for_evo
+                        if str(c.candidate_id) != eid
+                    ]
+                    # Prefer live copy from this epoch if still present.
+                    live = next(
+                        (
+                            c
+                            for c in ranked_for_evo
+                            if str(c.candidate_id) == eid
+                        ),
+                        elite,
+                    )
+                    ranked_for_evo = [live] + rest
 
             epoch_rec = {
                 "epoch": g,
@@ -763,6 +798,9 @@ class ClosedLoopRunner:
                 # Alias for older report / plot readers.
                 "evolve_best_nav": (
                     candidate_fitness(ranked_for_evo[0]) if ranked_for_evo else None
+                ),
+                "best_ever_fitness": getattr(
+                    self, "_highway_best_ever_fitness", None
                 ),
                 "gate": gate_report,
                 "al": al_report,

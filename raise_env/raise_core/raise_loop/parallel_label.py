@@ -48,7 +48,12 @@ def label_candidates_parallel(
     round_index_fn: Callable[[int], int],
 ) -> Tuple[int, int]:
     """
-    Run Stage II labels with a thread pool (highway CPU PPO releases the GIL).
+    Run Stage II labels with a thread pool.
+
+    Note: highway-env stepping is mostly Python/NumPy on small arrays and may
+    hold the GIL; PyTorch also shares an intra-op pool. ``workers>1`` can help
+    when PPO/BLAS release the GIL, but can also contend with ``n_envs>1`` —
+    benchmark wall-clock before assuming speedup.
 
     ``label_one(cand, round_index) -> result dict`` must be thread-safe for the
     trainer/env stack. ``on_done`` runs in the main thread for append/checkpoint.
