@@ -356,7 +356,7 @@ def final_run_summary(
     if closed_loop:
         status(
             "Key files: closed_loop/REPORT.txt, closed_loop/epochs.jsonl, "
-            "manifest.json, best_stage3.json"
+            "manifest.json, best_stage3.json, plots/"
         )
     else:
         status(

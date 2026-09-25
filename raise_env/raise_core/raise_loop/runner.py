@@ -612,6 +612,90 @@ class ClosedLoopRunner:
                 except Exception as exc:  # noqa: BLE001
                     logger.exception("closed-loop refit failed: %s", exc)
 
+            from raise_core.raise_loop.evolve_rank import (
+                parse_evolve_rank,
+                rank_population_for_evolution,
+            )
+            from raise_core.selection import candidate_fitness
+
+            evolve_mode = parse_evolve_rank(
+                getattr(cfg, "evolve_rank", None),
+                domain=str(getattr(cfg, "domain", "crowdnav") or "crowdnav"),
+            )
+            w = float(getattr(cfg, "evolve_rank_score1_weight", 0.4) or 0.4)
+
+            pareto_ref = None
+            if evolve_mode == "pareto" and domain_key == "highway":
+                # One-shot IDM / IDLE reference for auto thresholds (cached).
+                if not hasattr(self, "_highway_pareto_ref"):
+                    self._highway_pareto_ref = None
+                    ref_path = os.path.join(
+                        closed_loop_dir(cfg.output_dir), "pareto_reference.json"
+                    )
+                    # Resume: reload thresholds so mid-run bar does not jump.
+                    if os.path.isfile(ref_path):
+                        try:
+                            import json as _json
+
+                            from domains.highway.pareto_rank import ReferenceStats
+
+                            with open(ref_path, "r", encoding="utf-8") as fh:
+                                payload = _json.load(fh) or {}
+                            self._highway_pareto_ref = ReferenceStats(
+                                v_floor=float(payload["v_floor"]),
+                                cr_ceiling=float(payload["cr_ceiling"]),
+                                tr_ceiling=float(payload["tr_ceiling"]),
+                            )
+                        except Exception as exc:  # noqa: BLE001
+                            logger.warning(
+                                "Failed to load pareto_reference.json (%s)", exc
+                            )
+                            self._highway_pareto_ref = None
+                    if self._highway_pareto_ref is None and not bool(cfg.use_stub):
+                        try:
+                            from domains.highway.pareto_rank import (
+                                calibrate_from_reference_rollout,
+                                collect_reference_rollout_stats,
+                            )
+
+                            speeds, cr, tr = collect_reference_rollout_stats(
+                                n_episodes=6, seed=int(cfg.seed)
+                            )
+                            self._highway_pareto_ref = calibrate_from_reference_rollout(
+                                speeds, cr, tr
+                            )
+                            write_json(
+                                ref_path,
+                                {
+                                    "v_floor": self._highway_pareto_ref.v_floor,
+                                    "cr_ceiling": self._highway_pareto_ref.cr_ceiling,
+                                    "tr_ceiling": self._highway_pareto_ref.tr_ceiling,
+                                    "n_speed_samples": int(len(speeds)),
+                                    "reference_cr": float(cr),
+                                    "reference_tr": float(tr),
+                                },
+                            )
+                        except Exception as exc:  # noqa: BLE001
+                            logger.warning(
+                                "Pareto IDM reference failed (%s); "
+                                "falling back to per-generation percentiles",
+                                exc,
+                            )
+                            self._highway_pareto_ref = None
+                pareto_ref = getattr(self, "_highway_pareto_ref", None)
+
+            ranked_for_evo = rank_population_for_evolution(
+                ranked,
+                mode=evolve_mode,
+                hybrid_score1_weight=w,
+                pareto_ref=pareto_ref,
+            )
+            # Highway: demote identical Stage-II metric clones before breeding.
+            if domain_key == "highway":
+                from raise_core.raise_loop.diversity import diversify_ranking
+
+                ranked_for_evo = diversify_ranking(ranked_for_evo)
+
             epoch_rec = {
                 "epoch": g,
                 "n_population": len(ranked),
@@ -620,6 +704,21 @@ class ClosedLoopRunner:
                 "ranking": [c.candidate_id for c in ranked],
                 "best_id": ranked[0].candidate_id if ranked else None,
                 "best_score1": ranked[0].score if ranked else None,
+                "evolve_rank": evolve_mode,
+                "evolve_ranking": [c.candidate_id for c in ranked_for_evo],
+                "evolve_best_id": (
+                    ranked_for_evo[0].candidate_id if ranked_for_evo else None
+                ),
+                "evolve_best_score1": (
+                    ranked_for_evo[0].score if ranked_for_evo else None
+                ),
+                "evolve_best_fitness": (
+                    candidate_fitness(ranked_for_evo[0]) if ranked_for_evo else None
+                ),
+                # Alias for older report / plot readers.
+                "evolve_best_nav": (
+                    candidate_fitness(ranked_for_evo[0]) if ranked_for_evo else None
+                ),
                 "gate": gate_report,
                 "al": al_report,
                 "n_labeled_dataset": n_labeled,
@@ -647,6 +746,8 @@ class ClosedLoopRunner:
                 os.path.join(closed_loop_dir(cfg.output_dir), f"pop_epoch_{g:03d}.json"),
                 {
                     "ranking": [c.candidate_id for c in ranked],
+                    "evolve_ranking": [c.candidate_id for c in ranked_for_evo],
+                    "evolve_rank": evolve_mode,
                     "to_label": [c.candidate_id for c in to_label],
                 },
             )
@@ -654,7 +755,7 @@ class ClosedLoopRunner:
             console.status(format_epoch_summary(epoch_rec), stage="closed-loop")
 
             if g + 1 < generations:
-                population = evolver._next_generation(ranked)
+                population = evolver._next_generation(ranked_for_evo)
             else:
                 population = ranked
 

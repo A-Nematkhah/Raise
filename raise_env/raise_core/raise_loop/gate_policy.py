@@ -107,15 +107,23 @@ def _metrics_of(cand: RewardCandidate) -> Dict[str, Any]:
     return dict(m) if isinstance(m, dict) else {}
 
 
-def _selection_scalar(cand: RewardCandidate) -> float:
-    from raise_core.selection import candidate_nav_scalar
+def _has_cached_fitness(cand: RewardCandidate) -> bool:
+    md = cand.metadata or {}
+    return md.get("fitness") is not None or md.get("selection_scalar") is not None
 
-    cached = (cand.metadata or {}).get("selection_scalar")
-    if cached is not None:
-        v = _finite(cached, float("nan"))
-        if math.isfinite(v):
-            return v
-    return float(candidate_nav_scalar(cand))
+
+def _selection_scalar(cand: RewardCandidate) -> float:
+    """Official fitness (highway) or nav scalar (CrowdNav)."""
+    from raise_core.selection import candidate_fitness
+
+    md = cand.metadata or {}
+    for key in ("fitness", "selection_scalar"):
+        cached = md.get(key)
+        if cached is not None:
+            v = _finite(cached, float("nan"))
+            if math.isfinite(v):
+                return v
+    return float(candidate_fitness(cand))
 
 
 def _soft_success(cand: RewardCandidate) -> float:
@@ -126,11 +134,26 @@ def _soft_success(cand: RewardCandidate) -> float:
 
 
 def pick_best_by_scalar(pool: Sequence[RewardCandidate]) -> Optional[RewardCandidate]:
+    """
+    Best elite for Stage III forcing.
+
+    If every labeled candidate has a fresh ``pareto_rank``, use lowest rank.
+    Otherwise fall back to cached ``fitness`` / nav scalar (never let a lone
+    stamped genome beat a higher-fitness unstamped one).
+    """
+    labeled = [
+        c
+        for c in pool
+        if _metrics_of(c) or _has_cached_fitness(c)
+    ]
+    if not labeled:
+        return None
+    all_stamped = all((c.metadata or {}).get("pareto_rank") is not None for c in labeled)
+    if all_stamped:
+        return min(labeled, key=lambda c: int((c.metadata or {}).get("pareto_rank", 10**9)))
     best = None
     best_v = float("-inf")
-    for c in pool:
-        if not _metrics_of(c) and (c.metadata or {}).get("selection_scalar") is None:
-            continue
+    for c in labeled:
         v = _selection_scalar(c)
         if v > best_v:
             best_v = v
@@ -152,7 +175,7 @@ def score1_elite_ok(
     if scalar_min is not None and _selection_scalar(cand) >= float(scalar_min):
         return True
     # No Stage II metrics yet — do not force Score1-only crawl survivors.
-    if not _metrics_of(cand) and (cand.metadata or {}).get("selection_scalar") is None:
+    if not _metrics_of(cand) and not _has_cached_fitness(cand):
         return False
     return _selection_scalar(cand) >= 0.0
 
@@ -167,10 +190,10 @@ def assemble_stage3_population(
     soft_success_min: float = 0.25,
 ) -> Tuple[List[RewardCandidate], Dict[str, Any]]:
     """
-    Stage III input = kept ∪ best_s2 ∪ best_scalar; Score1-best only if strong.
+    Stage III input = kept ∪ best_s2 ∪ best_fitness; Score1-best only if strong.
 
     CrowdNav: still unions elites (behavior-preserving additive). Highway uses
-    soft_success / selection_scalar to gate Score1-best.
+    soft_success / fitness to gate Score1-best.
     """
     out: List[RewardCandidate] = []
     seen_h: set[str] = set()
@@ -183,7 +206,7 @@ def assemble_stage3_population(
         best_s2 = best_scalar
 
     added: List[str] = []
-    for label, cand in (("best_s2", best_s2), ("best_scalar", best_scalar)):
+    for label, cand in (("best_s2", best_s2), ("best_fitness", best_scalar)):
         before = len(out)
         _unique_append(out, cand, seen_hash=seen_h, seen_ids=seen_i)
         if len(out) > before and cand is not None:
@@ -195,7 +218,7 @@ def assemble_stage3_population(
         scalars = [
             _selection_scalar(c)
             for c in full_pool
-            if _metrics_of(c) or (c.metadata or {}).get("selection_scalar") is not None
+            if _metrics_of(c) or _has_cached_fitness(c)
         ]
         scalar_floor = (
             float(sorted(scalars)[len(scalars) // 2]) if scalars else 0.0
@@ -227,7 +250,7 @@ def assemble_stage3_population(
 
 
 def epoch_population_stats(population: Sequence[Any]) -> Dict[str, Any]:
-    """Score1 spread + soft_success / selection_scalar summary for logs."""
+    """Score1 spread + soft_success / fitness summary for logs."""
     scores: List[float] = []
     softs: List[float] = []
     scalars: List[float] = []
@@ -245,8 +268,7 @@ def epoch_population_stats(population: Sequence[Any]) -> Dict[str, Any]:
         if "soft_success" in m:
             softs.append(_finite(m.get("soft_success"), 0.0))
         has_scalar = bool(m) or (
-            isinstance(getattr(c, "metadata", None), dict)
-            and (c.metadata or {}).get("selection_scalar") is not None
+            isinstance(c, RewardCandidate) and _has_cached_fitness(c)
         )
         if has_scalar and isinstance(c, RewardCandidate):
             scalars.append(_selection_scalar(c))
@@ -260,6 +282,9 @@ def epoch_population_stats(population: Sequence[Any]) -> Dict[str, Any]:
         ),
         "soft_success_mean": float(sum(softs) / len(softs)) if softs else None,
         "soft_success_max": float(max(softs)) if softs else None,
+        # fitness_* is canonical; scalar_* kept for older plot scripts.
+        "fitness_mean": float(sum(scalars) / len(scalars)) if scalars else None,
+        "fitness_max": float(max(scalars)) if scalars else None,
         "scalar_mean": float(sum(scalars) / len(scalars)) if scalars else None,
         "scalar_max": float(max(scalars)) if scalars else None,
         "n_with_proxy": len(scalars),

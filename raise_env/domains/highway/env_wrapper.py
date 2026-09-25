@@ -19,6 +19,9 @@ DEFAULT_TIME_STEP = 1.0 / DEFAULT_POLICY_FREQ
 DEFAULT_VEHICLES = 20
 DEFAULT_LANES = 4
 MAX_OTHERS = 5
+# Denser traffic + distinct seed band for selection / anti-hacking eval.
+HOLDOUT_VEHICLES = 32
+HOLDOUT_SEED_OFFSET = 50_003
 
 
 def _require_highway_deps() -> None:
@@ -59,7 +62,25 @@ def default_env_config() -> Dict[str, Any]:
     }
 
 
-def make_base_env(*, seed: Optional[int] = None, config: Optional[Dict[str, Any]] = None):
+def holdout_env_config() -> Dict[str, Any]:
+    """
+    Harder eval distribution (not used for PPO rollouts).
+
+    Denser traffic so a constant-speed lane-keep cruise is more likely to
+    collide — selection metrics should come from this profile.
+    """
+    cfg = default_env_config()
+    cfg["vehicles_count"] = int(HOLDOUT_VEHICLES)
+    cfg["lanes_count"] = int(DEFAULT_LANES)
+    return cfg
+
+
+def make_base_env(
+    *,
+    seed: Optional[int] = None,
+    config: Optional[Dict[str, Any]] = None,
+    render_mode: Optional[str] = None,
+):
     """Create a configured highway-fast-v0 env (native reward unused)."""
     _require_highway_deps()
     import gymnasium as gym
@@ -75,7 +96,7 @@ def make_base_env(*, seed: Optional[int] = None, config: Optional[Dict[str, Any]
             else:
                 nested[key] = value
         cfg = nested
-    env = gym.make(ENV_ID, render_mode=None)
+    env = gym.make(ENV_ID, render_mode=render_mode)
     env.unwrapped.configure(cfg)
     env.reset(seed=int(seed) if seed is not None else None)
     return env
@@ -185,8 +206,9 @@ class RewardInjectedHighwayEnv(_gym_wrapper_base()):  # type: ignore[misc,valid-
         *,
         seed: Optional[int] = None,
         config: Optional[Dict[str, Any]] = None,
+        render_mode: Optional[str] = None,
     ) -> None:
-        env = make_base_env(seed=seed, config=config)
+        env = make_base_env(seed=seed, config=config, render_mode=render_mode)
         super().__init__(env)
         self.reward_fn = reward_fn
         self._seed = seed

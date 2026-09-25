@@ -42,6 +42,19 @@ def _optional_json(path: str) -> Optional[Dict[str, Any]]:
 
 
 def _scalar(m: Dict[str, Any]) -> float:
+    for key in ("fitness", "selection_scalar"):
+        if m.get(key) is not None:
+            try:
+                return float(m[key])
+            except (TypeError, ValueError):
+                pass
+    if str(m.get("domain", "")).lower() == "highway" or "mean_speed" in m:
+        try:
+            from domains.highway.metrics import highway_fitness
+
+            return float(highway_fitness(m))
+        except Exception:  # noqa: BLE001
+            pass
     sr = float(m.get("SR", 0.0))
     cr = float(m.get("CR", 0.0))
     tr = float(m.get("TR", 0.0))
@@ -141,8 +154,8 @@ def plot_stage_metrics(
 
     axes[1].plot(xs, scalars, marker="o", color="#1f4e79", linewidth=1.8)
     axes[1].axhline(0.0, color="gray", linewidth=0.8, linestyle="--")
-    axes[1].set_ylabel("SR − CR − 0.5·TR")
-    axes[1].set_title(f"{stage_label} — scalar score")
+    axes[1].set_ylabel("selection scalar")
+    axes[1].set_title(f"{stage_label} — scalar score (highway-aware when available)")
     axes[1].grid(True, alpha=0.3)
     axes[1].set_xticks(xs)
     axes[1].set_xticklabels(names, rotation=45, ha="right", fontsize=8)
@@ -228,8 +241,157 @@ def plot_stage_summary(run_dir: str, out_path: str) -> bool:
     return True
 
 
+def _read_epochs_jsonl(run_dir: str) -> List[Dict[str, Any]]:
+    path = os.path.join(run_dir, "closed_loop", "epochs.jsonl")
+    if not os.path.isfile(path):
+        return []
+    rows: List[Dict[str, Any]] = []
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rows.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    return rows
+
+
+def plot_closed_loop_epochs(run_dir: str, out_path: str) -> bool:
+    """Score1 / soft_success / labels across closed-loop epochs."""
+    rows = _read_epochs_jsonl(run_dir)
+    if not rows:
+        return False
+    import matplotlib.pyplot as plt
+
+    epochs = [int(r.get("epoch", i)) for i, r in enumerate(rows)]
+    score1 = []
+    soft = []
+    scalar = []
+    labeled = []
+    for r in rows:
+        try:
+            score1.append(float(r.get("best_score1")) if r.get("best_score1") is not None else float("nan"))
+        except (TypeError, ValueError):
+            score1.append(float("nan"))
+        stats = r.get("stats") or {}
+        soft.append(
+            float(stats["soft_success_mean"])
+            if stats.get("soft_success_mean") is not None
+            else float("nan")
+        )
+        scalar.append(
+            float(stats["scalar_mean"])
+            if stats.get("scalar_mean") is not None
+            else float("nan")
+        )
+        try:
+            labeled.append(float(r.get("n_labeled_dataset") or 0))
+        except (TypeError, ValueError):
+            labeled.append(0.0)
+
+    fig, axes = plt.subplots(3, 1, figsize=(8.0, 8.5), sharex=True)
+    axes[0].plot(epochs, score1, "o-", color="#1f4e79", linewidth=1.8)
+    axes[0].set_ylabel("Best Score1")
+    axes[0].set_title("Closed-loop — best Score1 / proxy quality / labels")
+    axes[0].grid(True, alpha=0.3)
+
+    axes[1].plot(epochs, soft, "s-", color="#2ca02c", label="soft_success μ", linewidth=1.6)
+    axes[1].plot(epochs, scalar, "^-", color="#9467bd", label="scalar μ", linewidth=1.6)
+    axes[1].set_ylabel("Proxy stats")
+    axes[1].legend(loc="best", fontsize=8)
+    axes[1].grid(True, alpha=0.3)
+
+    axes[2].step(epochs, labeled, where="mid", color="#ff7f0e", linewidth=1.8)
+    axes[2].set_xlabel("Epoch")
+    axes[2].set_ylabel("Labeled n")
+    axes[2].grid(True, alpha=0.3)
+
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    return True
+
+
+def plot_best_highway_detail(run_dir: str, out_path: str) -> bool:
+    """SR/CR/TR + speed/progress/soft for best Stage II/III when highway fields exist."""
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    rows: List[Tuple[str, Dict[str, float]]] = []
+    for label, fname in (("Stage II", "best_stage2.json"), ("Stage III", "best_stage3.json")):
+        payload = _optional_json(os.path.join(run_dir, fname))
+        if payload is None:
+            continue
+        m = (payload.get("metadata") or {}).get("last_metrics") or {}
+        if not m:
+            continue
+        cid = str(payload.get("candidate_id", "?"))
+        rows.append(
+            (
+                f"{label}\n{cid}",
+                {
+                    "SR": float(m.get("SR", 0.0)),
+                    "CR": float(m.get("CR", 0.0)),
+                    "TR": float(m.get("TR", 0.0)),
+                    "speed": float(m.get("mean_speed", m.get("ITR", 0.0)) or 0.0),
+                    "progress": float(m.get("mean_progress", m.get("PL", 0.0)) or 0.0),
+                    "soft": float(m.get("soft_success", 0.0) or 0.0),
+                    "scalar": _scalar(m),
+                },
+            )
+        )
+    if not rows:
+        return False
+    # Only emit this panel when continuous highway fields are present.
+    if not any(r[1]["speed"] > 0 or r[1]["progress"] > 0 or r[1]["soft"] > 0 for r in rows):
+        return False
+
+    fig, axes = plt.subplots(1, 2, figsize=(10.0, 4.2))
+    labels = [lab for lab, _ in rows]
+    x = np.arange(len(labels))
+    width = 0.25
+    for i, (k, color) in enumerate(
+        (("SR", "#2ca02c"), ("CR", "#d62728"), ("TR", "#ff7f0e"))
+    ):
+        axes[0].bar(x + (i - 1) * width, [m[k] for _, m in rows], width, label=k, color=color)
+    axes[0].set_xticks(x)
+    axes[0].set_xticklabels(labels)
+    axes[0].set_ylim(0.0, 1.05)
+    axes[0].set_ylabel("Rate")
+    axes[0].set_title("Best — rates")
+    axes[0].legend(fontsize=8)
+    axes[0].grid(True, axis="y", alpha=0.3)
+
+    # Normalize progress for twin bar readability (÷1000).
+    metrics_r = ("speed", "progress", "soft", "scalar")
+    colors_r = ("#1f77b4", "#8c564b", "#17becf", "#9467bd")
+    width_r = 0.18
+    for i, (k, color) in enumerate(zip(metrics_r, colors_r)):
+        vals = []
+        for _, m in rows:
+            v = m[k]
+            if k == "progress":
+                v = v / 1000.0
+            vals.append(v)
+        axes[1].bar(x + (i - 1.5) * width_r, vals, width_r, label=k, color=color)
+    axes[1].set_xticks(x)
+    axes[1].set_xticklabels(labels)
+    axes[1].set_title("Best — speed / progress÷1k / soft / scalar")
+    axes[1].legend(fontsize=7)
+    axes[1].grid(True, axis="y", alpha=0.3)
+
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    return True
+
+
 def plot_rejection_categories(run_dir: str, out_path: str) -> bool:
     path = os.path.join(run_dir, "stage1_rejections.jsonl")
+    if not os.path.isfile(path):
+        path = os.path.join(run_dir, "closed_loop", "stage1_rejections.jsonl")
     if not os.path.isfile(path):
         return False
     counts: Dict[str, int] = {}
@@ -313,6 +475,15 @@ def run_plots(run_dir: str, output_dir: str, *, show: bool = False) -> List[str]
 
     path = os.path.join(output_dir, "stage1_rejections.png")
     if plot_rejection_categories(run_dir, path):
+        written.append(path)
+
+    # Closed-loop: also look under run_dir and nested closed_loop/ for rejections.
+    path = os.path.join(output_dir, "closed_loop_epochs.png")
+    if plot_closed_loop_epochs(run_dir, path):
+        written.append(path)
+
+    path = os.path.join(output_dir, "best_highway_detail.png")
+    if plot_best_highway_detail(run_dir, path):
         written.append(path)
 
     if show and written:

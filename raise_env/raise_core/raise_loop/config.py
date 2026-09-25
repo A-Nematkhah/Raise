@@ -61,6 +61,11 @@ class ClosedLoopConfig:
     eval_episodes: Optional[int] = None
     # Optional early hard-gate when val MAE is already low (highway Phase 4).
     max_val_mae_for_gate: Optional[float] = None
+    # Order genomes for next-generation parents after an epoch.
+    # score1 = CrowdNav/Alg.1 default; scalar|hybrid = highway diagnostic.
+    evolve_rank: str = "score1"
+    # Weight on Score1 inside hybrid mode (remainder on nav scalar).
+    evolve_rank_score1_weight: float = 0.4
 
     def apply_fast_profile(self) -> None:
         self.use_stub = True

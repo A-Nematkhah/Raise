@@ -40,17 +40,23 @@ def get_pack(*, with_adapter: bool = True) -> DomainPack:
         sandbox_config=highway_sandbox_config(),
         make_stage2_trainer=make_stage2_trainer if with_adapter else None,
         make_stage3_trainer=make_stage3_trainer if with_adapter else None,
-        selection_scalar_name="highway_navigation_scalar",
+        selection_scalar_name="highway_fitness",
         metadata={
             "env_id": "highway-fast-v0",
             "policy": "sb3_ppo_mlp",
             "pipeline_profile": "highway",
             "stage1": "highway_spearman_rules",
             "diagnostic_only": True,
-            "selection_scalar": "highway_navigation_scalar",
+            "fitness": "highway_fitness",
+            "selection_scalar": "highway_fitness",  # alias
+            "objective": (
+                "Official fitness = highway_fitness(holdout metrics). "
+                "Score1 is Stage-I proxy only; PPO optimizes LLM compute_reward."
+            ),
             "metrics_note": (
                 "SR/CR/TR = survival rates; PL=progress_m; ITR=mean_speed_m/s; "
-                "also soft_success, lane_change_rate, high_speed_frac"
+                "also soft_success, lane_change_rate, high_speed_frac; "
+                "fitness is the sole selection objective"
             ),
         },
     )

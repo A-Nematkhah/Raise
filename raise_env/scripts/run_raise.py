@@ -272,6 +272,23 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--closed-loop-evolve-rank",
+        default="",
+        choices=("", "score1", "scalar", "hybrid", "pareto"),
+        help=(
+            "Parent order for next generation after an epoch: score1 (CrowdNav "
+            "default), pareto (highway default: auto thresholds + NSGA-II), "
+            "scalar / hybrid (legacy weighted). Empty → pareto for highway, "
+            "score1 otherwise"
+        ),
+    )
+    parser.add_argument(
+        "--closed-loop-evolve-rank-score1-weight",
+        type=float,
+        default=0.4,
+        help="Weight on Score1 inside hybrid evolve-rank (default 0.4)",
+    )
+    parser.add_argument(
         "--closed-loop-refit-every",
         type=int,
         default=8,
@@ -412,6 +429,10 @@ def main() -> int:
             float(args.closed_loop_max_val_mae_gate)
             if args.closed_loop_max_val_mae_gate is not None
             else None
+        ),
+        closed_loop_evolve_rank=str(args.closed_loop_evolve_rank or ""),
+        closed_loop_evolve_rank_score1_weight=float(
+            args.closed_loop_evolve_rank_score1_weight
         ),
         closed_loop_k2=int(args.closed_loop_k2),
         closed_loop_refit_every_new_labels=int(args.closed_loop_refit_every),

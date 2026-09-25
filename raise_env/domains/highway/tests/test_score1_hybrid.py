@@ -128,6 +128,44 @@ def compute_reward(state, memory):
     assert float(s_seed.score) > float(s_crawl.score) + 0.05
     assert s_seed.scenario_scores is not None
     assert "preference_auc" in s_seed.scenario_scores
+    assert "collision_decoy_penalty" in s_seed.scenario_scores
+
+
+def test_hybrid_penalizes_collision_loving_reward():
+    pack = load_domain("highway")
+    validator = make_validator_for_domain(pack)
+    seed_fn = validator.validate_code(D5_SEED_FUNCTION)
+    crash_code = """
+def compute_reward(state, memory):
+    if state.collision:
+        return 50.0
+    if state.off_road:
+        return -1.0
+    return float(0.1 * state.progress)
+"""
+    crash_fn = validator.validate_code(crash_code)
+    trajs = _toy_dataset()
+    # Tag collisions as decoy_crash so collision_decoy_penalty fires clearly.
+    tagged = []
+    for t in trajs:
+        if t.label == "collision":
+            tagged.append(
+                HighwayTrajectoryRecord(
+                    trajectory_id=t.trajectory_id,
+                    scenario_id=t.scenario_id,
+                    seed=t.seed,
+                    states=t.states,
+                    label=t.label,
+                    behavior="decoy_crash",
+                    metadata=t.metadata,
+                )
+            )
+        else:
+            tagged.append(t)
+    s_seed = score_highway_dataset(seed_fn, tagged)
+    s_crash = score_highway_dataset(crash_fn, tagged)
+    assert float(s_seed.score) > float(s_crash.score) + 0.1
+    assert float(s_crash.scenario_scores["collision_decoy_penalty"]) > 0.0
 
 
 def test_hybrid_spread_on_toy_rewards():

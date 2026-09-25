@@ -101,7 +101,9 @@ def _looks_highway(candidates: Sequence[RewardCandidate]) -> bool:
             return True
         if "mean_speed" in md or "soft_success" in md:
             return True
-        if (c.metadata or {}).get("selection_scalar") is not None and "PL" in md:
+        if (c.metadata or {}).get("fitness") is not None or (
+            (c.metadata or {}).get("selection_scalar") is not None and "PL" in md
+        ):
             # Highway remap uses large PL (meters); CrowdNav PL is path length too
             # but soft_success is highway-only — already covered above.
             pass

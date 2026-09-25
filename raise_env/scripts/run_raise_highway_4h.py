@@ -8,9 +8,9 @@ This is the thesis RAISE path (not Stage I→II→III without surrogate):
 
 Locked PROFILE (SB3 PPO, env_steps):
 
-  Warm:   n=16 labels @ K2=15_000 env steps
-  Loop:   N=6, G=4, K2=15_000, min_labels_gate=16 (or MAE≤0.35), E2=20, AL=2/epoch
-  Stage III: R=1, K3=80_000, E3=30, no H-sweep; elites=kept∪best_s2∪best_scalar
+  Warm:   n=16 labels @ K2=12_000 env steps
+  Loop:   N=6, G=4, K2=12_000, min_labels_gate=16 (or MAE≤0.35), E2=20, AL=2/epoch
+  Stage III: R=1, K3=80_000, E3=30, no H-sweep; elites=kept∪best_s2∪best_fitness
 
 From raise_env/:
 
@@ -20,6 +20,10 @@ From raise_env/:
   # ~4h RAISE — warm surrogate OFF by default; labels collected in closed-loop
   python scripts/run_raise_highway_4h.py
   python scripts/run_raise_highway_4h.py --llm groq
+
+  # After a finished run: plots/ + plots/viz/*.gif are written automatically.
+  # Re-generate offline:
+  python scripts/visualize_highway_raise.py --run-dir results/highway_4h_...
 
   # optional later: warm bootstrap
   python scripts/bootstrap_surrogate.py --domain highway --llm groq
@@ -65,10 +69,10 @@ PROFILE = {
     # Warm disabled by default: labels are collected inside closed-loop.
     "warm_root": "",
     "warm_bootstrap_n": 16,
-    "warm_k2": 15_000,
+    "warm_k2": 12_000,
     "population": 6,
     "generations": 4,
-    "k2": 15_000,
+    "k2": 12_000,
     "k2_unit": "env_steps",
     "min_labels_gate": 16,
     "al_max": 2,
@@ -82,6 +86,13 @@ PROFILE = {
     "stage3_k3": 80_000,
     "stage3_eval": 30,
     "stage3_rounds": 1,
+    # Carry Score1-best into next gen so best-so-far cannot vanish when
+    # every slot is overwritten by children (Alg.1 default is off).
+    "elitism": True,
+    # After Stage-II labels, parent order = Pareto (auto thresholds + NSGA-II).
+    # Score1 only for unlabeled genomes.
+    "evolve_rank": "pareto",
+    "evolve_rank_score1_weight": 0.4,
 }
 
 
@@ -223,6 +234,9 @@ def _print_profile(args, *, warm_n=None) -> None:
         "stage3_rounds",
         "warm_bootstrap_n",
         "warm_k2",
+        "elitism",
+        "evolve_rank",
+        "evolve_rank_score1_weight",
     ):
         print(f"  {key}: {PROFILE[key]}")
     print(f"  llm: {args.llm}")
@@ -405,6 +419,17 @@ def main() -> int:
         "--resume",
         "--allow-seed-llm",
     ]
+    if bool(PROFILE.get("elitism")):
+        cmd.append("--elitism")
+    er = str(PROFILE.get("evolve_rank") or "").strip()
+    if er:
+        cmd.extend(["--closed-loop-evolve-rank", er])
+        cmd.extend(
+            [
+                "--closed-loop-evolve-rank-score1-weight",
+                str(PROFILE.get("evolve_rank_score1_weight", 0.4)),
+            ]
+        )
     if args.llm_model:
         cmd.extend(["--llm-model", str(args.llm_model)])
     if args.verbose:
@@ -422,6 +447,36 @@ def main() -> int:
         print("--- closed_loop/REPORT.txt ---")
         with open(report, encoding="utf-8") as fh:
             print(fh.read())
+    if code == 0:
+        plots_dir = os.path.join(out, "plots")
+        already = os.path.isdir(plots_dir) and any(
+            f.endswith((".png", ".gif"))
+            for _, _, files in os.walk(plots_dir)
+            for f in files
+        )
+        # Pipeline writes plots/viz at end; only fill gaps (e.g. older resumes).
+        if already:
+            print()
+            print(f"--- plots already present: {plots_dir} ---")
+        else:
+            try:
+                from domains.highway.post_run import write_highway_run_artifacts
+
+                print()
+                print("--- plots + animation ---")
+                art = write_highway_run_artifacts(
+                    out, episodes=2, seed=int(PROFILE["seed"])
+                )
+                for p in art.get("plots") or []:
+                    print(f"  plot: {p}")
+                viz = art.get("viz") or {}
+                if viz.get("ok"):
+                    for p in viz.get("written") or []:
+                        print(f"  viz:  {p}")
+                elif viz:
+                    print(f"  viz skipped: {viz.get('reason')}")
+            except Exception as exc:  # noqa: BLE001
+                print(f"post-run artifacts failed (non-fatal): {exc}", file=sys.stderr)
     if code != 0:
         print(f"Run exited {code}. Resume with: {resume_cmd}", file=sys.stderr)
     return code

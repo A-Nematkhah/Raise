@@ -153,31 +153,35 @@ def _labels_from_metrics(
     mean_speed = float(md.get("mean_speed", itr))
     mean_progress = float(md.get("mean_progress", pl))
     soft_success = float(md.get("soft_success", 0.0))
-    # CrowdNav log scalar stays SR−CR−0.5·TR; highway also stores selection_scalar.
+    # CrowdNav log scalar stays SR−CR−0.5·TR; highway stores fitness (+ alias).
     classic = float(navigation_scalar(sr, cr, tr))
     if (
         str(md.get("domain", "")).lower() == "highway"
         or "soft_success" in md
         or "mean_speed" in md
+        or md.get("fitness") is not None
         or md.get("selection_scalar") is not None
     ):
-        from domains.highway.metrics import highway_navigation_scalar
+        from domains.highway.metrics import highway_fitness
 
-        selection = float(
-            md.get("selection_scalar")
-            if md.get("selection_scalar") is not None
-            else highway_navigation_scalar(
-                {
-                    "SR": sr,
-                    "CR": cr,
-                    "TR": tr,
-                    "PL": pl,
-                    "mean_speed": mean_speed,
-                    "mean_progress": mean_progress,
-                    "soft_success": soft_success,
-                }
+        if md.get("fitness") is not None:
+            selection = float(md["fitness"])
+        elif md.get("selection_scalar") is not None:
+            selection = float(md["selection_scalar"])
+        else:
+            selection = float(
+                highway_fitness(
+                    {
+                        "SR": sr,
+                        "CR": cr,
+                        "TR": tr,
+                        "PL": pl,
+                        "mean_speed": mean_speed,
+                        "mean_progress": mean_progress,
+                        "soft_success": soft_success,
+                    }
+                )
             )
-        )
     else:
         selection = classic
     return {
@@ -193,6 +197,7 @@ def _labels_from_metrics(
         "mean_speed": mean_speed,
         "mean_progress": mean_progress,
         "soft_success": soft_success,
+        "fitness": selection,
         "selection_scalar": selection,
         "scalar": classic,
         "env_steps": int(env_steps),
@@ -281,16 +286,26 @@ def label_and_append_candidate(
     # Keep Stage II metrics on the live candidate so R2 / proxy_consistency
     # / best_stage2 see SR/CR/TR (closed-loop has no separate Stage2Runner).
     md = dict(candidate.metadata or {})
-    # Highway trainer already wrote rich last_metrics + selection_scalar; keep them.
-    if md.get("selection_scalar") is None or not isinstance(md.get("last_metrics"), dict):
+    # Highway trainer already wrote rich last_metrics + fitness; keep them.
+    if (
+        md.get("fitness") is None and md.get("selection_scalar") is None
+    ) or not isinstance(md.get("last_metrics"), dict):
         if hasattr(metrics, "_highway_extras"):
             from domains.highway.adapter import metrics_to_highway_dict
 
             rich = metrics_to_highway_dict(metrics)
             md["last_metrics"] = rich
-            md["selection_scalar"] = float(rich["selection_scalar"])
+            fit = float(rich.get("fitness", rich.get("selection_scalar", 0.0)))
+            md["fitness"] = fit
+            md["selection_scalar"] = fit
         else:
             md["last_metrics"] = metrics.as_dict()
+    else:
+        # Ensure alias keys stay in sync on already-labeled highway candidates.
+        fit = md.get("fitness", md.get("selection_scalar"))
+        if fit is not None:
+            md["fitness"] = float(fit)
+            md["selection_scalar"] = float(fit)
     md["last_stage2_ok"] = bool(ok)
     md["last_stage2_example_id"] = eid
     candidate.metadata = md

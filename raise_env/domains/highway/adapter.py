@@ -116,6 +116,9 @@ def _eval_metrics(
     *,
     n_episodes: int,
     seed: int = 0,
+    seed_offset: int = 10_003,
+    soft_speed_mps: float = 20.0,
+    soft_progress_m: float = 400.0,
 ) -> ProxyMetrics:
     """
     Evaluate a highway policy.
@@ -145,15 +148,16 @@ def _eval_metrics(
     high_speed_steps = 0
     outcomes: list[str] = []
 
-    # Soft-success thresholds: survive AND move like a real driver.
-    min_speed_for_soft = 15.0  # m/s
-    min_progress_for_soft = 400.0  # m over a typical 40s episode
+    # Soft-success: survive AND traffic-speed cruise (~≥20 m/s) + progress.
+    min_speed_for_soft = float(soft_speed_mps)
+    min_progress_for_soft = float(soft_progress_m)
     n_eps = max(1, int(n_episodes))
     base = int(seed)
+    offset = int(seed_offset)
 
     for ep in range(n_eps):
         # Offset well above train seeds so eval scenarios differ from train.
-        obs, _info = env.reset(seed=base + 10_003 + ep * 97)
+        obs, _info = env.reset(seed=base + offset + ep * 97)
         done = False
         ep_t = 0.0
         ep_dist = 0.0
@@ -267,8 +271,8 @@ def _nearest_gap_from_obs(obs: Any) -> Optional[float]:
 
 
 def metrics_to_highway_dict(metrics: ProxyMetrics) -> Dict[str, float]:
-    """ProxyMetrics.as_dict() + continuous highway fields + selection_scalar."""
-    from domains.highway.metrics import attach_selection_scalar
+    """ProxyMetrics.as_dict() + continuous highway fields + official fitness."""
+    from domains.highway.metrics import attach_fitness
 
     payload = metrics.as_dict()
     extras = getattr(metrics, "_highway_extras", None) or {}
@@ -276,7 +280,7 @@ def metrics_to_highway_dict(metrics: ProxyMetrics) -> Dict[str, float]:
     # Alias ITR as mean_speed for readability in logs / feedback.
     payload["mean_speed"] = float(payload.get("mean_speed", payload.get("ITR", 0.0)))
     payload["mean_progress"] = float(payload.get("mean_progress", payload.get("PL", 0.0)))
-    return attach_selection_scalar(payload)
+    return attach_fitness(payload)
 
 
 def _ppo_progress_callback(total_timesteps: int, desc: str):
@@ -412,18 +416,53 @@ class HighwayPPOTrainer:
         model.save(ckpt)
 
         console.status(
-            f"PPO eval {cid} | episodes={eval_episodes}",
+            f"PPO eval {cid} | episodes={eval_episodes} (+holdout)",
             stage=stage_tag,
         )
         t1 = time.perf_counter()
-        metrics = _eval_metrics(
-            env, model, n_episodes=eval_episodes, seed=seed
+        from domains.highway.env_wrapper import (
+            HOLDOUT_SEED_OFFSET,
+            holdout_env_config,
         )
+
+        # Train-distribution eval (diagnostic); denser holdout drives selection.
+        train_metrics = _eval_metrics(
+            env, model, n_episodes=eval_episodes, seed=seed, seed_offset=10_003
+        )
+        holdout_env = RewardInjectedHighwayEnv(
+            candidate.reward_fn,
+            seed=seed + 7,
+            config=holdout_env_config(),
+        )
+        try:
+            holdout_metrics = _eval_metrics(
+                holdout_env,
+                model,
+                n_episodes=eval_episodes,
+                seed=seed,
+                seed_offset=HOLDOUT_SEED_OFFSET,
+            )
+        finally:
+            holdout_env.close()
         eval_wall = time.perf_counter() - t1
         env.close()
 
-        metrics_dict = metrics_to_highway_dict(metrics)
-        from domains.highway.metrics import format_highway_metrics_line
+        train_dict = metrics_to_highway_dict(train_metrics)
+        holdout_dict = metrics_to_highway_dict(holdout_metrics)
+        # Primary = holdout (selection); nest train-dist for logs / debugging.
+        metrics_dict = dict(holdout_dict)
+        metrics_dict["eval_profile"] = "holdout"
+        metrics_dict["train_dist"] = {
+            k: v for k, v in train_dict.items() if k not in ("holdout", "train_dist")
+        }
+        metrics_dict["holdout"] = {
+            k: v
+            for k, v in holdout_dict.items()
+            if k not in ("holdout", "train_dist")
+        }
+        from domains.highway.metrics import attach_fitness, format_highway_metrics_line
+
+        metrics_dict = attach_fitness(metrics_dict)
 
         console.status(
             f"PPO metrics {cid} | {format_highway_metrics_line(metrics_dict)} | "
@@ -433,7 +472,20 @@ class HighwayPPOTrainer:
 
         md = dict(candidate.metadata or {})
         md["last_metrics"] = metrics_dict
-        md["selection_scalar"] = float(metrics_dict["selection_scalar"])
+        fit = float(metrics_dict["fitness"])
+        md["fitness"] = fit
+        md["selection_scalar"] = fit  # alias
+        # Invalidate stale Pareto stamps from a prior epoch ranking pass.
+        for key in (
+            "pareto_rank",
+            "pareto_n",
+            "pareto_score",
+            "pareto_feasible",
+            "pareto_v_floor",
+            "pareto_cr_ceiling",
+            "pareto_tr_ceiling",
+        ):
+            md.pop(key, None)
         md["checkpoint_path"] = ckpt
         md["train_wall_seconds"] = float(train_wall)
         md["eval_wall_seconds"] = float(eval_wall)
@@ -441,10 +493,10 @@ class HighwayPPOTrainer:
 
         if self.stage in ("stage3", "3", "iii"):
             return TrainEvalBundle(
-                metrics=metrics,
+                metrics=holdout_metrics,
                 checkpoint_path=ckpt,
             )
-        return metrics
+        return holdout_metrics
 
 
 def make_stage2_trainer(*, use_stub: bool = False) -> HighwayStage2Trainer:

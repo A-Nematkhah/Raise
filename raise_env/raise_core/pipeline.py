@@ -130,6 +130,10 @@ class RaiseRunConfig:
     closed_loop_enable_refine: bool = False  # legacy → d3_per_epoch=1 when set
     # Phase 4: allow hard gate early when mean val MAE ≤ this (None = labels only).
     closed_loop_max_val_mae_for_gate: Optional[float] = None
+    # Closed-loop next-gen parent order: score1 | scalar | hybrid.
+    # Empty → domain default (highway=hybrid, else score1).
+    closed_loop_evolve_rank: str = ""
+    closed_loop_evolve_rank_score1_weight: float = 0.4
     # Crash-safe Stage III resume from output_dir/stage3/checkpoint.json (+ mid-PPO).
     stage3_resume: bool = True
     stage3_save_interval_updates: int = 50
@@ -274,6 +278,8 @@ class RaisePipeline:
         from raise_core.raise_loop import ClosedLoopConfig, ClosedLoopRunner
 
         console.banner("Closed-loop multi-fidelity (innovation)")
+        from raise_core.raise_loop.evolve_rank import parse_evolve_rank
+
         cl_cfg = ClosedLoopConfig(
             population_size=int(cfg.stage1_population),
             generations=int(cfg.stage1_generations),
@@ -321,6 +327,13 @@ class RaisePipeline:
                 float(cfg.closed_loop_max_val_mae_for_gate)
                 if getattr(cfg, "closed_loop_max_val_mae_for_gate", None) is not None
                 else None
+            ),
+            evolve_rank=parse_evolve_rank(
+                getattr(cfg, "closed_loop_evolve_rank", None),
+                domain=str(pack.name),
+            ),
+            evolve_rank_score1_weight=float(
+                getattr(cfg, "closed_loop_evolve_rank_score1_weight", 0.4) or 0.4
             ),
         )
         if cfg.fast:
@@ -724,7 +737,7 @@ class RaisePipeline:
             )
             console.status(
                 f"Stage II complete - best={best_s2.candidate_id} "
-                f"scalar={candidate_nav_scalar(best_s2):.3f} "
+                f"fitness={candidate_nav_scalar(best_s2):.3f} "
                 f"R2_mode={r2_rank.get('mode')}",
                 stage="pipeline",
             )
@@ -954,7 +967,7 @@ class RaisePipeline:
         )
         console.status(
             f"Stage III complete - best={best_s3.candidate_id} "
-            f"scalar={candidate_nav_scalar(best_s3):.3f} "
+            f"fitness={candidate_nav_scalar(best_s3):.3f} "
             f"R3_mode={r3_rank.get('mode')}",
             stage="pipeline",
         )
@@ -1062,6 +1075,29 @@ class RaisePipeline:
             best_stage3=best_s3,
             closed_loop=bool(cfg.closed_loop),
         )
+
+        if pack.name == "highway" and not bool(getattr(cfg, "fast", False)):
+            try:
+                from domains.highway.post_run import write_highway_run_artifacts
+
+                console.banner("Highway plots + animation")
+                art = write_highway_run_artifacts(
+                    cfg.output_dir,
+                    episodes=2,
+                    seed=int(cfg.seed),
+                )
+                n_plots = len(art.get("plots") or [])
+                viz_ok = bool((art.get("viz") or {}).get("ok"))
+                console.status(
+                    f"plots={n_plots} viz={'ok' if viz_ok else 'skipped'} "
+                    f"→ {os.path.join(cfg.output_dir, 'plots')}",
+                    stage="pipeline",
+                )
+            except Exception as exc:  # noqa: BLE001
+                console.status(
+                    f"post-run plots/viz failed (non-fatal): {exc}",
+                    stage="pipeline",
+                )
 
         return RaiseArtifacts(
             output_dir=cfg.output_dir,

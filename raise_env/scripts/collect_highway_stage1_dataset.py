@@ -1,11 +1,12 @@
 #!/usr/bin/env python
 """Collect a Stage I trajectory dataset for the highway domain pack.
 
-Balanced labels for hybrid Score1:
+Balanced labels for hybrid Score1 (incl. anti-hacking decoys):
 
-- ``safe`` / ``safe_fast`` → success with cruise speed (reward these)
-- ``crawl`` → success but low speed (Score1 must *not* prefer these)
-- ``aggressive`` / ``random`` → collisions
+- ``safe`` / ``safe_fast`` → success with traffic cruise (~≥20 m/s)
+- ``crawl`` → success but very low speed (Score1 must *not* prefer)
+- ``lag`` / ``decoy_lag`` → success but lag behind traffic (~15 m/s decoy)
+- ``aggressive`` / ``random`` / ``decoy_crash`` → collisions (bait for crash-loving rewards)
 - ``swerve`` → collisions / rare off-road; synth timeout fill if needed
 """
 
@@ -44,9 +45,12 @@ def _behavior_action(behavior: str, step: int, action_n: int) -> int:
     if behavior == "crawl":
         # Survive by crawling — for Score1 negative example.
         return _clip_action(_SLOWER, action_n)
+    if behavior in ("lag", "decoy_lag"):
+        # Mild lag behind traffic (~15 m/s after synth) — decoy success.
+        return _clip_action(_IDLE if step % 3 else _SLOWER, action_n)
     if behavior == "idle":
         return _clip_action(_IDLE, action_n)
-    if behavior == "aggressive":
+    if behavior in ("aggressive", "decoy_crash"):
         return _clip_action(_FASTER if step % 2 else _IDLE, action_n)
     if behavior == "swerve":
         return _clip_action(_LEFT if (step // 3) % 2 == 0 else _RIGHT, action_n)
@@ -60,9 +64,11 @@ def _env_overrides(behavior: str) -> dict:
         return {"vehicles_count": 6, "lanes_count": 4, "duration": 40}
     if behavior == "crawl":
         return {"vehicles_count": 4, "lanes_count": 4, "duration": 40}
+    if behavior in ("lag", "decoy_lag"):
+        return {"vehicles_count": 6, "lanes_count": 4, "duration": 40}
     if behavior == "idle":
         return {"vehicles_count": 8, "duration": 40}
-    if behavior == "aggressive":
+    if behavior in ("aggressive", "decoy_crash"):
         return {"vehicles_count": 28, "duration": 30}
     if behavior == "swerve":
         return {"vehicles_count": 10, "duration": 25}
@@ -78,7 +84,7 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=425)
     parser.add_argument(
         "--behaviors",
-        default="safe_fast,safe_fast,crawl,aggressive,random,swerve",
+        default="safe_fast,safe_fast,crawl,lag,aggressive,decoy_crash,random,swerve",
         help="Comma-separated behaviors (repeat safe_fast for more cruise successes)",
     )
     parser.add_argument(
@@ -183,7 +189,7 @@ def main() -> int:
             states_out = list(states)
 
             # highway-env SLOWER often still cruises ~20 m/s; synthesize a true
-            # crawl profile for Score1 negative examples while keeping success.
+            # crawl / lag profile for Score1 negative / decoy examples.
             if label == "success" and behavior == "crawl":
                 beh_out = "crawl"
                 scale_v = 7.0 / max(mean_speed, 1e-3)
@@ -210,8 +216,38 @@ def main() -> int:
                 states_out = new_states
                 mean_speed = float(sum(float(s.speed) for s in states_out) / max(1, len(states_out)))
                 mean_progress = float(sum(float(s.progress) for s in states_out))
+            elif label == "success" and behavior in ("lag", "decoy_lag"):
+                # Target ~15 m/s — looks “alive” but lags traffic (≥20).
+                beh_out = "decoy_lag"
+                target = 15.0
+                scale_v = target / max(mean_speed, 1e-3)
+                scale_v = float(min(max(scale_v, 0.45), 0.85))
+                new_states = []
+                x = float(states[0].ego.x) if states else 0.0
+                for s in states:
+                    spd = max(12.0, min(17.5, float(s.speed) * scale_v))
+                    prog = float(s.progress) * scale_v
+                    x = x + prog
+                    new_states.append(
+                        dc_replace(
+                            s,
+                            progress=prog,
+                            speed=spd,
+                            ego=dc_replace(
+                                s.ego,
+                                x=x,
+                                vx=spd,
+                                speed=spd,
+                            ),
+                        )
+                    )
+                states_out = new_states
+                mean_speed = float(sum(float(s.speed) for s in states_out) / max(1, len(states_out)))
+                mean_progress = float(sum(float(s.progress) for s in states_out))
+            elif label == "collision" and behavior == "decoy_crash":
+                beh_out = "decoy_crash"
             elif label == "success" and (
-                behavior in ("safe", "safe_fast") or mean_speed >= 15.0
+                behavior in ("safe", "safe_fast") or mean_speed >= 20.0
             ):
                 beh_out = "safe_fast"
 
@@ -229,6 +265,13 @@ def main() -> int:
                         "n_steps": int(len(states_out)),
                         "requested_behavior": behavior,
                         "crawl_synthesized": bool(behavior == "crawl" and label == "success"),
+                        "lag_synthesized": bool(
+                            behavior in ("lag", "decoy_lag") and label == "success"
+                        ),
+                        "decoy": bool(
+                            behavior in ("lag", "decoy_lag", "decoy_crash")
+                            or (behavior == "crawl" and label == "success")
+                        ),
                     },
                 )
             )
@@ -284,17 +327,28 @@ def main() -> int:
         1
         for t in trajs
         if t.label == "success"
-        and ("crawl" in str(t.behavior).lower() or float((t.metadata or {}).get("mean_speed") or 99) < 12.0)
+        and (
+            any(tag in str(t.behavior).lower() for tag in ("crawl", "lag", "decoy_lag"))
+            or float((t.metadata or {}).get("mean_speed") or 99) < 18.0
+        )
     )
     fast_n = sum(
         1
         for t in trajs
         if t.label == "success"
-        and float((t.metadata or {}).get("mean_speed") or 0) >= 15.0
+        and float((t.metadata or {}).get("mean_speed") or 0) >= 20.0
+    )
+    decoy_crash_n = sum(
+        1
+        for t in trajs
+        if "decoy_crash" in str(t.behavior).lower() or t.label == "collision"
     )
     print(f"Wrote {len(trajs)} trajectories -> {args.out}")
     print(f"label counts: {dict(counts)}")
-    print(f"success_crawl~={crawl_n} success_fast~={fast_n}")
+    print(
+        f"success_crawl/lag~={crawl_n} success_fast~={fast_n} "
+        f"collision/decoy_crash~={decoy_crash_n}"
+    )
 
     min_n = int(args.min_per_label)
     missing = [

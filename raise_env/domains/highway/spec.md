@@ -52,8 +52,8 @@ Fit targets (highway only; CrowdNav stays SR/CR/TR):
 SR, CR, TR, mean_speed, mean_progress, soft_success
 ```
 
-Gate / AL quality uses `highway_navigation_scalar` on predicted `y_hat`
-(not SR−CR−0.5·TR alone). Labels also store `selection_scalar` for logging.
+Gate / AL quality uses `highway_fitness` on predicted `y_hat`
+(not SR−CR−0.5·TR alone). Labels store `fitness` (alias `selection_scalar`).
 
 Warm bootstrap (optional) and closed-loop refit pick these targets via
 `--domain highway` / `ClosedLoopConfig.domain`.
@@ -71,10 +71,13 @@ crawl structures (not only coef tweaks).
 
 - Hard Surrogate gate: `n_labeled ≥ 16` **or** mean val MAE ≤ `0.35`
   (`--closed-loop-max-val-mae-gate`). Until then gate is soft.
-- Stage III input = gated kept ∪ best Stage II ∪ best selection_scalar;
-  Score1-best is forced only if `soft_success` / scalar look strong.
+- Parent order for next gen (`evolve_rank=pareto`, highway default):
+  auto-calibrated feasibility (IDM/IDLE reference or generation percentiles)
+  + NSGA-II Pareto fronts + crowding distance — **no hand-tuned weights**.
+- Stage III input = gated kept ∪ best Stage II ∪ best fitness/Pareto;
+  Score1-best is forced only if `soft_success` / fitness look strong.
 - Stage II eval default for 4h profile: **E2=20** (K2 stays 15k).
-- Epoch logs include Score1 spread, soft_success μ, scalar μ.
+- Epoch logs include Score1 spread, soft_success μ, fitness μ.
 
 ## Evaluation metrics
 
@@ -85,18 +88,18 @@ Mapped onto RAISE `ProxyMetrics`:
 - TR — off-road (or other early failure) rate when distinguished; else 0
 - NT / PL / ITR / SD — filled with highway proxies (time, distance, 0, min gap)
 
-Primary selection scalar (highway):
+Primary **selection** for the next generation is **Pareto ranking**
+(`domains/highway/pareto_rank.py`, `evolve_rank=pareto`) — not a weighted sum.
+Feasibility thresholds (`v_floor`, `cr_ceiling`, `tr_ceiling`) come from an
+IDM/IDLE reference rollout when available, else from the current generation's
+percentiles. Objectives maximized: SR, −CR, −TR, progress, mean_speed,
+soft_success.
 
-```
-SR - CR - 0.5·TR
-+ 0.35·tanh(progress_m / 800)
-+ 0.25·tanh(mean_speed / 25)
-+ 0.15·soft_success
-- crawl_penalty   # if SR high but mean_speed < 12 m/s
-```
+A legacy scalar `highway_fitness` may still be logged for surrogate / plots;
+it is **not** used for parent ordering under `evolve_rank=pareto`.
 
-`soft_success` = fraction of episodes that survive **and** average ≥15 m/s
-**and** travel ≥400 m. This stops “crawl forever to inflate SR”.
+`soft_success` = fraction of episodes that survive **and** average ≥20 m/s
+**and** travel ≥400 m (eval diagnostic).
 
 Logged continuous fields: `mean_speed`, `mean_progress`, `lane_change_rate`,
 `high_speed_frac`, `speed_p10`/`speed_p90`. Surrogate labels remain SR/CR/TR.

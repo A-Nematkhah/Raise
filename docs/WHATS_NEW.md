@@ -259,4 +259,79 @@ python scripts/run_raise.py --fast --closed-loop --allow-seed-llm `
 
 ---
 
+## Highway anti-hack + fitness رسمی + Pareto ranking — ۲۰۲۶-۰۹-۲۵
+
+دامنهٔ `highway` (CrowdNav همچنان frozen). هدف: جلوگیری از reward hacking
+(کروز ثابت / خزیدن با SR بالا) و یکی‌کردن معیار انتخاب نسل بعد.
+
+### Holdout eval + soft_success@۲۰ + diversity
+
+**قبل:** Stage II/III فقط روی همان توزیع train (`vehicles_count=20`) ارزیابی
+می‌شد؛ `soft_success` با آستانهٔ ۱۵ m/s بود؛ نسل بعد می‌توانست چند کلون با
+متریک یکسان را دوباره breed کند.
+
+**بعد:**
+- بعد از PPO، eval متراکم‌تر holdout (`vehicles_count=32`)؛ انتخاب از
+  `last_metrics.holdout` (train در `train_dist` فقط برای لاگ)
+- `soft_success`: زنده ماندن + سرعت ≥۲۰ m/s + پیشرفت ≥۴۰۰ m
+- قبل از `_next_generation`، `diversify_ranking` کلون‌های fingerprint متریک
+  یکسان را عقب می‌اندازد (`raise_core/raise_loop/diversity.py`)
+
+### Score1 decoys (lag / decoy_crash)
+
+**قبل:** فقط crawl خیلی کند (~۱۲ m/s) به‌عنوان مثال منفی؛ پاداش‌های
+collision-loving و lag پشت ترافیک (~۱۵ m/s) ضعیف پوشش داده می‌شدند.
+
+**بعد:** collector رفتارهای `lag` / `decoy_crash`؛ Score1 جریمهٔ crawl/lag و
+`collision_decoy_penalty` دارد (`domains/highway/stage1.py`,
+`scripts/collect_highway_stage1_dataset.py`).
+
+### یک fitness رسمی (نام‌گذاری)
+
+**قبل:** Score1، sum reward PPO، و «scalar» سه‌معیار جدا بودند و در لاگ قاطی
+می‌شدند.
+
+**بعد:** هدف رسمی highway: `fitness = highway_fitness(...)` روی holdout؛
+کلید `fitness` (+ alias `selection_scalar`)؛ لاگ‌ها `fitness=` /
+`evolve_best_fitness`. Score1 فقط پروکسی Stage I می‌ماند.
+
+فرمول وزن‌دار (با gate سیگموید روی `v_eff` / `v_floor`) هنوز برای surrogate /
+لاگ موجود است؛ **ترتیب والدین نسل بعد دیگر از آن استفاده نمی‌کند.**
+
+### Pareto ranking به‌جای weighted sum برای evolve
+
+**قبل:** `evolve_rank=scalar` والدین را با جمع وزن‌دار دستی
+(۰٫۳۵/۰٫۲۵/۰٫۱۵، `v_min`، tanh، …) مرتب می‌کرد — همان failure mode پاداش
+دستی.
+
+**بعد:** پیش‌فرض highway `evolve_rank=pareto`:
+1. آستانه‌های feasibility از rollout مرجع IDLE/IDM (یا percentile نسل؛ با کف
+   مطلق `V_FLOOR` تا all-crawler خودش را feasible نکند)
+2. مرتب‌سازی NSGA-II روی متریک خام (SR, −CR, −TR, progress, speed,
+   soft_success) + crowding distance
+3. ماژول: `domains/highway/pareto_rank.py`؛ پروفایل 4h و CLI
+   `--closed-loop-evolve-rank pareto`
+
+ترتیب مرجع دمو: balanced → fast_risky → crawler (بدون وزن دستی).
+
+### اصلاحات audit اتصالات (همان روز)
+
+- `stamp_pareto_ranks` دیگر `fitness` را با `n−rank` overwrite نمی‌کند (فقط
+  `pareto_rank` / `pareto_score`) — وگرنه `--final-rank scalar` خراب می‌شد
+- feasibility با `speed_p10` هم‌تراز anti-hack (نه فقط `mean_speed`)
+- پاک‌کردن stamp کهنه بعد از eval جدید؛ `pick_best` فقط وقتی همه stampedاند
+  از rank استفاده می‌کند
+- resume: بارگذاری `pareto_reference.json` تا آستانه وسط ران جابه‌جا نشود
+
+CrowdNav: `evolve_rank` پیش‌فرض همچنان `score1`؛ رفتار baseline دست‌نخورده.
+
+```powershell
+python scripts/run_raise_highway_4h.py
+# یا صریح:
+python scripts/run_raise.py --domain highway --closed-loop `
+  --closed-loop-evolve-rank pareto ...
+```
+
+---
+
 *ادامهٔ تغییرات بعدی از همین‌جا اضافه شود.*

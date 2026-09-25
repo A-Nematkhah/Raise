@@ -44,6 +44,18 @@ def format_epoch_summary(rec: Dict[str, Any]) -> str:
         score_s = f"{float(score):.4f}" if score is not None else "n/a"
     except (TypeError, ValueError):
         score_s = str(score)
+    evo_best = rec.get("evolve_best_id")
+    evo_mode = rec.get("evolve_rank") or "score1"
+    evo_bit = ""
+    if evo_best and str(evo_best) != str(best):
+        evo_fit = rec.get("evolve_best_fitness", rec.get("evolve_best_nav"))
+        try:
+            fit_s = f"{float(evo_fit):.3f}" if evo_fit is not None else "n/a"
+        except (TypeError, ValueError):
+            fit_s = str(evo_fit)
+        evo_bit = f" | evo[{evo_mode}]={evo_best} fitness={fit_s}"
+    elif evo_mode and evo_mode != "score1":
+        evo_bit = f" | evo={evo_mode}"
     labeled = rec.get("labeled_ids") or []
     label_s = ",".join(str(x) for x in labeled)
     gate = rec.get("gate") or {}
@@ -52,7 +64,7 @@ def format_epoch_summary(rec: Dict[str, Any]) -> str:
     stats = rec.get("stats") or {}
     spread = stats.get("score1_spread")
     soft_m = stats.get("soft_success_mean")
-    sc_m = stats.get("scalar_mean")
+    sc_m = stats.get("fitness_mean", stats.get("scalar_mean"))
     bits = []
     if spread is not None:
         try:
@@ -66,12 +78,12 @@ def format_epoch_summary(rec: Dict[str, Any]) -> str:
             pass
     if sc_m is not None:
         try:
-            bits.append(f"scalarμ={float(sc_m):.3f}")
+            bits.append(f"fitnessμ={float(sc_m):.3f}")
         except (TypeError, ValueError):
             pass
     stats_s = (" | " + " ".join(bits)) if bits else ""
     return (
-        f"epoch {g}: best={best} Score1={score_s}{stats_s} | "
+        f"epoch {g}: best={best} Score1={score_s}{evo_bit}{stats_s} | "
         f"label {len(labeled)}/{rec.get('n_population', '?')} [{label_s}] | "
         f"{_gate_line(gate)} | {_al_line(al)} | "
         f"dataset={rec.get('n_labeled_dataset', '?')} refit={refit} "

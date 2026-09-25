@@ -113,23 +113,29 @@ def quality_from_y_hat(y_hat: Optional[Mapping[str, Any]]) -> float:
     """
     Predicted elite quality for gate / AL.
 
-    Rich highway y_hat → ``highway_navigation_scalar``; else SR−CR−0.5·TR.
+    Rich highway y_hat → ``highway_fitness``; else SR−CR−0.5·TR.
     """
     if not y_hat:
         return float("-inf")
     rich = any(
         k in y_hat
-        for k in ("mean_speed", "mean_progress", "soft_success", "selection_scalar")
+        for k in (
+            "mean_speed",
+            "mean_progress",
+            "soft_success",
+            "fitness",
+            "selection_scalar",
+        )
     )
     if rich:
-        from domains.highway.metrics import highway_navigation_scalar
+        from domains.highway.metrics import highway_fitness
 
         payload = dict(y_hat)
         if "PL" not in payload and "mean_progress" in payload:
             payload["PL"] = payload["mean_progress"]
         if "mean_speed" not in payload and "ITR" in payload:
             payload["mean_speed"] = payload["ITR"]
-        return float(highway_navigation_scalar(payload))
+        return float(highway_fitness(payload))
     from raise_core.selection import navigation_scalar
 
     return float(

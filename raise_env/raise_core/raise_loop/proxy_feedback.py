@@ -31,12 +31,13 @@ def focus_note_from_metrics(metrics: Mapping[str, Any]) -> str:
         if cr >= 0.5:
             return (
                 "high collision — keep safety penalties but do NOT remove progress/"
-                "speed shaping; reward clearance while cruising, not crawling"
+                "speed shaping; reward clearance while matching traffic (~20–30 m/s)"
             )
-        if sr >= 0.5 and speed < 12.0:
+        if sr >= 0.5 and speed < 20.0:
             return (
-                "survives by crawling — increase reward for forward progress and "
-                "moderate high speed; penalize near-zero velocity while on-road"
+                "lags traffic — surrounding vehicles cruise at >=~20 m/s; increase "
+                "reward for matching that band and forward progress; penalize "
+                "ego speed much below ~20 m/s while on-road"
             )
         if sr >= 0.5 and progress < 300.0:
             return (
@@ -45,17 +46,17 @@ def focus_note_from_metrics(metrics: Mapping[str, Any]) -> str:
             )
         if soft < 0.3 and sr >= 0.4:
             return (
-                "soft_success low — survive AND cruise (≥15 m/s) with meaningful "
-                "progress; balance safety with throughput"
+                "soft_success low — survive AND match traffic (~>=20 m/s) with "
+                "meaningful progress; balance safety with throughput"
             )
         if tr >= 0.5:
             return (
                 "high off-road/timeout share — keep on_road shaping; still reward "
-                "forward progress at speed"
+                "forward progress at traffic speed"
             )
         return (
-            "improve safe throughput: higher soft_success (survive+speed+progress) "
-            "without raising CR"
+            "improve safe throughput: higher soft_success (survive+~20-30 m/s+"
+            "progress) without raising CR"
         )
 
     if tr >= 0.5 and tr >= cr:
@@ -119,11 +120,21 @@ def should_attach_proxy_feedback(
     tr = float(metrics.get("TR") or 0.0)
     if sr < 0.10 or tr >= 0.50 or cr >= 0.50:
         return True
-    # Highway: surviving by crawling is also a failure mode worth muting on.
-    speed = float(metrics.get("mean_speed", metrics.get("ITR") or 0.0) or 0.0)
-    soft = float(metrics.get("soft_success") or 0.0)
-    if sr >= 0.5 and (speed < 12.0 or soft < 0.25):
-        return True
+    # Highway (or any metrics with explicit speed): lagging traffic is a fail mode.
+    is_highway = str(metrics.get("domain", "")).lower() == "highway"
+    has_speed = "mean_speed" in metrics or "ITR" in metrics
+    if is_highway or has_speed:
+        speed = float(metrics.get("mean_speed", metrics.get("ITR") or 0.0) or 0.0)
+        soft = (
+            float(metrics["soft_success"])
+            if "soft_success" in metrics and metrics.get("soft_success") is not None
+            else None
+        )
+        floor = 20.0 if is_highway else 12.0
+        if sr >= 0.5 and speed < floor:
+            return True
+        if soft is not None and sr >= 0.5 and soft < 0.25:
+            return True
     if (
         score1 is not None
         and _finite(score1)

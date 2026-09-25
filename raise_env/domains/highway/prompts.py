@@ -7,7 +7,9 @@ from typing import Optional
 D1_SYSTEM_PROMPT = (
     "You are an expert in reinforcement learning and autonomous highway driving. "
     "Your goal is to design reward functions that keep the ego vehicle safe, "
-    "on-road, and making forward progress at a reasonable speed. "
+    "on-road, and matching traffic flow: surrounding vehicles cruise at about "
+    "20 m/s or faster, so ego should typically stay near ~20–30 m/s while "
+    "making forward progress. "
     "Return **only** valid Python code enclosed within a fenced code block. "
     "The code must be fully executable and should not include comments or "
     "explanations outside the block."
@@ -32,9 +34,12 @@ Function Interface (EXACT FIELD STRUCTURE):
 - Output:
   - A single finite float reward for the current frame.
 - Design Principles:
-- Progress / speed: reward forward motion and reasonable high speed (≈15–30 m/s).
+- Progress / speed: reward forward motion and traffic-matching cruise (~20–30 m/s).
+  Nearby traffic already moves at ≥~20 m/s; ego slower than that lags the flow
+  and never closes on surrounding vehicles.
 - Safety: heavily penalize collision and off-road; shape clearance to nearby vehicles.
-- Do NOT reward crawling: surviving at near-zero speed is a failure mode.
+- Do NOT reward lagging behind traffic: “survive by going much slower than ~20 m/s”
+  is a failure mode (not “near-zero crawl” — that is unrealistic here).
 - Interpretability: clear local variables; no extra signature args.
 Episode memory example:
 ```python
@@ -130,7 +135,8 @@ Mutation Task:
 D3_SYSTEM_PROMPT = (
     "You are a senior researcher in autonomous driving and RL. "
     "Rewrite the reward to produce a smooth, dense, numerically stable per-frame "
-    "signal that differentiates safe fast driving from collisions and off-road. "
+    "signal that differentiates safe traffic-speed driving (~20–30 m/s) from "
+    "collisions, off-road, and lagging behind the ≥~20 m/s traffic stream. "
     "IMPORTANT SCHEMA: def compute_reward(state, memory): — memory is a plain dict. "
     "state.ego has .x .y .vx .vy .heading .speed .lane_index .on_road. "
     "state.others is a tuple; iterate with 'for v in state.others:'. "
@@ -143,9 +149,10 @@ D3_SYSTEM_PROMPT = (
 
 D3_USER_PROMPT = """Current score (best so far): {last_score:.4f} (higher is better)
 Core components:
-- Forward progress / speed shaping
+- Forward progress + traffic-matching speed shaping (~20–30 m/s)
 - Collision and off-road penalties
 - Clearance to nearby vehicles
+- Penalty for lagging below traffic speed (~20 m/s)
 - Stability (bounded magnitudes)
 Focus note: {feedback}
 {extra_context_if_any}
@@ -157,30 +164,32 @@ Maintain signature def compute_reward(state, memory): and return a finite float.
 D4_EXTERNAL_KNOWLEDGE = """# External Knowledge — Highway Fast
 ## Task
 - Domain: multi-lane highway driving (highway-fast-v0)
-- Ego must survive the episode without collision/off-road while making forward progress
+- Surrounding vehicles typically cruise at ≥~20 m/s (often ~20–30 m/s)
+- Ego must survive without collision/off-road while matching that flow and making forward progress
 ## Metrics (mapped to RAISE ProxyMetrics)
 - SR: fraction of episodes survived without collision/off-road
 - CR: collision rate; TR: off-road rate
-- Also optimize mean speed + forward progress (do NOT survive by crawling)
-- soft_success: survive AND cruise (~≥15 m/s) AND meaningful progress
-- Primary scalar mixes safety with throughput (progress/speed), with crawl penalty
+- Also optimize mean speed + forward progress (do NOT survive by lagging << traffic speed)
+- soft_success: survive AND traffic-speed cruise (~≥20 m/s) AND meaningful progress
+- Primary scalar mixes safety with throughput (progress/speed), with lag-behind-traffic penalty
 """
 
 D5_SEED_FUNCTION = '''def compute_reward(state, memory):
-    """Highway seed: progress + speed; punish crash/off-road and crawling."""
+    """Highway seed: progress + speed; punish crash/off-road and lagging traffic."""
     collision_penalty = -20.0
     off_road_penalty = -10.0
     speed_coef = 0.08
     progress_coef = 1.0
-    crawl_penalty = 0.15
+    traffic_speed = 20.0
+    lag_penalty = 0.15
     if state.collision:
         return float(collision_penalty)
     if state.off_road:
         return float(off_road_penalty)
     reward = progress_coef * state.progress + speed_coef * state.speed
-    # Discourage surviving by nearly stopping on the road.
-    if (not state.timeout) and state.ego.on_road and state.speed < 8.0:
-        reward = reward - crawl_penalty * (8.0 - state.speed)
+    # Traffic already moves at ~20+ m/s; going slower lags the flow.
+    if (not state.timeout) and state.ego.on_road and state.speed < traffic_speed:
+        reward = reward - lag_penalty * (traffic_speed - state.speed)
     return float(reward)
 '''
 

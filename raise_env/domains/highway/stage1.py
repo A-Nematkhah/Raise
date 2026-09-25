@@ -218,7 +218,8 @@ def _rule_score_at_frame(traj: HighwayTrajectoryRecord, frame: int) -> float:
     speed = float(st.speed)
     progress = float(st.progress)
     speed_term = float(np.clip(speed / 25.0, 0.0, 1.5))
-    crawl = max(0.0, 12.0 - speed) / 12.0
+    # Lag behind traffic (~20 m/s) is the crawl / decoy failure mode.
+    crawl = max(0.0, 18.0 - speed) / 18.0
     # Include ego.x so within-traj ranks are non-constant when progress is flat.
     return float(
         3.0 * progress + 2.0 * speed_term - 1.5 * crawl + 0.05 * float(st.ego.x)
@@ -329,9 +330,10 @@ def _crawl_penalty(
     trajectories: Sequence[HighwayTrajectoryRecord],
 ) -> float:
     """
-    Positive penalty if mean return on crawl successes ≥ mean return on fast ones.
+    Positive penalty if mean return on lag/crawl successes ≥ fast ones.
 
-    Crawl trajs are tagged via behavior containing 'crawl' or mean_speed < 12.
+    Crawl/lag trajs: behavior contains crawl|lag|decoy_lag, or mean_speed < 18.
+    Fast trajs: safe/fast tag or mean_speed ≥ 20 (traffic cruise).
     """
     crawl_rets: List[float] = []
     fast_rets: List[float] = []
@@ -341,14 +343,40 @@ def _crawl_penalty(
         r = float(returns[t.trajectory_id])
         spd = _traj_mean_speed(t)
         beh = str(t.behavior or "").lower()
-        if "crawl" in beh or spd < 12.0:
+        if any(tag in beh for tag in ("crawl", "lag", "decoy_lag")) or spd < 18.0:
             crawl_rets.append(r)
-        elif "safe" in beh or "fast" in beh or spd >= 15.0:
+        elif "safe" in beh or "fast" in beh or spd >= 20.0:
             fast_rets.append(r)
     if not crawl_rets or not fast_rets:
         return 0.0
     gap = float(np.mean(crawl_rets) - np.mean(fast_rets))
-    # Only punish when crawl is preferred or tied.
+    # Only punish when crawl/lag is preferred or tied.
+    return float(max(0.0, gap) / (abs(float(np.mean(fast_rets))) + 1.0))
+
+
+def _collision_decoy_penalty(
+    returns: Dict[str, float],
+    trajectories: Sequence[HighwayTrajectoryRecord],
+) -> float:
+    """
+    Positive penalty if collision / decoy_crash trajs outscore safe successes.
+
+    Catches rewards that ignore crashes or actively prefer collision bait.
+    """
+    crash_rets: List[float] = []
+    fast_rets: List[float] = []
+    for t in trajectories:
+        r = float(returns[t.trajectory_id])
+        beh = str(t.behavior or "").lower()
+        if t.label == "collision" or "decoy_crash" in beh or "decoy_collision" in beh:
+            crash_rets.append(r)
+        elif t.label == "success" and (
+            "safe" in beh or "fast" in beh or _traj_mean_speed(t) >= 20.0
+        ):
+            fast_rets.append(r)
+    if not crash_rets or not fast_rets:
+        return 0.0
+    gap = float(np.mean(crash_rets) - np.mean(fast_rets))
     return float(max(0.0, gap) / (abs(float(np.mean(fast_rets))) + 1.0))
 
 
@@ -361,12 +389,13 @@ def score_highway_dataset(
     """
     Hybrid highway Score1 (higher better, roughly in [-1, 1] before reject).
 
-    Components (weights sum to 1 before crawl penalty)::
+    Components (weights sum to 1 before decoy penalties)::
 
         0.25 · within-traj Spearman(highway_rule, cum_reward)
         0.40 · preference AUC (success ≻ timeout ≻ collision)
         0.35 · throughput alignment on success trajs
-        − 0.50 · crawl_penalty
+        − 0.50 · crawl/lag_penalty
+        − 0.35 · collision_decoy_penalty
     """
     del candidate_id  # reserved for logging / future per-candidate caches
     if not trajectories:
@@ -377,12 +406,14 @@ def score_highway_dataset(
     pref = _preference_auc(returns, trajectories)
     thr = _throughput_alignment(returns, trajectories)
     crawl = _crawl_penalty(returns, trajectories)
+    crash_decoy = _collision_decoy_penalty(returns, trajectories)
 
     raw = (
         0.25 * float(spearman_mean)
         + 0.40 * float(pref)
         + 0.35 * float(thr)
         - 0.50 * float(crawl)
+        - 0.35 * float(crash_decoy)
     )
     # Keep a bit of headroom; clamp for stability in evolution logs.
     score = float(np.clip(raw, -1.5, 1.5))
@@ -401,6 +432,7 @@ def score_highway_dataset(
         "preference_auc": float(pref),
         "throughput": float(thr),
         "crawl_penalty": float(crawl),
+        "collision_decoy_penalty": float(crash_decoy),
     }
     return Score1Result(
         score=score if not rejected else -1.0,

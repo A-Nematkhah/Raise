@@ -2,3 +2,5 @@
 gymnasium>=0.29.1
 highway-env>=1.10.1
 stable-baselines3>=2.3.0
+Pillow>=9.0.0
+matplotlib>=3.5.0

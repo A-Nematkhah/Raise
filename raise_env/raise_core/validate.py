@@ -904,9 +904,28 @@ class Stage3Runner:
             metadata={
                 **(candidate.metadata or {}),
                 "last_metrics": snapshot_metrics,
+                "fitness": float(
+                    (
+                        snapshot_metrics.get("fitness")
+                        if snapshot_metrics.get("fitness") is not None
+                        else snapshot_metrics.get("selection_scalar")
+                    )
+                    if (
+                        snapshot_metrics.get("fitness") is not None
+                        or snapshot_metrics.get("selection_scalar") is not None
+                    )
+                    else bundle.metrics.scalar_score()
+                ),
                 "selection_scalar": float(
-                    snapshot_metrics.get("selection_scalar")
-                    if snapshot_metrics.get("selection_scalar") is not None
+                    (
+                        snapshot_metrics.get("fitness")
+                        if snapshot_metrics.get("fitness") is not None
+                        else snapshot_metrics.get("selection_scalar")
+                    )
+                    if (
+                        snapshot_metrics.get("fitness") is not None
+                        or snapshot_metrics.get("selection_scalar") is not None
+                    )
                     else bundle.metrics.scalar_score()
                 ),
                 "checkpoint_path": bundle.checkpoint_path,

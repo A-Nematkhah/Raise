@@ -17,6 +17,7 @@ from raise_core.raise_loop.report import format_epoch_summary
 def _cand(cid: str, *, score=None, soft=None, scalar=None, code=None):
     md = {}
     if soft is not None or scalar is not None:
+        fit = float(scalar if scalar is not None else 0.0)
         md["last_metrics"] = {
             "SR": 1.0 if (soft or 0) > 0 else 0.5,
             "CR": 0.0,
@@ -25,9 +26,11 @@ def _cand(cid: str, *, score=None, soft=None, scalar=None, code=None):
             "mean_speed": 20.0 if (soft or 0) > 0.2 else 8.0,
             "soft_success": float(soft or 0.0),
             "domain": "highway",
-            "selection_scalar": float(scalar if scalar is not None else 0.0),
+            "fitness": fit,
+            "selection_scalar": fit,
         }
-        md["selection_scalar"] = md["last_metrics"]["selection_scalar"]
+        md["fitness"] = fit
+        md["selection_scalar"] = fit
     return RewardCandidate(
         candidate_id=cid,
         code=code
