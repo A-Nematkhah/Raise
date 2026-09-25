@@ -283,6 +283,64 @@ def metrics_to_highway_dict(metrics: ProxyMetrics) -> Dict[str, float]:
     return attach_fitness(payload)
 
 
+def _highway_n_envs(config: Any) -> int:
+    raw = getattr(config, "highway_n_envs", None)
+    if raw is None:
+        raw = os.environ.get("RAISE_HIGHWAY_N_ENVS", "1")
+    try:
+        return max(1, int(raw))
+    except (TypeError, ValueError):
+        return 1
+
+
+def _highway_eval_mode(config: Any) -> str:
+    mode = str(getattr(config, "highway_eval_mode", None) or "both").strip().lower()
+    if mode not in ("both", "holdout_only"):
+        return "both"
+    return mode
+
+
+def _highway_warm_start_enabled(config: Any) -> bool:
+    if hasattr(config, "highway_warm_start"):
+        return bool(getattr(config, "highway_warm_start"))
+    return os.environ.get("RAISE_HIGHWAY_WARM_START", "1").strip().lower() not in (
+        "0",
+        "false",
+        "no",
+        "off",
+    )
+
+
+def _make_train_vec_env(reward_fn: Any, *, seed: int, n_envs: int, env_config: Optional[Dict] = None):
+    """DummyVecEnv of RewardInjectedHighwayEnv (Windows-safe; same-process)."""
+    from stable_baselines3.common.vec_env import DummyVecEnv
+
+    from domains.highway.env_wrapper import RewardInjectedHighwayEnv
+
+    n = max(1, int(n_envs))
+
+    def _thunk(rank: int):
+        def _init():
+            return RewardInjectedHighwayEnv(
+                reward_fn,
+                seed=int(seed) + int(rank) * 997,
+                config=env_config,
+            )
+
+        return _init
+
+    return DummyVecEnv([_thunk(i) for i in range(n)])
+
+
+def _resolve_warm_start_path(candidate: Any) -> Optional[str]:
+    md = getattr(candidate, "metadata", None) or {}
+    for key in ("warm_start_checkpoint", "parent_checkpoint_path"):
+        path = md.get(key)
+        if path and os.path.isfile(str(path)):
+            return str(path)
+    return None
+
+
 def _ppo_progress_callback(total_timesteps: int, desc: str):
     """SB3 callback that drives ``raise_core.console.progress``."""
     from stable_baselines3.common.callbacks import BaseCallback
@@ -355,6 +413,8 @@ class HighwayPPOTrainer:
         train_steps = int(getattr(config, "train_env_steps", 20_000))
         eval_episodes = int(getattr(config, "eval_episodes", 20))
         seed = int(getattr(config, "seed", 425)) + int(round_index)
+        n_envs = _highway_n_envs(config)
+        eval_mode = _highway_eval_mode(config)
         device_raw = str(getattr(config, "device", "cpu"))
         # MLP policies train better on CPU by default (SB3 guidance).
         prefer_cpu = os.environ.get("RAISE_HIGHWAY_FORCE_CUDA", "").strip() not in (
@@ -373,29 +433,55 @@ class HighwayPPOTrainer:
         os.makedirs(out_dir, exist_ok=True)
 
         stage_tag = "Stage II" if self.stage in ("stage2", "2", "ii") else "Stage III"
+        warm_path = (
+            _resolve_warm_start_path(candidate)
+            if _highway_warm_start_enabled(config)
+            else None
+        )
+        warm_bit = f" warm={os.path.basename(warm_path)}" if warm_path else ""
         console.status(
-            f"PPO train {cid} | steps={train_steps:,} eval={eval_episodes} "
-            f"device={device} round={round_index}",
+            f"PPO train {cid} | steps={train_steps:,} n_envs={n_envs} "
+            f"eval={eval_episodes}({eval_mode}) device={device} "
+            f"round={round_index}{warm_bit}",
             stage=stage_tag,
         )
 
-        env = RewardInjectedHighwayEnv(candidate.reward_fn, seed=seed)
+        train_env = _make_train_vec_env(
+            candidate.reward_fn, seed=seed, n_envs=n_envs
+        )
+        # Per-env rollout length; keep ~256 total steps/env as before when n_envs=1.
+        n_steps = min(256, max(16, train_steps // max(1, n_envs)))
+        batch_size = min(64 * n_envs, max(8, n_steps * n_envs))
         with warnings.catch_warnings():
             warnings.filterwarnings(
                 "ignore",
                 message="You are trying to run PPO on the GPU",
                 category=UserWarning,
             )
+            # Always build a fresh PPO so n_steps/batch_size match this VecEnv.
+            # PPO.load + mutating n_steps leaves a stale RolloutBuffer (IndexError).
             model = PPO(
                 "MlpPolicy",
-                env,
+                train_env,
                 verbose=0,
                 seed=seed,
                 device=device,
-                n_steps=min(256, max(16, train_steps)),
-                batch_size=min(64, max(8, train_steps)),
+                n_steps=n_steps,
+                batch_size=batch_size,
                 learning_rate=3e-4,
             )
+            if warm_path:
+                try:
+                    donor = PPO.load(warm_path, device=device)
+                    model.policy.load_state_dict(donor.policy.state_dict())
+                    del donor
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "Warm-start load failed for %s (%s); training from scratch",
+                        cid,
+                        exc,
+                    )
+                    warm_path = None
 
         t0 = time.perf_counter()
         cb = _ppo_progress_callback(train_steps, desc=f"PPO {cid} ({stage_tag})")
@@ -403,6 +489,7 @@ class HighwayPPOTrainer:
             total_timesteps=max(1, train_steps),
             progress_bar=False,
             callback=cb,
+            reset_num_timesteps=warm_path is None,
         )
         train_wall = time.perf_counter() - t0
         sps = float(train_steps) / max(train_wall, 1e-6)
@@ -414,9 +501,13 @@ class HighwayPPOTrainer:
 
         ckpt = os.path.join(out_dir, "model.zip")
         model.save(ckpt)
+        try:
+            train_env.close()
+        except Exception:  # noqa: BLE001
+            pass
 
         console.status(
-            f"PPO eval {cid} | episodes={eval_episodes} (+holdout)",
+            f"PPO eval {cid} | episodes={eval_episodes} ({eval_mode})",
             stage=stage_tag,
         )
         t1 = time.perf_counter()
@@ -425,10 +516,21 @@ class HighwayPPOTrainer:
             holdout_env_config,
         )
 
-        # Train-distribution eval (diagnostic); denser holdout drives selection.
-        train_metrics = _eval_metrics(
-            env, model, n_episodes=eval_episodes, seed=seed, seed_offset=10_003
-        )
+        train_dict: Dict[str, float] = {}
+        if eval_mode == "both":
+            eval_env = RewardInjectedHighwayEnv(candidate.reward_fn, seed=seed)
+            try:
+                train_metrics = _eval_metrics(
+                    eval_env,
+                    model,
+                    n_episodes=eval_episodes,
+                    seed=seed,
+                    seed_offset=10_003,
+                )
+                train_dict = metrics_to_highway_dict(train_metrics)
+            finally:
+                eval_env.close()
+
         holdout_env = RewardInjectedHighwayEnv(
             candidate.reward_fn,
             seed=seed + 7,
@@ -445,21 +547,21 @@ class HighwayPPOTrainer:
         finally:
             holdout_env.close()
         eval_wall = time.perf_counter() - t1
-        env.close()
 
-        train_dict = metrics_to_highway_dict(train_metrics)
         holdout_dict = metrics_to_highway_dict(holdout_metrics)
-        # Primary = holdout (selection); nest train-dist for logs / debugging.
         metrics_dict = dict(holdout_dict)
         metrics_dict["eval_profile"] = "holdout"
-        metrics_dict["train_dist"] = {
-            k: v for k, v in train_dict.items() if k not in ("holdout", "train_dist")
-        }
+        if train_dict:
+            metrics_dict["train_dist"] = {
+                k: v for k, v in train_dict.items() if k not in ("holdout", "train_dist")
+            }
         metrics_dict["holdout"] = {
             k: v
             for k, v in holdout_dict.items()
             if k not in ("holdout", "train_dist")
         }
+        metrics_dict["n_envs"] = float(n_envs)
+        metrics_dict["warm_start"] = 1.0 if warm_path else 0.0
         from domains.highway.metrics import attach_fitness, format_highway_metrics_line
 
         metrics_dict = attach_fitness(metrics_dict)

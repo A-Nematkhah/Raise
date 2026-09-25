@@ -134,6 +134,11 @@ class RaiseRunConfig:
     # Empty → domain default (highway=hybrid, else score1).
     closed_loop_evolve_rank: str = ""
     closed_loop_evolve_rank_score1_weight: float = 0.4
+    # Highway wall-clock speed (same K2/K3 budget).
+    highway_n_envs: int = 1
+    highway_label_workers: int = 1
+    highway_warm_start: bool = True
+    highway_eval_mode: str = "both"
     # Crash-safe Stage III resume from output_dir/stage3/checkpoint.json (+ mid-PPO).
     stage3_resume: bool = True
     stage3_save_interval_updates: int = 50
@@ -334,6 +339,16 @@ class RaisePipeline:
             ),
             evolve_rank_score1_weight=float(
                 getattr(cfg, "closed_loop_evolve_rank_score1_weight", 0.4) or 0.4
+            ),
+            highway_n_envs=max(
+                1, int(getattr(cfg, "highway_n_envs", None) or 1)
+            ),
+            highway_label_workers=max(
+                1, int(getattr(cfg, "highway_label_workers", None) or 1)
+            ),
+            highway_warm_start=bool(getattr(cfg, "highway_warm_start", True)),
+            highway_eval_mode=str(
+                getattr(cfg, "highway_eval_mode", None) or "both"
             ),
         )
         if cfg.fast:

@@ -93,6 +93,11 @@ PROFILE = {
     # Score1 only for unlabeled genomes.
     "evolve_rank": "pareto",
     "evolve_rank_score1_weight": 0.4,
+    # Wall-clock speed (same K2/K3): DummyVecEnv + parallel Stage II labels.
+    "highway_n_envs": 4,
+    "highway_label_workers": 2,
+    "highway_warm_start": True,
+    "highway_eval_mode": "both",
 }
 
 
@@ -237,6 +242,10 @@ def _print_profile(args, *, warm_n=None) -> None:
         "elitism",
         "evolve_rank",
         "evolve_rank_score1_weight",
+        "highway_n_envs",
+        "highway_label_workers",
+        "highway_warm_start",
+        "highway_eval_mode",
     ):
         print(f"  {key}: {PROFILE[key]}")
     print(f"  llm: {args.llm}")
@@ -430,6 +439,20 @@ def main() -> int:
                 str(PROFILE.get("evolve_rank_score1_weight", 0.4)),
             ]
         )
+    cmd.extend(
+        [
+            "--highway-n-envs",
+            str(int(PROFILE.get("highway_n_envs", 4))),
+            "--highway-label-workers",
+            str(int(PROFILE.get("highway_label_workers", 2))),
+            "--highway-eval-mode",
+            str(PROFILE.get("highway_eval_mode") or "both"),
+        ]
+    )
+    if bool(PROFILE.get("highway_warm_start", True)):
+        cmd.append("--highway-warm-start")
+    else:
+        cmd.append("--no-highway-warm-start")
     if args.llm_model:
         cmd.extend(["--llm-model", str(args.llm_model)])
     if args.verbose:

@@ -66,6 +66,11 @@ class ClosedLoopConfig:
     evolve_rank: str = "score1"
     # Weight on Score1 inside hybrid mode (remainder on nav scalar).
     evolve_rank_score1_weight: float = 0.4
+    # Highway speed knobs (ignored for CrowdNav). Same K2/K3; higher wall throughput.
+    highway_n_envs: int = 1
+    highway_label_workers: int = 1
+    highway_warm_start: bool = True
+    highway_eval_mode: str = "both"  # both | holdout_only
 
     def apply_fast_profile(self) -> None:
         self.use_stub = True
@@ -80,6 +85,8 @@ class ClosedLoopConfig:
         self.llm_provider = "seed"
         self.device = "cpu"
         self.num_processes = 1
+        self.highway_n_envs = 1
+        self.highway_label_workers = 1
         # Keep 2/4/2 ratios scaled down for N=4: 1/2/1
         n = int(self.population_size)
         self.n_crossover = min(1, n)

@@ -19,6 +19,7 @@ from raise_core.surrogate import FEATURE_SCHEMA_VERSION
 from raise_core.surrogate.dataset_io import (
     LABEL_SCHEMA_VERSION,
     append_example,
+    claim_example_id,
     existing_example_ids,
     load_table,
     read_manifest,
@@ -281,8 +282,9 @@ def label_and_append_candidate(
         seed=int(stage2_cfg.seed),
         ok=ok,
     )
+    if not claim_example_id(known, eid):
+        return {"status": "skipped", "reason": "already_labeled", "example_id": eid}
     append_example(out_dir, features=features, labels=labels, example_id=eid)
-    known.add(eid)
     # Keep Stage II metrics on the live candidate so R2 / proxy_consistency
     # / best_stage2 see SR/CR/TR (closed-loop has no separate Stage2Runner).
     md = dict(candidate.metadata or {})

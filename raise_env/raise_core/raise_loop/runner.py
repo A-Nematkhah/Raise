@@ -235,6 +235,9 @@ class ClosedLoopRunner:
             predict_method=str(cfg.predict_method),
             randomization_regime=str(cfg.randomization_regime),
             env_name=env_name,
+            highway_n_envs=max(1, int(getattr(cfg, "highway_n_envs", 1) or 1)),
+            highway_warm_start=bool(getattr(cfg, "highway_warm_start", True)),
+            highway_eval_mode=str(getattr(cfg, "highway_eval_mode", None) or "both"),
         )
 
         known_ids = existing_example_ids(cfg.surrogate_dataset)
@@ -463,41 +466,18 @@ class ClosedLoopRunner:
 
                     pop_sc.append(nav_scalar(m))
 
-            for i, cand in enumerate(to_label):
-                if str(cand.candidate_id) in labeled_this_epoch:
-                    continue
-                if cand.reward_fn is None:
-                    logger.warning(
-                        "skip label %s: no reward_fn (%s)",
-                        cand.candidate_id,
-                        (cand.validation_error or "invalid")[:120],
-                    )
-                    n_fail += 1
-                    labeled_this_epoch.add(str(cand.candidate_id))
-                    continue
-                result = label_and_append_candidate(
-                    cand,
-                    score_fn=self.score_fn,
-                    trainer=self.trainer,
-                    stage2_cfg=stage2_cfg,
-                    out_dir=cfg.surrogate_dataset,
-                    round_index=g * 1000 + i,
-                    known_ids=known_ids,
-                    label_rejected=bool(cfg.label_rejected),
-                    use_stub=bool(cfg.use_stub),
-                )
+            def _process_label_result(
+                cand: RewardCandidate, result: Dict[str, Any]
+            ) -> None:
+                nonlocal n_ok, n_fail, labels_since_refit, n_labeled, n_proxy_fb
                 status = str(result.get("status") or "")
                 if status == "ok" and result.get("example_id"):
                     n_ok += 1
                     labels_since_refit += 1
                     n_labeled = len(known_ids)
                 elif status == "failed" and result.get("example_id"):
-                    # Still appended (ok=False); do not advance refit budget.
                     n_fail += 1
                     n_labeled = len(known_ids)
-                elif status == "skipped":
-                    pass
-
                 metrics = (cand.metadata or {}).get("last_metrics")
                 if isinstance(metrics, dict) and metrics:
                     from raise_core.raise_loop.proxy_feedback import (
@@ -519,9 +499,6 @@ class ClosedLoopRunner:
                         population_scalars=pop_sc,
                     ):
                         n_proxy_fb += 1
-
-                # Each label is a Stage II train/eval; checkpoint per candidate so an
-                # interrupt costs at most one candidate of compute.
                 labeled_this_epoch.add(str(cand.candidate_id))
                 _checkpoint(
                     status="running",
@@ -534,6 +511,74 @@ class ClosedLoopRunner:
                     labeled_ids=sorted(labeled_this_epoch),
                     extra={"gate_report": gate_report, "al_report": al_report},
                 )
+
+            workers = (
+                max(1, int(getattr(cfg, "highway_label_workers", 1) or 1))
+                if domain_key == "highway"
+                else 1
+            )
+            if domain_key == "highway":
+                from raise_core.raise_loop.parallel_label import (
+                    attach_warm_start_checkpoints,
+                    label_candidates_parallel,
+                )
+
+                attach_warm_start_checkpoints(
+                    to_label, list(population) + list(ranked)
+                )
+
+                def _label_one(cand: RewardCandidate, round_index: int) -> Dict[str, Any]:
+                    return label_and_append_candidate(
+                        cand,
+                        score_fn=self.score_fn,
+                        trainer=self.trainer,
+                        stage2_cfg=stage2_cfg,
+                        out_dir=cfg.surrogate_dataset,
+                        round_index=int(round_index),
+                        known_ids=known_ids,
+                        label_rejected=bool(cfg.label_rejected),
+                        use_stub=bool(cfg.use_stub),
+                    )
+
+                def _on_done(
+                    cand: RewardCandidate, result: Dict[str, Any], _i: int
+                ) -> None:
+                    # Counts handled here (parallel_label returns totals unused).
+                    _process_label_result(cand, result)
+
+                label_candidates_parallel(
+                    to_label,
+                    already_done=labeled_this_epoch,
+                    workers=workers,
+                    label_one=_label_one,
+                    on_done=_on_done,
+                    round_index_fn=lambda i: g * 1000 + i,
+                )
+            else:
+                for i, cand in enumerate(to_label):
+                    if str(cand.candidate_id) in labeled_this_epoch:
+                        continue
+                    if cand.reward_fn is None:
+                        logger.warning(
+                            "skip label %s: no reward_fn (%s)",
+                            cand.candidate_id,
+                            (cand.validation_error or "invalid")[:120],
+                        )
+                        n_fail += 1
+                        labeled_this_epoch.add(str(cand.candidate_id))
+                        continue
+                    result = label_and_append_candidate(
+                        cand,
+                        score_fn=self.score_fn,
+                        trainer=self.trainer,
+                        stage2_cfg=stage2_cfg,
+                        out_dir=cfg.surrogate_dataset,
+                        round_index=g * 1000 + i,
+                        known_ids=known_ids,
+                        label_rejected=bool(cfg.label_rejected),
+                        use_stub=bool(cfg.use_stub),
+                    )
+                    _process_label_result(cand, result)
 
             n_labeled = len(existing_example_ids(cfg.surrogate_dataset))
             known_ids = existing_example_ids(cfg.surrogate_dataset)

@@ -334,4 +334,19 @@ python scripts/run_raise.py --domain highway --closed-loop `
 
 ---
 
+## Highway wall-clock speed (same K2/K3) — ۲۰۲۶-۰۹-۲۵
+
+**قبل:** هر کاندید Stage II سریال، یک env، PPO از صفر؛ eval همیشه train+holdout.
+
+**بعد (فقط highway):**
+- `DummyVecEnv` با `--highway-n-envs` (پروفایل 4h: ۴)
+- لیبل موازی با `--highway-label-workers` (پروفایل: ۲) + قفل append دیتاست
+- warm-start: وزن policy والد روی PPO تازه با `n_steps`/`batch` درست
+  (نه `PPO.load` + mutate — آن با VecEnv باعث `IndexError` در buffer می‌شد)
+- `--highway-eval-mode both|holdout_only`
+
+CrowdNav بدون تغییر رفتار. بودجه env-step همان است.
+
+---
+
 *ادامهٔ تغییرات بعدی از همین‌جا اضافه شود.*

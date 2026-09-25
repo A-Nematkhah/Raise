@@ -90,6 +90,10 @@ class Stage2Config:
     # Alg. 1 has no elitism — defaults off; opt in via pipeline ``elitism=True``.
     protect_elite_refine: bool = False
     inject_elite: bool = False
+    # Highway-only speed knobs (passed through from ClosedLoopConfig).
+    highway_n_envs: int = 1
+    highway_warm_start: bool = True
+    highway_eval_mode: str = "both"
 
 
 @dataclass

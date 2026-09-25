@@ -289,6 +289,30 @@ def main() -> int:
         help="Weight on Score1 inside hybrid evolve-rank (default 0.4)",
     )
     parser.add_argument(
+        "--highway-n-envs",
+        type=int,
+        default=1,
+        help="DummyVecEnv count for highway PPO (same K2; default 1)",
+    )
+    parser.add_argument(
+        "--highway-label-workers",
+        type=int,
+        default=1,
+        help="Parallel Stage II label threads for highway (default 1)",
+    )
+    parser.add_argument(
+        "--highway-eval-mode",
+        choices=("both", "holdout_only"),
+        default="both",
+        help="highway Stage II eval: both train+holdout, or holdout_only",
+    )
+    parser.add_argument(
+        "--highway-warm-start",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Warm-start highway PPO from parent checkpoint when available",
+    )
+    parser.add_argument(
         "--closed-loop-refit-every",
         type=int,
         default=8,
@@ -434,6 +458,10 @@ def main() -> int:
         closed_loop_evolve_rank_score1_weight=float(
             args.closed_loop_evolve_rank_score1_weight
         ),
+        highway_n_envs=max(1, int(args.highway_n_envs)),
+        highway_label_workers=max(1, int(args.highway_label_workers)),
+        highway_warm_start=bool(args.highway_warm_start),
+        highway_eval_mode=str(args.highway_eval_mode or "both"),
         closed_loop_k2=int(args.closed_loop_k2),
         closed_loop_refit_every_new_labels=int(args.closed_loop_refit_every),
         closed_loop_min_stage2_per_gen=int(args.closed_loop_min_stage2),

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from typing import Any, Dict, List, Optional, Set
 
 LABEL_SCHEMA_VERSION = "1"
@@ -15,6 +16,7 @@ LABEL_SCHEMA_VERSION = "1"
 _FEATURES_NAME = "features.jsonl"
 _LABELS_NAME = "labels.jsonl"
 _MANIFEST_NAME = "manifest.json"
+_APPEND_LOCK = threading.RLock()
 
 
 def default_dataset_root() -> str:
@@ -72,6 +74,20 @@ def existing_example_ids(root: str) -> Set[str]:
     return ids
 
 
+def claim_example_id(known: Set[str], example_id: str) -> bool:
+    """
+    Atomically claim ``example_id`` in ``known`` (thread-safe).
+
+    Returns True if this caller owns the id (first claim); False if already seen.
+    """
+    eid = str(example_id).strip()
+    with _APPEND_LOCK:
+        if eid in known:
+            return False
+        known.add(eid)
+        return True
+
+
 def append_example(
     root: str,
     *,
@@ -93,8 +109,9 @@ def append_example(
     lab = dict(labels)
     feat["example_id"] = eid
     lab["example_id"] = eid
-    _append_jsonl(_features_path(root), feat)
-    _append_jsonl(_labels_path(root), lab)
+    with _APPEND_LOCK:
+        _append_jsonl(_features_path(root), feat)
+        _append_jsonl(_labels_path(root), lab)
 
 
 def load_table(root: str) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
