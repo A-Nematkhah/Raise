@@ -156,7 +156,18 @@ def _eval_metrics(
     high_speed_steps = 0
     outcomes: list[str] = []
 
-    # Soft-success: survive AND match traffic (~≥V_TARGET) + progress.
+    # Soft-success: survive AND match *nominal traffic cruise* + progress.
+    #
+    # Threshold is intentionally FIXED at V_TARGET (not auto-calibrated like
+    # pareto_rank.v_floor). soft_success is an aspirational task-level bar
+    # ("did the policy match highway-fast nominal traffic speed?") and one of
+    # the six raw Pareto objectives. v_floor is a separate feasibility floor
+    # derived from measured env traffic / population percentiles — mixing the
+    # two would collapse soft_success into "above v_floor" and remove a
+    # distinct objective dimension. Empirical note: on recent 4h runs softμ≈0
+    # while mean_speed≈20–22 m/s (below V_TARGET=25), so this dimension stays
+    # near-constant until policies approach traffic cruise — that is expected
+    # for an aspirational bar, not a bug in calibration.
     from domains.highway.objective_constants import V_TARGET
 
     min_speed_for_soft = float(
@@ -497,7 +508,9 @@ class HighwayPPOTrainer:
             total_timesteps=max(1, train_steps),
             progress_bar=False,
             callback=cb,
-            reset_num_timesteps=True,
+            # reset_num_timesteps omitted on purpose: this PPO is always freshly
+            # constructed (_last_obs is None), so SB3 resets the env regardless
+            # of that flag — passing it would be misleading documentation.
         )
         train_wall = time.perf_counter() - t0
         sps = float(train_steps) / max(train_wall, 1e-6)

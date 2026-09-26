@@ -2,10 +2,10 @@
 Stage I Score1 tests: synthetic dataset (fast) + optional slow collect.
 
 Run fast::
-  pytest crowd_nav/reward_search/tests/test_stage1_real_dataset.py -q -m \"not slow\"
+  pytest domains/crowdnav/tests/test_stage1_real_dataset.py -q -m \"not slow\"
 
 Slow collect (skipped by default unless explicitly selected)::
-  pytest crowd_nav/reward_search/tests/test_stage1_real_dataset.py -m slow
+  pytest domains/crowdnav/tests/test_stage1_real_dataset.py -m slow
 """
 
 from __future__ import annotations
@@ -222,7 +222,7 @@ def test_collect_stage1_dataset_smoke():
     import importlib.util
     from pathlib import Path
 
-    # .../crowd_nav/reward_search/tests/this_file.py → raise_env/
+    # .../domains/crowdnav/tests/this_file.py → raise_env/
     root = Path(__file__).resolve().parents[3]
     script = root / "scripts" / "collect_stage1_dataset.py"
     assert script.is_file(), script

@@ -2,7 +2,7 @@
 """
 One active-learning step.
 
-Design: ``crowd_nav/reward_search/active_learning/PLAN.md`` (locked v1).
+Design: ``raise_core/active_learning/PLAN.md`` (locked v1).
 Requires a fitted surrogate under ``--surrogate``.
 """
 

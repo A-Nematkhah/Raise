@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from raise_core.explore import RewardCandidate
+from raise_core.selection import is_highway_metrics
 
 
 def nav_scalar(metrics: Mapping[str, Any]) -> float:
@@ -29,7 +30,8 @@ def _f(metrics: Mapping[str, Any], *keys: str, default: float = 0.0) -> float:
 
 
 def _is_highway_metrics(metrics: Mapping[str, Any]) -> bool:
-    return str(metrics.get("domain", "")).strip().lower() == "highway"
+    """Private alias — prefer ``raise_core.selection.is_highway_metrics``."""
+    return is_highway_metrics(metrics)
 
 
 def evidence_block(
@@ -57,10 +59,14 @@ def evidence_block(
         except (TypeError, ValueError):
             lc = str(lc)
     n_ep = src.get("n_eval_episodes", metrics.get("n_eval_episodes", "?"))
+    try:
+        n_ep_s = str(int(float(n_ep)))
+    except (TypeError, ValueError):
+        n_ep_s = str(n_ep)
     progress = _f(src, "mean_progress", "PL", default=_f(metrics, "mean_progress", "PL"))
     lines = [
         (
-            f"Holdout eval ({n_ep} episodes): "
+            f"Holdout eval ({n_ep_s} episodes): "
             f"SR={_f(src, 'SR', 'sr'):.2f} CR={_f(src, 'CR', 'cr'):.2f} "
             f"TR={_f(src, 'TR', 'tr'):.2f} mean_speed={_f(src, 'mean_speed', 'ITR'):.1f}m/s "
             f"speed_p10={p10} "
@@ -77,9 +83,15 @@ def evidence_block(
             if feasible is not None
             else "feasible=unknown"
         )
+        front = md.get("pareto_front")
+        front_s = (
+            f"front={int(front)}"
+            if front is not None
+            else "front=n/a"
+        )
         lines.append(
             f"Pareto rank: {int(md['pareto_rank'])}/{n} "
-            f"(front-relative; lower is better; {feas_s})"
+            f"(front-relative; lower is better; {feas_s}; {front_s})"
         )
         if md.get("pareto_v_floor") is not None:
             lines.append(
@@ -103,7 +115,7 @@ def refresh_highway_evidence_after_pareto(
         metrics = md.get("last_metrics")
         if not isinstance(metrics, dict) or not metrics:
             continue
-        if not _is_highway_metrics(metrics):
+        if not is_highway_metrics(metrics):
             continue
         score1 = getattr(c, "score", None)
         if score1 is None and md.get("score1_train") is not None:
@@ -120,7 +132,7 @@ def refresh_highway_evidence_after_pareto(
 
 def focus_note_from_metrics(metrics: Mapping[str, Any]) -> str:
     """CrowdNav-only editing hint (highway uses evidence_block instead)."""
-    if _is_highway_metrics(metrics):
+    if is_highway_metrics(metrics):
         # Highway path never interprets; keep a neutral stub for legacy callers.
         return evidence_block(metrics)
 
@@ -155,7 +167,7 @@ def format_proxy_feedback_block(
     metadata: Optional[Mapping[str, Any]] = None,
 ) -> str:
     """Compact block embedded in mutation weakness / D.3 feedback."""
-    if _is_highway_metrics(metrics):
+    if is_highway_metrics(metrics):
         return evidence_block(metrics, score1=score1, metadata=metadata)
 
     sr = _f(metrics, "SR", "sr")
@@ -172,7 +184,7 @@ def format_proxy_feedback_block(
     )
 
 
-def should_attach_proxy_feedback(
+def should_attach_crowdnav_proxy_feedback(
     metrics: Mapping[str, Any],
     *,
     score1: Optional[float] = None,
@@ -180,12 +192,13 @@ def should_attach_proxy_feedback(
     population_scalars: Optional[Sequence[float]] = None,
 ) -> bool:
     """
-    CrowdNav: attach when proxy looks bad or Score1/proxy mismatch.
+    CrowdNav-only gate for attaching proxy focus notes.
 
-    Highway: always True (callers should prefer ``evidence_block`` attach).
+    Highway never calls this: ``attach_proxy_feedback`` always attaches
+    ``evidence_block`` when enabled for highway metrics.
     """
-    if _is_highway_metrics(metrics):
-        return True
+    if is_highway_metrics(metrics):
+        return True  # unused on highway attach path; keep legacy True
 
     sr = _f(metrics, "SR", "sr")
     cr = _f(metrics, "CR", "cr")
@@ -206,6 +219,10 @@ def should_attach_proxy_feedback(
         if float(score1) >= s1_q75 and sc <= sc_q25:
             return True
     return False
+
+
+# Legacy name — CrowdNav callers / tests.
+should_attach_proxy_feedback = should_attach_crowdnav_proxy_feedback
 
 
 def attach_proxy_feedback(
@@ -235,7 +252,7 @@ def attach_proxy_feedback(
             score1 = None
     score1_f = float(score1) if score1 is not None and _finite(score1) else None
 
-    if _is_highway_metrics(metrics):
+    if is_highway_metrics(metrics):
         if not bool(enabled):
             md.pop("proxy_feedback", None)
             md.pop("proxy_feedback_focus", None)

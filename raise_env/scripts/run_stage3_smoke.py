@@ -3,7 +3,7 @@
 Human-triggered Stage III smoke test against the real PPO trainer.
 
 Intentionally slow. For CI / pytest use StubPolicyTrainer in
-``crowd_nav/reward_search/tests/test_stage3.py``.
+``raise_core/tests/test_validate.py``.
 
 Paper K3 = 1e7; this smoke uses a tiny budget. Scale up on a GPU cluster::
 

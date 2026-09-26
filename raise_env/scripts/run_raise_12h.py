@@ -50,42 +50,15 @@ from _prereqs import (  # noqa: E402
     check_stage1_dataset,
     report_problems,
 )
+from raise_core.presets import CLOSED_LOOP_PROFILES  # noqa: E402
 
 CHECKPOINT_LOCATIONS = (
     os.path.join("closed_loop", "checkpoint.json"),  # current layout
     "checkpoint.json",  # mirrored copy at the run root
 )
 
-# Locked profile for this thesis run (warm bootstrap + closed loop must match).
-# num_processes must be >1 so make_env sets phase='train' (nproc=1 → phase='test').
-PROFILE = {
-    "seed": 425,
-    "llm": "groq",
-    "device": "cuda",
-    "num_processes": 2,
-    "predict_method": "inferred",
-    "regime": "with_random",
-    "human_num": 5,
-    "horizon_steps": 100,
-    "population": 8,
-    "generations": 3,
-    "k2": 8000,
-    "k2_unit": "gradient_steps",
-    "min_labels_gate": 24,
-    "al_max": 2,
-    "min_stage2": 4,
-    "refit_every": 8,
-    "proxy_feedback": True,
-    "proxy_feedback_min_labels": 16,
-    "proxy_d3_per_epoch": 1,
-    "stage3_k3": 350_000,
-    "stage3_eval": 50,
-    "stage3_rounds": 1,
-    "stage3_h_sweep": False,
-    "eval_episodes_stage2": 50,
-    "warm_bootstrap_n": 40,
-    "warm_root": "artifacts/surr_warm",
-}
+# Locked profile — single source of truth in raise_core.presets.
+PROFILE = dict(CLOSED_LOOP_PROFILES["12h"])
 
 
 def _print_locked_config(args, *, warm_n=None) -> None:

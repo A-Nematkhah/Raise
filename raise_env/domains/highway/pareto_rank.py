@@ -344,12 +344,26 @@ def stamp_pareto_ranks(
     """
     Write Pareto rank metadata onto candidates (best rank = 0).
 
+    Also stamps ``pareto_front`` (0 = first non-dominated front among
+    feasible; infeasible get ``pareto_front = None`` / not front-0).
+
     Does **not** overwrite ``fitness`` / ``selection_scalar`` (those stay as
-    ``highway_fitness`` from Stage II). Uses ``pareto_score = n - rank`` as a
-    separate higher-is-better ordinal for diagnostics only.
+    legacy ``highway_fitness`` from Stage II). Uses ``pareto_score = n - rank``
+    as a separate higher-is-better ordinal for diagnostics only.
     """
     by_id = {str(m.candidate_id): (i, m) for i, m in enumerate(ordered_metrics)}
     n = max(1, len(ordered_metrics))
+
+    # Front index among feasible only (NSGA-II).
+    if ref is not None:
+        feasible = [m for m in ordered_metrics if is_feasible(m, ref)]
+    else:
+        feasible = list(ordered_metrics)
+    front_of: Dict[str, int] = {}
+    for fi, front in enumerate(pareto_fronts(feasible)):
+        for m in front:
+            front_of[str(m.candidate_id)] = int(fi)
+
     for c in candidates:
         cid = str(getattr(c, "candidate_id", ""))
         if cid not in by_id:
@@ -359,6 +373,13 @@ def stamp_pareto_ranks(
         md["pareto_rank"] = int(rank_i)
         md["pareto_n"] = int(n)
         md["pareto_score"] = float(n - rank_i)
+        if cid in front_of:
+            md["pareto_front"] = int(front_of[cid])
+            md["pareto_front0"] = bool(front_of[cid] == 0)
+        else:
+            # Infeasible (or unknown): not on any feasible front.
+            md["pareto_front"] = None
+            md["pareto_front0"] = False
         if ref is not None:
             md["pareto_feasible"] = bool(is_feasible(m, ref))
             md["pareto_v_floor"] = float(ref.v_floor)

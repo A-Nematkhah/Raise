@@ -56,7 +56,9 @@ class RewardValidator:
         check_structure(tree, self.config)
         check_interface(tree, self.config)
         compute_fn = compile_compute_reward(code, self.config)
-        smoke_test_compute(compute_fn, self.smoke_states, self.config)
+        smoke_test_compute(
+            compute_fn, self.smoke_states, self.config, source_code=code
+        )
         return SandboxedReward(compute_fn, self.config, source_code=code)
 
     def try_validate(self, code: str) -> Tuple[Optional[SandboxedReward], Optional[str]]:

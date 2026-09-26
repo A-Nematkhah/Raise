@@ -1,7 +1,7 @@
 """
 Fast Stage III tests using StubPolicyTrainer (no real RL).
 
-Run: pytest crowd_nav/reward_search/tests/test_validate.py -q
+Run: pytest raise_core/tests/test_validate.py -q
 """
 
 from __future__ import annotations

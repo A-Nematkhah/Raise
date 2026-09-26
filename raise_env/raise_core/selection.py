@@ -21,6 +21,11 @@ from typing import Any, Mapping, Optional, Sequence
 from raise_core.explore import RewardCandidate
 
 
+def is_highway_metrics(metrics: Mapping[str, Any]) -> bool:
+    """Canonical check: Stage-II metrics dict is from the highway domain pack."""
+    return str(metrics.get("domain", "")).strip().lower() == "highway"
+
+
 def navigation_scalar(sr: float, cr: float, tr: float) -> float:
     """Baseline elite scalar (not the paper's LLM multi-objective rank)."""
     return float(sr) - float(cr) - 0.5 * float(tr)
@@ -36,7 +41,7 @@ def navigation_scalar_from_dict(metrics: Optional[Mapping[str, Any]]) -> float:
                 return float(metrics[key])
             except (TypeError, ValueError):
                 pass
-    if str(metrics.get("domain", "")).strip().lower() == "highway":
+    if is_highway_metrics(metrics):
         from domains.highway.metrics import highway_fitness
 
         return float(highway_fitness(metrics))

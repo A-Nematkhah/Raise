@@ -227,3 +227,252 @@ def parse_seeds_arg(
     if seeds is None or len(list(seeds)) == 0:
         return list(default)
     return [int(s) for s in seeds]
+
+
+# ---------------------------------------------------------------------------
+# Closed-loop CLI profiles (single source of truth for run_raise_* wrappers)
+# ---------------------------------------------------------------------------
+
+# Exact field bags previously embedded in scripts/run_raise_*.py — do not
+# silently change values when editing; wrappers / --profile must stay byte-
+# compatible with historical runs.
+
+CLOSED_LOOP_PROFILES: Dict[str, Dict[str, Any]] = {
+    "1h": {
+        "closed_loop": True,
+        "llm": "groq",
+        "device": "cuda",
+        "num_processes": 1,
+        "easy": True,
+        "predict_method": "none",
+        "human_num": 5,
+        "population": 4,
+        "generations": 3,
+        "k2": 2000,
+        "k2_unit": "gradient_steps",
+        "min_labels_gate": 4,
+        "al_max": 2,
+        "min_stage2": 2,
+        "refit_every": 2,
+        "seed": 425,
+        "regime": "without_random",
+        "stage3_stub": True,
+        "no_h_sweep": True,
+        "stage3_rounds": 1,
+        "final_rank": "llm",
+        "output_dir_prefix": "results/raise_1h_",
+    },
+    "12h": {
+        "seed": 425,
+        "llm": "groq",
+        "device": "cuda",
+        "num_processes": 2,
+        "predict_method": "inferred",
+        "regime": "with_random",
+        "human_num": 5,
+        "horizon_steps": 100,
+        "population": 8,
+        "generations": 3,
+        "k2": 8000,
+        "k2_unit": "gradient_steps",
+        "min_labels_gate": 24,
+        "al_max": 2,
+        "min_stage2": 4,
+        "refit_every": 8,
+        "proxy_feedback": True,
+        "proxy_feedback_min_labels": 16,
+        "proxy_d3_per_epoch": 1,
+        "stage3_k3": 350_000,
+        "stage3_eval": 50,
+        "stage3_rounds": 1,
+        "stage3_h_sweep": False,
+        "eval_episodes_stage2": 50,
+        "warm_bootstrap_n": 40,
+        "warm_root": "artifacts/surr_warm",
+        "closed_loop": True,
+        "output_dir_prefix": "results/raise_12h_",
+    },
+    "18h": {
+        "seed": 425,
+        "llm": "groq",
+        "device": "cuda",
+        "num_processes": 2,
+        "predict_method": "inferred",
+        "regime": "with_random",
+        "human_num": 5,
+        "population": 8,
+        "generations": 7,
+        "k2": 3000,
+        "k2_unit": "gradient_steps",
+        "min_labels_gate": 24,
+        "al_max": 2,
+        "min_stage2": 4,
+        "refit_every": 8,
+        "stage3_k3": 500_000,
+        "stage3_eval": 50,
+        "stage3_rounds": 1,
+        "closed_loop": True,
+        "output_dir_prefix": "results/closed_loop_18h_",
+    },
+    "highway_4h": {
+        "domain": "highway",
+        "seed": 425,
+        "llm": "seed",
+        "device": "cuda",
+        "stage1_dataset": "domains/highway/data/stage1_dataset",
+        "warm_root": "",
+        "warm_bootstrap_n": 16,
+        "warm_k2": 12_000,
+        "population": 6,
+        "generations": 4,
+        "k2": 12_000,
+        "k2_unit": "env_steps",
+        "min_labels_gate": 16,
+        "al_max": 2,
+        "min_stage2": 3,
+        "refit_every": 6,
+        "proxy_feedback": True,
+        "proxy_feedback_min_labels": 12,
+        "proxy_d3_per_epoch": 1,
+        "stage2_eval": 20,
+        "max_val_mae_gate": 0.35,
+        "stage3_k3": 80_000,
+        "stage3_eval": 30,
+        "stage3_rounds": 1,
+        "elitism": True,
+        "evolve_rank": "pareto",
+        "evolve_rank_score1_weight": 0.4,
+        "highway_n_envs": 1,
+        "highway_label_workers": 1,
+        "highway_warm_start": True,
+        "highway_eval_mode": "holdout_only",
+        "closed_loop": True,
+        "output_dir_prefix": "results/highway_4h_",
+    },
+    "paper_scale": {
+        # Multi-seed Tables 3–6 — see PaperScaleSpec / load_paper_scale_yaml.
+        # Not expanded to flat CLI flags; wrappers redirect to paper_scale runner.
+        "redirect": "scripts/run_raise_paper_scale.py",
+    },
+}
+
+
+def get_closed_loop_profile(name: str) -> Dict[str, Any]:
+    key = str(name or "").strip().lower()
+    if key not in CLOSED_LOOP_PROFILES:
+        raise KeyError(
+            f"Unknown profile {name!r}; choose from "
+            f"{sorted(CLOSED_LOOP_PROFILES)}"
+        )
+    return dict(CLOSED_LOOP_PROFILES[key])
+
+
+def profile_to_run_raise_argv(name: str) -> List[str]:
+    """
+    Convert a CLOSED_LOOP_PROFILES entry into ``run_raise.py`` CLI flags.
+
+    Caller should prepend these, then append user overrides so CLI wins.
+    """
+    p = get_closed_loop_profile(name)
+    if p.get("redirect"):
+        raise ValueError(
+            f"Profile {name!r} redirects to {p['redirect']} — do not expand to argv"
+        )
+    argv: List[str] = []
+
+    def _flag(flag: str, val: Any) -> None:
+        if val is None:
+            return
+        if isinstance(val, bool):
+            if val:
+                argv.append(flag)
+            return
+        argv.extend([flag, str(val)])
+
+    if p.get("closed_loop"):
+        argv.append("--closed-loop")
+    if p.get("domain"):
+        _flag("--domain", p["domain"])
+    if p.get("seed") is not None:
+        _flag("--seed", p["seed"])
+    if p.get("llm"):
+        _flag("--llm", p["llm"])
+    if p.get("device"):
+        _flag("--device", p["device"])
+    if p.get("num_processes") is not None:
+        _flag("--num-processes", p["num_processes"])
+    if p.get("easy"):
+        argv.append("--easy")
+    if p.get("predict_method"):
+        _flag("--predict-method", p["predict_method"])
+    if p.get("human_num") is not None:
+        _flag("--human-num", p["human_num"])
+    if p.get("population") is not None:
+        _flag("--stage1-population", p["population"])
+    if p.get("generations") is not None:
+        _flag("--stage1-generations", p["generations"])
+    if p.get("k2") is not None:
+        _flag("--closed-loop-k2", p["k2"])
+    if p.get("k2_unit"):
+        _flag("--k2-unit", p["k2_unit"])
+    if p.get("min_labels_gate") is not None:
+        _flag("--closed-loop-min-labels-gate", p["min_labels_gate"])
+    if p.get("al_max") is not None:
+        _flag("--closed-loop-al-max", p["al_max"])
+    if p.get("min_stage2") is not None:
+        _flag("--closed-loop-min-stage2", p["min_stage2"])
+    if p.get("refit_every") is not None:
+        _flag("--closed-loop-refit-every", p["refit_every"])
+    if p.get("regime"):
+        _flag("--regime", p["regime"])
+    if p.get("stage3_stub"):
+        argv.append("--stage3-stub")
+    if p.get("no_h_sweep") or p.get("stage3_h_sweep") is False:
+        argv.append("--no-h-sweep")
+    if p.get("stage3_rounds") is not None:
+        _flag("--stage3-rounds", p["stage3_rounds"])
+    if p.get("stage3_k3") is not None:
+        _flag("--stage3-train-steps", p["stage3_k3"])
+    if p.get("stage3_eval") is not None:
+        _flag("--stage3-eval-episodes", p["stage3_eval"])
+    if p.get("eval_episodes_stage2") is not None or p.get("stage2_eval") is not None:
+        _flag(
+            "--stage2-eval-episodes",
+            p.get("eval_episodes_stage2", p.get("stage2_eval")),
+        )
+    if p.get("final_rank"):
+        _flag("--final-rank", p["final_rank"])
+    if p.get("proxy_feedback"):
+        argv.append("--closed-loop-proxy-feedback")
+    if p.get("proxy_feedback_min_labels") is not None:
+        _flag(
+            "--closed-loop-proxy-feedback-min-labels",
+            p["proxy_feedback_min_labels"],
+        )
+    if p.get("proxy_d3_per_epoch") is not None:
+        _flag("--closed-loop-proxy-d3", p["proxy_d3_per_epoch"])
+    if p.get("max_val_mae_gate") is not None:
+        _flag("--closed-loop-max-val-mae-gate", p["max_val_mae_gate"])
+    if p.get("elitism"):
+        argv.append("--elitism")
+    if p.get("evolve_rank"):
+        _flag("--closed-loop-evolve-rank", p["evolve_rank"])
+    if p.get("evolve_rank_score1_weight") is not None:
+        _flag(
+            "--closed-loop-evolve-rank-score1-weight",
+            p["evolve_rank_score1_weight"],
+        )
+    if p.get("stage1_dataset"):
+        _flag("--stage1-dataset", p["stage1_dataset"])
+    if p.get("highway_n_envs") is not None:
+        _flag("--highway-n-envs", p["highway_n_envs"])
+    if p.get("highway_label_workers") is not None:
+        _flag("--highway-label-workers", p["highway_label_workers"])
+    if "highway_warm_start" in p:
+        if p["highway_warm_start"]:
+            argv.append("--highway-warm-start")
+        else:
+            argv.append("--no-highway-warm-start")
+    if p.get("highway_eval_mode"):
+        _flag("--highway-eval-mode", p["highway_eval_mode"])
+    return argv

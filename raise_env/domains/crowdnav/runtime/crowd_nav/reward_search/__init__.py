@@ -1,3 +1,5 @@
+# LEGACY / FROZEN — see README_LEGACY.md in this directory.
+# Do not edit. Current implementation: raise_env/raise_core/__init__.py (+ domains.crowdnav re-exports)
 """Backward-compatible re-exports for frozen CrowdNav / Score1 import paths.
 
 Canonical RAISE core: ``raise_core``.

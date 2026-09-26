@@ -3,7 +3,7 @@
 Human-triggered Stage II smoke test against the real A2C trainer.
 
 This is intentionally slow (real env + policy). For CI / pytest use the stub
-trainer in ``crowd_nav/reward_search/tests/test_stage2.py`` instead.
+trainer in ``raise_core/tests/test_refine.py`` instead.
 
 Example (from ``raise_env/`` with the project venv active)::
 

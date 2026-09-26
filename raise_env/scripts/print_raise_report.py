@@ -3,6 +3,9 @@
 
 Usage (from raise_env/):
   python scripts/print_raise_report.py results/raise_12h_YYYYMMDD_HHMMSS
+
+Highway reports include Pareto front0 ids when epochs recorded ``pareto``
+(see raise_env/docs/SELECTION.md for deliberate final pick).
 """
 
 from __future__ import annotations

@@ -93,6 +93,15 @@ def format_epoch_summary(rec: Dict[str, Any]) -> str:
             bits.append(f"cruise∅={float(cruise_f):.2f}")
         except (TypeError, ValueError):
             pass
+    pareto = rec.get("pareto") or {}
+    if pareto:
+        f0 = pareto.get("front0_ids") or []
+        bits.append(
+            f"pareto_front0={len(f0)}/{pareto.get('n_population', '?')} "
+            f"feas={pareto.get('n_feasible', '?')}"
+        )
+        if f0:
+            bits.append("front0=[" + ",".join(str(x) for x in f0[:4]) + ("…" if len(f0) > 4 else "") + "]")
     stats_s = (" | " + " ".join(bits)) if bits else ""
     return (
         f"epoch {g}: best={best} Score1={score_s}{evo_bit}{stats_s} | "
@@ -137,6 +146,21 @@ def build_closed_loop_report(
             f"summary: soft_gate_epochs={soft} hard_gate_epochs={hard} "
             f"al_epochs={al_on} refits={refits}"
         )
+        # Highway: surface last Pareto front for deliberate final pick.
+        last_pareto = last.get("pareto") or {}
+        if last_pareto:
+            f0 = last_pareto.get("front0_ids") or []
+            lines.append(
+                f"pareto (last epoch): feasible={last_pareto.get('n_feasible')}/"
+                f"{last_pareto.get('n_population')} front0_n={last_pareto.get('front0_n')} "
+                f"front0_ids={f0}"
+            )
+            lines.append(
+                "final pick: do NOT use --best-ever on highway; "
+                "run `python scripts/eval_raise_checkpoint.py --run-dir <this> "
+                "--pareto-front` then `--pareto-front --candidate-id <id>` "
+                "(see raise_env/docs/SELECTION.md)."
+            )
     if manifest:
         lines.append("-" * 60)
         lines.append(f"mode: {manifest.get('mode', 'n/a')}")
@@ -179,6 +203,8 @@ def write_closed_loop_report(
                     "n_al_stage2": (r.get("al") or {}).get("n_al_stage2"),
                     "n_labeled_dataset": r.get("n_labeled_dataset"),
                     "refit": r.get("refit"),
+                    "pareto_front0_ids": (r.get("pareto") or {}).get("front0_ids"),
+                    "pareto_n_feasible": (r.get("pareto") or {}).get("n_feasible"),
                 }
                 for r in rows
             ],

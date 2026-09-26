@@ -2,8 +2,11 @@
 """
 Eval-only re-evaluation of an RAISE Stage III checkpoint (no training).
 
-Use this to lock in best-ever policies discovered mid-run (e.g. R0 peak)
-without trusting last-round selection or fixed test_case GIFs.
+CrowdNav: ``--best-ever`` picks by SR−CR−0.5·TR history scalar (unchanged).
+
+Highway: do **not** use ``--best-ever``. Use ``--pareto-front`` to list feasible
+non-dominated candidates, inspect raw trade-offs, then pass ``--candidate-id``
+explicitly (see ``raise_env/docs/SELECTION.md``).
 
 Examples::
 
@@ -15,12 +18,23 @@ Examples::
         --episodes 150 \\
         --device cuda
 
-    # Auto-pick best-ever from stage3 history, then re-eval
+    # Auto-pick best-ever from stage3 history, then re-eval (CrowdNav only)
     python scripts/eval_raise_checkpoint.py \\
         --run-dir results/run_scaled_h5_gst \\
         --best-ever \\
         --episodes 150 \\
         --device cuda
+
+    # Highway: list Pareto front 0 (no silent winner)
+    python scripts/eval_raise_checkpoint.py \\
+        --run-dir results/highway_4h_YYYYMMDD_HHMMSS \\
+        --pareto-front
+
+    # Highway: deliberate pick after inspecting the table
+    python scripts/eval_raise_checkpoint.py \\
+        --run-dir results/highway_4h_YYYYMMDD_HHMMSS \\
+        --pareto-front \\
+        --candidate-id mut_0012
 """
 
 from __future__ import annotations
@@ -57,6 +71,7 @@ def _utc_now() -> str:
 
 
 def _scalar(m: Dict[str, Any]) -> float:
+    """CrowdNav / ``--best-ever`` only — do not use for highway final pick."""
     return float(m.get("SR", 0) - m.get("CR", 0) - 0.5 * m.get("TR", 0))
 
 
@@ -104,13 +119,84 @@ def _best_ever_from_history(run_dir: str) -> Tuple[str, int, Dict[str, Any]]:
     )
 
 
+def _handle_pareto_front(run_dir: str, candidate_id: Optional[str]) -> Optional[str]:
+    """
+    List highway Pareto front 0. Return selected id if explicit pick is valid.
+
+    If ``candidate_id`` is None, print the table and return None (caller exits).
+    """
+    from domains.highway.final_select import (
+        format_front_table,
+        list_front0_from_run,
+        run_domain,
+    )
+
+    domain = run_domain(run_dir)
+    if domain != "highway":
+        raise SystemExit(
+            f"--pareto-front is highway-only (this run domain={domain!r}). "
+            "Use --best-ever or --candidate-id/--round for CrowdNav."
+        )
+
+    rows, front, src = list_front0_from_run(run_dir)
+    print(f"[pareto-front] source={src}")
+    print(format_front_table(rows))
+    front_ids = {str(c.candidate_id) for c in front}
+    if not candidate_id:
+        print(
+            "\n[pareto-front] No winner was selected. Re-run with "
+            "--pareto-front --candidate-id <id> after choosing a trade-off."
+        )
+        out = {
+            "created_utc": _utc_now(),
+            "run_dir": os.path.abspath(run_dir),
+            "mode": "pareto_front_list",
+            "source": src,
+            "front0": rows,
+            "selected_candidate_id": None,
+        }
+        out_path = os.path.join(run_dir, "evals", "pareto_front0.json")
+        os.makedirs(os.path.dirname(out_path), exist_ok=True)
+        with open(out_path, "w", encoding="utf-8") as fh:
+            json.dump(out, fh, indent=2)
+        print(f"[pareto-front] wrote {out_path}")
+        return None
+
+    cid = str(candidate_id)
+    if cid not in front_ids:
+        raise SystemExit(
+            f"--candidate-id {cid!r} is not on Pareto front 0. "
+            f"Front members: {sorted(front_ids)}"
+        )
+    sel = {
+        "created_utc": _utc_now(),
+        "run_dir": os.path.abspath(run_dir),
+        "mode": "pareto_front_explicit",
+        "source": src,
+        "front0": rows,
+        "selected_candidate_id": cid,
+        "note": (
+            "Human-chosen member of feasible Pareto front 0; "
+            "not ranked by SR-CR-0.5*TR or highway_fitness."
+        ),
+    }
+    out_path = os.path.join(run_dir, "evals", f"selected_{cid}.json")
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    with open(out_path, "w", encoding="utf-8") as fh:
+        json.dump(sel, fh, indent=2)
+    pointer = os.path.join(run_dir, "selected_candidate.json")
+    with open(pointer, "w", encoding="utf-8") as fh:
+        json.dump(sel, fh, indent=2)
+    print(f"[pareto-front] recorded deliberate pick {cid} -> {pointer}")
+    return cid
+
+
 def _resolve_train_dir(run_dir: str, candidate_id: str, round_index: int) -> str:
     folder = os.path.join(
         run_dir, "stage3_train", f"r{round_index:02d}_{candidate_id}"
     )
     if os.path.isdir(folder):
         return folder
-    # Fallback: any folder matching candidate id for that round prefix.
     pattern = os.path.join(run_dir, "stage3_train", f"r{round_index:02d}_*{candidate_id}*")
     hits = sorted(glob.glob(pattern))
     if hits:
@@ -200,7 +286,6 @@ def run_eval(
         "cuda" if algo_args.cuda and torch.cuda.is_available() else "cpu"
     )
 
-    # Build Policy with matching obs spaces, then load Stage III weights.
     probe = make_vec_envs(
         algo_args.env_name,
         eval_seed,
@@ -293,7 +378,7 @@ def main() -> None:
     parser.add_argument(
         "--candidate-id",
         default=None,
-        help="e.g. mut_0060_v2 (required unless --best-ever)",
+        help="e.g. mut_0060_v2 (required unless --best-ever / list-only --pareto-front)",
     )
     parser.add_argument(
         "--round",
@@ -304,7 +389,18 @@ def main() -> None:
     parser.add_argument(
         "--best-ever",
         action="store_true",
-        help="Pick candidate_id + round from best Stage III history scalar",
+        help=(
+            "CrowdNav: pick candidate_id + round from best Stage III history "
+            "scalar (SR-CR-0.5*TR). Not valid for highway — use --pareto-front."
+        ),
+    )
+    parser.add_argument(
+        "--pareto-front",
+        action="store_true",
+        help=(
+            "Highway: list feasible Pareto front 0 with raw metrics; "
+            "require --candidate-id to record an explicit pick (no auto winner)."
+        ),
     )
     parser.add_argument(
         "--episodes",
@@ -323,7 +419,33 @@ def main() -> None:
     args = parser.parse_args()
 
     run_dir = args.run_dir
-    if args.best_ever:
+
+    if args.pareto_front and args.best_ever:
+        parser.error("Use either --pareto-front or --best-ever, not both")
+
+    if args.pareto_front:
+        picked = _handle_pareto_front(run_dir, args.candidate_id)
+        if picked is None:
+            return
+        if args.round is None:
+            print(
+                "[pareto-front] Selection recorded. Pass --round to also "
+                "run CrowdNav-style Stage III .pt re-eval (if applicable)."
+            )
+            return
+        cid, rnd = picked, int(args.round)
+    elif args.best_ever:
+        from domains.highway.final_select import run_domain
+
+        if run_domain(run_dir) == "highway":
+            raise SystemExit(
+                "Refusing --best-ever on a highway run: that flag ranks by "
+                "SR-CR-0.5*TR only (ignores speed/progress/soft_success). "
+                "Use: python scripts/eval_raise_checkpoint.py "
+                "--run-dir ... --pareto-front   "
+                "then re-run with --pareto-front --candidate-id <id>. "
+                "See raise_env/docs/SELECTION.md."
+            )
         cid, rnd, hist_m = _best_ever_from_history(run_dir)
         print(
             f"[eval] --best-ever -> {cid} round={rnd} "
@@ -332,7 +454,10 @@ def main() -> None:
         )
     else:
         if not args.candidate_id or args.round is None:
-            parser.error("Provide --candidate-id and --round, or use --best-ever")
+            parser.error(
+                "Provide --candidate-id and --round, or use --best-ever "
+                "(CrowdNav) / --pareto-front (highway)"
+            )
         cid, rnd = str(args.candidate_id), int(args.round)
 
     run_eval(

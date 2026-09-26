@@ -40,11 +40,53 @@ if _BASELINES_ROOT not in sys.path:
 os.chdir(_ROOT)
 
 
+def _inject_profile_argv(argv: list) -> tuple:
+    """Strip ``--profile``; prepend profile flags so later CLI args override."""
+    profile = None
+    out = []
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a == "--profile" and i + 1 < len(argv):
+            profile = argv[i + 1]
+            i += 2
+            continue
+        if isinstance(a, str) and a.startswith("--profile="):
+            profile = a.split("=", 1)[1]
+            i += 1
+            continue
+        out.append(a)
+        i += 1
+    if profile:
+        from raise_core.presets import get_closed_loop_profile, profile_to_run_raise_argv
+
+        spec = get_closed_loop_profile(profile)
+        if spec.get("redirect"):
+            raise SystemExit(
+                f"Profile {profile!r} must be run via {spec['redirect']}"
+            )
+        out = profile_to_run_raise_argv(profile) + out
+    return out, profile
+
+
 def main() -> int:
+    rest, _profile_name = _inject_profile_argv(sys.argv[1:])
+    sys.argv = [sys.argv[0]] + rest
+
     from raise_core.pipeline import RaisePipeline, RaiseRunConfig
     from raise_core.validate import STAGE3_PAPER_STEPS, STAGE3_STEPS
 
     parser = argparse.ArgumentParser(description="RAISE end-to-end")
+    parser.add_argument(
+        "--print-config",
+        action="store_true",
+        help="Print effective argparse namespace (after --profile merge) and exit",
+    )
+    parser.add_argument(
+        "--profile",
+        default=None,
+        help="Named preset (1h/12h/18h/highway_4h); applied before other flags",
+    )
     parser.add_argument("--output-dir", type=str, default="results/raise_run")
     parser.add_argument("--seed", type=int, default=425)
     parser.add_argument(
@@ -381,6 +423,11 @@ def main() -> int:
     )
 
     args = parser.parse_args()
+
+    if getattr(args, "print_config", False):
+        for k, v in sorted(vars(args).items()):
+            print(f"{k}={v!r}")
+        return 0
 
     if args.scale == "paper":
         # Multi-seed paper budgets live in a dedicated human-triggered script.

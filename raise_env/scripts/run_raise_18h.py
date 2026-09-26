@@ -40,6 +40,9 @@ from _prereqs import (  # noqa: E402
     check_stage1_dataset,
     report_problems,
 )
+from raise_core.presets import CLOSED_LOOP_PROFILES  # noqa: E402
+
+_P18 = dict(CLOSED_LOOP_PROFILES["18h"])
 
 
 def _load_resume_paths(resume_dir: str) -> tuple[str, str, str]:
@@ -94,22 +97,44 @@ def main() -> int:
         default="",
         help="Path to a previous results/closed_loop_18h_* directory to continue",
     )
-    # RAISE loop search budget
-    parser.add_argument("--population", type=int, default=8)
-    parser.add_argument("--generations", type=int, default=7)
-    parser.add_argument("--k2", type=int, default=3000, help="Refine short K2 (gradient steps)")
-    parser.add_argument("--min-labels-gate", type=int, default=24)
-    parser.add_argument("--al-max", type=int, default=2)
-    parser.add_argument("--min-stage2", type=int, default=4)
-    parser.add_argument("--refit-every", type=int, default=8)
+    # RAISE loop search budget (defaults from raise_core.presets CLOSED_LOOP_PROFILES['18h'])
+    parser.add_argument("--population", type=int, default=int(_P18["population"]))
+    parser.add_argument("--generations", type=int, default=int(_P18["generations"]))
+    parser.add_argument(
+        "--k2", type=int, default=int(_P18["k2"]), help="Refine short K2 (gradient steps)"
+    )
+    parser.add_argument("--min-labels-gate", type=int, default=int(_P18["min_labels_gate"]))
+    parser.add_argument("--al-max", type=int, default=int(_P18["al_max"]))
+    parser.add_argument("--min-stage2", type=int, default=int(_P18["min_stage2"]))
+    parser.add_argument("--refit-every", type=int, default=int(_P18["refit_every"]))
     # Real Validate (scaled)
-    parser.add_argument("--stage3-k3", type=int, default=500_000, help="K3 env steps (paper 1e7)")
-    parser.add_argument("--stage3-eval", type=int, default=50, help="Eval episodes (paper 500)")
-    parser.add_argument("--stage3-rounds", type=int, default=1, help="Refine rounds (paper 3)")
-    parser.add_argument("--human-num", type=int, default=5, help="Crowd size (paper 20)")
+    parser.add_argument(
+        "--stage3-k3",
+        type=int,
+        default=int(_P18["stage3_k3"]),
+        help="K3 env steps (paper 1e7)",
+    )
+    parser.add_argument(
+        "--stage3-eval",
+        type=int,
+        default=int(_P18["stage3_eval"]),
+        help="Eval episodes (paper 500)",
+    )
+    parser.add_argument(
+        "--stage3-rounds",
+        type=int,
+        default=int(_P18["stage3_rounds"]),
+        help="Refine rounds (paper 3)",
+    )
+    parser.add_argument(
+        "--human-num",
+        type=int,
+        default=int(_P18["human_num"]),
+        help="Crowd size (paper 20)",
+    )
     parser.add_argument(
         "--regime",
-        default="with_random",
+        default=str(_P18["regime"]),
         choices=("with_random", "without_random"),
         help="Randomization regime (default: with_random = ON)",
     )

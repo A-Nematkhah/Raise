@@ -790,6 +790,24 @@ class ClosedLoopRunner:
                 ranked_for_evo, generation=g
             )
 
+            pareto_summary = None
+            if domain_key == "highway" and evolve_mode == "pareto":
+                front0_ids = []
+                n_feas = 0
+                for c in ranked_for_evo:
+                    md = c.metadata or {}
+                    if md.get("pareto_feasible"):
+                        n_feas += 1
+                    if md.get("pareto_front0") or md.get("pareto_front") == 0:
+                        front0_ids.append(str(c.candidate_id))
+                pareto_summary = {
+                    "n_feasible": n_feas,
+                    "n_population": len(ranked_for_evo),
+                    "front0_ids": front0_ids,
+                    "front0_n": len(front0_ids),
+                    "evolve_order": [str(c.candidate_id) for c in ranked_for_evo],
+                }
+
             epoch_rec = {
                 "epoch": g,
                 "n_population": len(ranked),
@@ -825,6 +843,8 @@ class ClosedLoopRunner:
                 "n_proxy_feedback": n_proxy_fb,
                 "n_in_loop_d3": n_d3,
             }
+            if pareto_summary is not None:
+                epoch_rec["pareto"] = pareto_summary
             try:
                 from raise_core.raise_loop.gate_policy import epoch_population_stats
 
@@ -846,6 +866,18 @@ class ClosedLoopRunner:
                     "evolve_ranking": [c.candidate_id for c in ranked_for_evo],
                     "evolve_rank": evolve_mode,
                     "to_label": [c.candidate_id for c in to_label],
+                    "pareto": pareto_summary,
+                    "candidates": [
+                        {
+                            "candidate_id": str(c.candidate_id),
+                            "pareto_rank": (c.metadata or {}).get("pareto_rank"),
+                            "pareto_front": (c.metadata or {}).get("pareto_front"),
+                            "pareto_front0": (c.metadata or {}).get("pareto_front0"),
+                            "pareto_feasible": (c.metadata or {}).get("pareto_feasible"),
+                            "score": c.score,
+                        }
+                        for c in ranked_for_evo
+                    ],
                 },
             )
 

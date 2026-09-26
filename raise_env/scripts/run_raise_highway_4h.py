@@ -55,51 +55,15 @@ for _path in (_ROOT, _SCRIPTS):
     if _path not in sys.path:
         sys.path.insert(0, _path)
 
+from raise_core.presets import CLOSED_LOOP_PROFILES  # noqa: E402
+
 CHECKPOINT_LOCATIONS = (
     os.path.join("closed_loop", "checkpoint.json"),
     "checkpoint.json",
 )
 
-PROFILE = {
-    "domain": "highway",
-    "seed": 425,
-    "llm": "seed",
-    "device": "cuda",
-    "stage1_dataset": "domains/highway/data/stage1_dataset",
-    # Warm disabled by default: labels are collected inside closed-loop.
-    "warm_root": "",
-    "warm_bootstrap_n": 16,
-    "warm_k2": 12_000,
-    "population": 6,
-    "generations": 4,
-    "k2": 12_000,
-    "k2_unit": "env_steps",
-    "min_labels_gate": 16,
-    "al_max": 2,
-    "min_stage2": 3,
-    "refit_every": 6,
-    "proxy_feedback": True,
-    "proxy_feedback_min_labels": 12,
-    "proxy_d3_per_epoch": 1,
-    "stage2_eval": 20,
-    "max_val_mae_gate": 0.35,
-    "stage3_k3": 80_000,
-    "stage3_eval": 30,
-    "stage3_rounds": 1,
-    # Carry Score1-best into next gen so best-so-far cannot vanish when
-    # every slot is overwritten by children (Alg.1 default is off).
-    "elitism": True,
-    # Parent order = auto-calibrated Pareto (matches LLM evidence / reflection).
-    # ``scalar`` (highway_fitness) remains available for diagnostics only.
-    "evolve_rank": "pareto",
-    "evolve_rank_score1_weight": 0.4,
-    # Wall-clock: DummyVecEnv n_envs>1 was slower on this CPU (serial envs).
-    # holdout_only skips train-dist eval; selection uses holdout metrics.
-    "highway_n_envs": 1,
-    "highway_label_workers": 1,
-    "highway_warm_start": True,
-    "highway_eval_mode": "holdout_only",
-}
+# Locked PROFILE — single source of truth in raise_core.presets.
+PROFILE = dict(CLOSED_LOOP_PROFILES["highway_4h"])
 
 
 def _dataset_ready(path: str) -> bool:
