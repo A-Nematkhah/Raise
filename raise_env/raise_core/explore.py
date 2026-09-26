@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Sequence
@@ -44,6 +45,20 @@ from raise_core.sandbox.runtime import SandboxedReward
 from domains.crowdnav.state import RewardFunction
 
 logger = logging.getLogger(__name__)
+
+_DIAGNOSIS_FENCE_RE = re.compile(r"```(?:python)?\s*\n", re.IGNORECASE)
+
+
+def extract_llm_diagnosis(raw: str, *, max_chars: int = 500) -> Optional[str]:
+    """Plain text preceding the first code fence, or None if absent."""
+    text = str(raw or "")
+    match = _DIAGNOSIS_FENCE_RE.search(text)
+    if match is None:
+        return None
+    preamble = text[: match.start()].strip()
+    if not preamble:
+        return None
+    return preamble[: int(max_chars)]
 
 
 @dataclass
@@ -134,6 +149,9 @@ class StageIEvolver:
         self.reflection: str = ""
         self.history: List[GenerationRecord] = []
         self.global_best: Optional[RewardCandidate] = None
+        # Highway evidence trends (numbers only; fed into reflection).
+        self._highway_best_fitness_trend: List[float] = []
+        self._highway_best_mean_speed_trend: List[float] = []
 
         n = self.config.population_size
         if self.config.n_crossover + self.config.n_mutation + self.config.n_random != n:
@@ -185,6 +203,15 @@ class StageIEvolver:
     def _completion_to_code(self, raw: str) -> str:
         code = extract_python_code(raw)
         return normalize_to_compute_reward(code, self.config.func_name)
+
+    def _is_highway_pack(self) -> bool:
+        prompts = self._prompts
+        if prompts is None:
+            return False
+        if str(getattr(prompts, "DOMAIN_NAME", "")).strip().lower() == "highway":
+            return True
+        path = str(getattr(prompts, "__file__", "") or "").replace("\\", "/")
+        return "/domains/highway/" in path
 
     @staticmethod
     def _batch_max_tokens(population_size: int) -> int:
@@ -288,11 +315,14 @@ class StageIEvolver:
         parent_ids: tuple = (),
         metadata: Optional[dict] = None,
     ) -> RewardCandidate:
+        md = dict(metadata or {})
+        if raw_completion:
+            md["llm_diagnosis"] = extract_llm_diagnosis(raw_completion)
         cand = self._make_candidate(
             code,
             origin=origin,
             parent_ids=parent_ids,
-            metadata=metadata,
+            metadata=md,
         )
         self._log_rejection(
             phase=phase,
@@ -583,19 +613,20 @@ class StageIEvolver:
     ) -> RewardCandidate:
         proxy_fb = (parent.metadata or {}).get("proxy_feedback")
         if proxy_fb:
-            hack = (parent.metadata or {}).get("proxy_hack_mode")
-            hack_bit = (
-                f" Parent exhibited reward-hacking mode={hack}; "
-                f"edit the reward to eliminate that exploit.\n"
-                if hack
-                else ""
-            )
-            weakness = (
-                f"Parent {parent.candidate_id} Score1={parent.score}. "
-                f"Use the Stage-II proxy feedback below (higher priority than "
-                f"Score1 alone).{hack_bit}\n{proxy_fb}\n"
-                f"Global reflection: {reflection}"
-            )
+            if self._is_highway_pack():
+                # Evidence only — LLM diagnoses from numbers in the block.
+                weakness = (
+                    f"Parent {parent.candidate_id} Score1={parent.score}.\n"
+                    f"{proxy_fb}\n"
+                    f"Global reflection: {reflection}"
+                )
+            else:
+                weakness = (
+                    f"Parent {parent.candidate_id} Score1={parent.score}. "
+                    f"Use the Stage-II proxy feedback below (higher priority than "
+                    f"Score1 alone).\n{proxy_fb}\n"
+                    f"Global reflection: {reflection}"
+                )
         else:
             weakness = (
                 f"Parent {parent.candidate_id} score={parent.score}. "
@@ -603,7 +634,7 @@ class StageIEvolver:
                 f"Global reflection: {reflection}"
             )
         parent_hints = (parent.metadata or {}).get("score1_failure_hints")
-        if parent_hints and not proxy_fb:
+        if parent_hints and not proxy_fb and not self._is_highway_pack():
             weakness = (
                 f"{weakness}\nScore1 diagnostics for this parent: {parent_hints}"
             )
@@ -770,56 +801,146 @@ class StageIEvolver:
         assert len(next_pop) == cfg.population_size
         return next_pop
 
+    def _build_highway_evidence_reflection(
+        self, ranked: Sequence[RewardCandidate], *, generation: int
+    ) -> str:
+        """Numbers-only trends + population table + prior LLM diagnoses."""
+        from raise_core.selection import candidate_fitness
+
+        rows: List[Dict[str, Any]] = []
+        for c in ranked:
+            md = c.metadata or {}
+            m = md.get("last_metrics")
+            if not isinstance(m, dict):
+                m = {}
+            holdout = m.get("holdout") if isinstance(m.get("holdout"), dict) else m
+            try:
+                fit = float(candidate_fitness(c))
+            except Exception:  # noqa: BLE001
+                fit = float("-inf")
+            try:
+                speed = float(
+                    holdout.get("mean_speed", holdout.get("ITR", float("nan")))
+                )
+            except (TypeError, ValueError):
+                speed = float("nan")
+            rows.append(
+                {
+                    "id": str(c.candidate_id),
+                    "SR": float(
+                        (holdout or {}).get("SR", (holdout or {}).get("sr", float("nan")))
+                    ),
+                    "CR": float(
+                        (holdout or {}).get("CR", (holdout or {}).get("cr", float("nan")))
+                    ),
+                    "mean_speed": speed,
+                    "fitness": fit,
+                    "diagnosis": md.get("llm_diagnosis"),
+                }
+            )
+        rows_sorted = sorted(
+            rows, key=lambda r: r["fitness"], reverse=True
+        )
+        if rows_sorted:
+            best_fit = rows_sorted[0]["fitness"]
+            best_speed = rows_sorted[0]["mean_speed"]
+            if best_fit == best_fit:  # not NaN
+                self._highway_best_fitness_trend.append(float(best_fit))
+            if best_speed == best_speed:
+                self._highway_best_mean_speed_trend.append(float(best_speed))
+            self._highway_best_fitness_trend = self._highway_best_fitness_trend[-5:]
+            self._highway_best_mean_speed_trend = (
+                self._highway_best_mean_speed_trend[-5:]
+            )
+
+        def _fmt_trend(vals: Sequence[float]) -> str:
+            return "[" + ", ".join(f"{v:.3f}" for v in vals) + "]"
+
+        trend = (
+            f"Gen{generation} best_fitness_trend="
+            f"{_fmt_trend(self._highway_best_fitness_trend)} "
+            f"best_mean_speed_trend="
+            f"{_fmt_trend(self._highway_best_mean_speed_trend)}"
+        )
+        table_bits = []
+        for r in rows_sorted:
+            table_bits.append(
+                f"{r['id']}: SR={r['SR']:.2f} CR={r['CR']:.2f} "
+                f"mean_speed={r['mean_speed']:.1f} fitness={r['fitness']:.3f}"
+            )
+        table = "Population(fitness desc): " + (
+            "; ".join(table_bits) if table_bits else "(empty)"
+        )
+        diag_bits: List[str] = []
+        for r in rows_sorted:
+            d = r.get("diagnosis")
+            if d:
+                diag_bits.append(f"{r['id']}: {str(d).strip()}")
+            if len(diag_bits) >= 3:
+                break
+        diag = (
+            "PriorLLMDiagnoses: " + " | ".join(diag_bits)
+            if diag_bits
+            else "PriorLLMDiagnoses: (none)"
+        )
+        return f"{trend}. {table}. {diag}"
+
     def _build_reflection(
         self, ranked: Sequence[RewardCandidate], *, generation: int
     ) -> str:
         """
         Reflective note for the next generation (§4.2).
 
-        Accumulates concise notes across generations (bounded), including
-        Score1 for all candidates — not only best/worst.
+        Highway: factual trends + population metrics + prior LLM diagnoses.
+        CrowdNav: Score1 summary + selective proxy line (unchanged advice path).
         """
-        score_bits = []
-        for c in ranked:
-            sc = c.score if c.score is not None else float("nan")
-            score_bits.append(f"{c.candidate_id}={sc}")
-        best = ranked[0]
-        worst = ranked[-1]
-        lower = ranked[len(ranked) // 2 :]
-        lower_ids = ", ".join(c.candidate_id for c in lower[:4]) if lower else "(none)"
-        note = (
-            f"Gen{generation} scores[{', '.join(score_bits)}]. "
-            f"Best={best.candidate_id} score={best.score}; "
-            f"Worst={worst.candidate_id} score={worst.score}. "
-            f"Underperformers ({lower_ids}): strengthen goal progress and "
-            f"collision/discomfort penalties while keeping dense shaping. "
-            f"Prefer combining elite safety terms with efficient progress; "
-            f"avoid near-constant rewards."
-        )
-        diag_bits = []
-        for c in (worst, *(lower[:2])):
-            hints = (c.metadata or {}).get("score1_failure_hints")
-            if hints:
-                diag_bits.append(f"{c.candidate_id}: {hints}")
-        if diag_bits:
-            # Deduplicate while preserving order.
-            seen = set()
-            uniq = []
-            for b in diag_bits:
-                if b not in seen:
-                    seen.add(b)
-                    uniq.append(b)
-            note = note + " Diagnostics: " + " | ".join(uniq[:3])
-        try:
-            from raise_core.raise_loop.proxy_feedback import (
-                proxy_summary_for_reflection,
+        if self._is_highway_pack():
+            note = self._build_highway_evidence_reflection(
+                ranked, generation=generation
             )
+        else:
+            score_bits = []
+            for c in ranked:
+                sc = c.score if c.score is not None else float("nan")
+                score_bits.append(f"{c.candidate_id}={sc}")
+            best = ranked[0]
+            worst = ranked[-1]
+            lower = ranked[len(ranked) // 2 :]
+            lower_ids = (
+                ", ".join(c.candidate_id for c in lower[:4]) if lower else "(none)"
+            )
+            note = (
+                f"Gen{generation} scores[{', '.join(score_bits)}]. "
+                f"Best={best.candidate_id} score={best.score}; "
+                f"Worst={worst.candidate_id} score={worst.score}. "
+                f"Underperformers ({lower_ids}): strengthen goal progress and "
+                f"collision/discomfort penalties while keeping dense shaping. "
+                f"Prefer combining elite safety terms with efficient progress; "
+                f"avoid near-constant rewards."
+            )
+            diag_bits = []
+            for c in (worst, *(lower[:2])):
+                hints = (c.metadata or {}).get("score1_failure_hints")
+                if hints:
+                    diag_bits.append(f"{c.candidate_id}: {hints}")
+            if diag_bits:
+                seen = set()
+                uniq = []
+                for b in diag_bits:
+                    if b not in seen:
+                        seen.add(b)
+                        uniq.append(b)
+                note = note + " Diagnostics: " + " | ".join(uniq[:3])
+            try:
+                from raise_core.raise_loop.proxy_feedback import (
+                    proxy_summary_for_reflection,
+                )
 
-            proxy_line = proxy_summary_for_reflection(ranked)
-            if proxy_line:
-                note = note + " " + proxy_line
-        except Exception:  # noqa: BLE001
-            pass
+                proxy_line = proxy_summary_for_reflection(ranked)
+                if proxy_line:
+                    note = note + " " + proxy_line
+            except Exception:  # noqa: BLE001
+                pass
         if not self.reflection.strip():
             return note
         parts = [p.strip() for p in self.reflection.split(" || ") if p.strip()]

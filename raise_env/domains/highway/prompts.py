@@ -4,20 +4,49 @@ from __future__ import annotations
 
 from typing import Optional
 
+from domains.highway.objective_constants import K_GATE, V_MIN, V_TARGET
+
+DOMAIN_NAME = "highway"
+
+_FITNESS_OBJECTIVE = (
+    "The reward function you write is NOT the selection score. After PPO "
+    "training, policies are scored on held-out rollouts using this fitness "
+    "function (higher is better):\n"
+    "  v_eff = 10th-percentile speed over the episode\n"
+    f"  gate  = sigmoid({K_GATE} * (v_eff - ({V_MIN}+{V_TARGET})/2) / "
+    f"({V_TARGET}-{V_MIN}))\n"
+    "  fitness = gate * (SR - CR - 0.5*TR)\n"
+    f"          + 0.35*tanh(progress/800) + 0.25*tanh(mean_speed/{V_TARGET})\n"
+    "          + 0.15*soft_success*gate - penalties\n"
+    f"  where V_MIN={V_MIN}, V_TARGET={V_TARGET} m/s.\n"
+    "Use this to reason about trade-offs yourself; do not assume any specific "
+    "failure mode is or isn't present."
+)
+
+_DIAGNOSIS_BEFORE_CODE = (
+    "Before writing code:\n"
+    "1) In 2-4 sentences, based ONLY on the evidence given above (not on any "
+    "assumption about what 'usually' goes wrong), diagnose what is currently "
+    "limiting fitness from improving further — e.g. a saturated objective term, "
+    "an unexploited safety/speed trade-off, a degenerate strategy, or something "
+    "else you notice in the numbers.\n"
+    "2) Then revise the reward function to address your own diagnosis.\n"
+    "Output your diagnosis as plain text BEFORE the code fence. The code fence "
+    "must contain ONLY the function, no diagnosis text inside it."
+)
+
 D1_SYSTEM_PROMPT = (
     "You are an expert in reinforcement learning and autonomous highway driving. "
-    "Your goal is to design reward functions that keep the ego vehicle safe, "
-    "on-road, and matching traffic flow: surrounding vehicles cruise at about "
-    "20 m/s or faster, so ego should typically stay near ~20–30 m/s while "
-    "making forward progress. "
-    "Return **only** valid Python code enclosed within a fenced code block. "
-    "The code must be fully executable and should not include comments or "
-    "explanations outside the block."
+    "Your goal is to design reward functions for highway-fast-v0. "
+    + _FITNESS_OBJECTIVE
+    + " Return **only** valid Python code enclosed within a fenced code block "
+    "for this initial generation (no commentary outside the block). "
+    "The code must be fully executable."
 )
 
 D1_USER_PROMPT = """Please write a Python function named {func_name} for highway driving (highway-fast-v0).
 Task Description:
-- Output a scalar reward from the ego vehicle's current state so a policy learns to drive forward safely without collisions or leaving the road.
+- Output a scalar reward from the ego vehicle's current state so a policy can learn safe forward driving under the fitness objective above.
 Function Interface (EXACT FIELD STRUCTURE):
 - Inputs:
   - state: A HighwayRewardState snapshot with ONLY these fields:
@@ -34,13 +63,9 @@ Function Interface (EXACT FIELD STRUCTURE):
 - Output:
   - A single finite float reward for the current frame.
 - Design Principles:
-- Progress / speed: reward forward motion and traffic-matching cruise (~20–30 m/s).
-  Nearby traffic already moves at ≥~20 m/s; ego slower than that lags the flow
-  and never closes on surrounding vehicles.
-- Safety: heavily penalize collision and off-road; shape clearance to nearby vehicles.
-- Do NOT reward lagging behind traffic: “survive by going much slower than ~20 m/s”
-  is a failure mode (not “near-zero crawl” — that is unrealistic here).
+- Prefer dense, finite shaping from documented state fields.
 - Interpretability: clear local variables; no extra signature args.
+- Reason about fitness trade-offs yourself from the objective statement; do not assume a named failure mode.
 Episode memory example:
 ```python
 def compute_reward(state, memory):
@@ -100,7 +125,7 @@ Sandbox rules (CRITICAL — invalid code is discarded):
 - Use ``memory`` (dict) for cross-timestep shaping; never invent state.history.
 {reward_state_access}
 - Hyperparameters as locals only; no extra args beyond (state, memory).
-- Return ONLY one Python fenced code block with no text outside it.
+- Put diagnosis as plain text BEFORE the fence; the fenced block must contain ONLY the function.
 """
 
 D2_CROSSOVER_PROMPT = """You are a reward function architect for highway driving. Synthesize a new function combining complementary strengths of two parents while addressing the reflection.
@@ -108,88 +133,79 @@ Parent A:
 - {code_A}
 Parent B:
 - {code_B}
-Reflection:
+Reflection / evidence:
 - {reflection}.
 Synthesis Task:
-- Write an improved `{func_name}` that merges safety and progress terms.
+- Write an improved `{func_name}` that merges complementary terms from the parents.
 - Strip any getattr/hasattr patterns; use direct state.* / v.* access.
 - Define exactly one function: def {func_name}(state, memory): ... returning a finite float.
 {sandbox_rules}
-- Return only a single Python fenced code block.
+""" + _DIAGNOSIS_BEFORE_CODE + """
 """
 
-D2_MUTATION_PROMPT = """You are a reward function optimizer for highway driving. Mutate the underperforming parent to address the weakness below with minimal edits.
-Prior Reflection:
+D2_MUTATION_PROMPT = """You are a reward function optimizer for highway driving. Mutate the underperforming parent using the evidence below with minimal edits.
+Prior Reflection / evidence:
 - {reflection}
 Underperforming Parent Code to Mutate:
 - {func_signature}
 - {parent_code}
 Mutation Task:
-- Create a mutated `{func_name}` with a small precise change.
+- Create a mutated `{func_name}` with a small precise change that addresses your diagnosis.
 - Keep direct dot access; no getattr/hasattr.
 - Define exactly one function: def {func_name}(state, memory): ... returning a finite float.
 {sandbox_rules}
-- Return only a single Python fenced code block.
+""" + _DIAGNOSIS_BEFORE_CODE + """
 """
 
 D3_SYSTEM_PROMPT = (
     "You are a senior researcher in autonomous driving and RL. "
-    "Rewrite the reward to produce a smooth, dense, numerically stable per-frame "
-    "signal that differentiates safe traffic-speed driving (~20–30 m/s) from "
-    "collisions, off-road, and lagging behind the ≥~20 m/s traffic stream. "
-    "IMPORTANT SCHEMA: def compute_reward(state, memory): — memory is a plain dict. "
+    + _FITNESS_OBJECTIVE
+    + " IMPORTANT SCHEMA: def compute_reward(state, memory): — memory is a plain dict. "
     "state.ego has .x .y .vx .vy .heading .speed .lane_index .on_road. "
     "state.others is a tuple; iterate with 'for v in state.others:'. "
     "state.collision / state.off_road / state.timeout (bool). "
     "state.progress and state.speed are available. "
     "NO state.robot, NO state.humans, NO state.gx, NO state.lane_position, NO state.distance. "
     "SANDBOX: never getattr/hasattr/__import__/eval; use ** 0.5; always return a finite float. "
-    "Output only valid Python code (no markdown fences or commentary)."
+    "Write a short diagnosis as plain text, then a single Python fenced code block "
+    "containing ONLY the revised function."
 )
 
 D3_USER_PROMPT = """Current score (best so far): {last_score:.4f} (higher is better)
-Core components:
-- Forward progress + traffic-matching speed shaping (~25 m/s target, ~20–30 band)
-- Collision and off-road penalties
-- Clearance to nearby vehicles
-- Penalty for lagging below traffic speed (~25 m/s)
-- Stability (bounded magnitudes); avoid flat constant ~20 m/s cruise
-Focus note: {feedback}
+Evidence / focus note:
+{feedback}
 {extra_context_if_any}
+""" + _DIAGNOSIS_BEFORE_CODE + """
 Revise the function below.
 Maintain signature def compute_reward(state, memory): and return a finite float.
 {current_code}
 """
 
-D4_EXTERNAL_KNOWLEDGE = """# External Knowledge — Highway Fast
+D4_EXTERNAL_KNOWLEDGE = f"""# External Knowledge — Highway Fast
 ## Task
 - Domain: multi-lane highway driving (highway-fast-v0)
-- Surrounding vehicles typically cruise near ~25 m/s (often ~20–30 m/s)
-- Ego must survive without collision/off-road while matching that flow (~25 m/s)
-  and making forward progress — do NOT lock to a flat ~20 m/s lane-keep cruise
+## Selection objective (not the reward itself)
+{_FITNESS_OBJECTIVE}
 ## Metrics (mapped to RAISE ProxyMetrics)
 - SR: fraction of episodes survived without collision/off-road
 - CR: collision rate; TR: off-road rate
-- Also optimize mean speed + forward progress (do NOT survive by lagging << traffic)
-- soft_success: survive AND traffic-speed cruise (~≥25 m/s) AND meaningful progress
-- Primary scalar mixes safety with throughput (progress/speed), with lag-behind-traffic
-  and constant-cruise penalties
+- mean_speed / mean_progress / soft_success / lane_change_rate as logged
+- soft_success: survive AND speed ≥ V_TARGET ({V_TARGET} m/s) AND meaningful progress
 """
 
-D5_SEED_FUNCTION = '''def compute_reward(state, memory):
-    """Highway seed: progress + speed; punish crash/off-road and lagging traffic."""
+D5_SEED_FUNCTION = f'''def compute_reward(state, memory):
+    """Highway seed: dense progress/speed shaping with collision/off-road costs."""
     collision_penalty = -20.0
     off_road_penalty = -10.0
     speed_coef = 0.08
     progress_coef = 1.0
-    traffic_speed = 25.0
+    traffic_speed = {V_TARGET}
     lag_penalty = 0.15
     if state.collision:
         return float(collision_penalty)
     if state.off_road:
         return float(off_road_penalty)
     reward = progress_coef * state.progress + speed_coef * state.speed
-    # Match traffic near ~25 m/s; slower than that lags the flow.
     if (not state.timeout) and state.ego.on_road and state.speed < traffic_speed:
         reward = reward - lag_penalty * (traffic_speed - state.speed)
     return float(reward)
@@ -214,7 +230,7 @@ def format_d1_initial(
     reflection_block = ""
     if reflection.strip():
         reflection_block = (
-            f"Reflective guidance from prior generations:\n{reflection.strip()}\n"
+            f"Reflective guidance / evidence from prior generations:\n{reflection.strip()}\n"
         )
     external_block = ""
     if include_external_knowledge:
@@ -257,7 +273,7 @@ def format_d1_initial_batch(
         )
     reflection_block = ""
     if reflection.strip():
-        reflection_block = f"Reflection:\n{reflection.strip()}\n"
+        reflection_block = f"Reflection / evidence:\n{reflection.strip()}\n"
     external_block = ""
     if include_external_knowledge:
         external_block = f"External knowledge:\n{D4_EXTERNAL_KNOWLEDGE}\n"

@@ -125,7 +125,7 @@ def _eval_metrics(
     n_episodes: int,
     seed: int = 0,
     seed_offset: int = 10_003,
-    soft_speed_mps: float = 25.0,
+    soft_speed_mps: float | None = None,
     soft_progress_m: float = 400.0,
 ) -> ProxyMetrics:
     """
@@ -156,8 +156,12 @@ def _eval_metrics(
     high_speed_steps = 0
     outcomes: list[str] = []
 
-    # Soft-success: survive AND match traffic (~≥V_TARGET=25 m/s) + progress.
-    min_speed_for_soft = float(soft_speed_mps)
+    # Soft-success: survive AND match traffic (~≥V_TARGET) + progress.
+    from domains.highway.objective_constants import V_TARGET
+
+    min_speed_for_soft = float(
+        V_TARGET if soft_speed_mps is None else soft_speed_mps
+    )
     min_progress_for_soft = float(soft_progress_m)
     n_eps = max(1, int(n_episodes))
     base = int(seed)

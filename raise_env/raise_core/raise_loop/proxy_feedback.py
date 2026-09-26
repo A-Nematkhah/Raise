@@ -1,9 +1,7 @@
 """Attach Stage-II proxy metrics to LLM prompts inside the RAISE loop.
 
-Score1 remains the cheap evolutionary signal; SR/CR/TR (+ highway continuous
-fields) feedback is selective so short-horizon noise does not dominate every
-mutation — but known *reward-hacking* fingerprints always surface so the LLM
-sees what the policy actually did.
+Highway: always attach raw evidence (numbers + fitness decomposition) — the LLM
+diagnoses failure modes itself. CrowdNav: keep selective attach + focus notes.
 """
 
 from __future__ import annotations
@@ -11,10 +9,6 @@ from __future__ import annotations
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from raise_core.explore import RewardCandidate
-
-# Align with domains.highway.metrics.V_TARGET (avoid hard import cycles in CrowdNav).
-_HIGHWAY_TRAFFIC_MPS = 25.0
-_SOFT_FLOOR_LEGACY_MPS = 20.0
 
 
 def nav_scalar(metrics: Mapping[str, Any]) -> float:
@@ -34,129 +28,69 @@ def _f(metrics: Mapping[str, Any], *keys: str, default: float = 0.0) -> float:
     return float(default)
 
 
-def classify_highway_hack(metrics: Mapping[str, Any]) -> Optional[str]:
-    """
-    Detect named reward-hacking / fail modes from holdout Stage-II metrics.
+def _is_highway_metrics(metrics: Mapping[str, Any]) -> bool:
+    return str(metrics.get("domain", "")).strip().lower() == "highway"
 
-    Returns a short mode id or None when behavior looks non-degenerate.
-    """
-    is_highway = str(metrics.get("domain", "")).lower() == "highway"
-    has_speed = "mean_speed" in metrics or "ITR" in metrics
-    if not (is_highway or has_speed):
-        return None
 
-    sr = _f(metrics, "SR", "sr")
-    cr = _f(metrics, "CR", "cr")
-    tr = _f(metrics, "TR", "tr")
-    speed = _f(metrics, "mean_speed", "ITR")
-    soft = _f(metrics, "soft_success") if "soft_success" in metrics else None
-    lc = metrics.get("lane_change_rate")
-    p10 = metrics.get("speed_p10")
-    p90 = metrics.get("speed_p90")
-    pstd = metrics.get("progress_std")
-    spread = None
-    if p10 is not None and p90 is not None:
+def evidence_block(
+    metrics: Mapping[str, Any],
+    *,
+    score1: Optional[float] = None,
+) -> str:
+    """Raw evaluation evidence + fitness decomposition — no interpretation."""
+    from domains.highway.metrics import fitness_components
+
+    src = metrics
+    holdout = metrics.get("holdout")
+    if isinstance(holdout, Mapping) and holdout:
+        src = holdout
+    comps = fitness_components(metrics)
+    p10 = src.get("speed_p10", metrics.get("speed_p10", "n/a"))
+    if p10 is not None and p10 != "n/a":
         try:
-            spread = abs(float(p90) - float(p10))
+            p10 = f"{float(p10):.1f}"
         except (TypeError, ValueError):
-            spread = None
-
-    # Crash-loving / unsafe speed shaping.
-    if cr >= 0.5:
-        return "crash_attract"
-
-    # Constant cruise / soft-threshold lock (the soft@20 exploit fingerprint).
-    flat_speed = spread is not None and spread < 0.5
-    flat_progress = pstd is not None and float(pstd) < 1.0
-    no_lane = lc is not None and float(lc) < 0.02
-    near_soft_floor = (
-        _SOFT_FLOOR_LEGACY_MPS - 1.0 <= speed <= _SOFT_FLOOR_LEGACY_MPS + 1.5
-    )
-    below_traffic = speed + 0.5 < _HIGHWAY_TRAFFIC_MPS
-    if (
-        sr >= 0.85
-        and cr < 0.15
-        and below_traffic
-        and (flat_speed or near_soft_floor)
-        and (no_lane or flat_progress or soft is not None and soft < 0.35)
-    ):
-        return "constant_cruise_hack"
-
-    if soft is not None and sr >= 0.5 and soft < 0.25 and below_traffic:
-        return "below_traffic_soft"
-
-    if sr >= 0.5 and speed < 18.0:
-        return "lag_traffic"
-
-    if sr >= 0.5 and _f(metrics, "mean_progress", "PL") < 300.0:
-        return "low_progress"
-
-    if tr >= 0.5:
-        return "offroad_timeout"
-
-    return None
+            p10 = str(p10)
+    lc = src.get("lane_change_rate", metrics.get("lane_change_rate", "n/a"))
+    if lc is not None and lc != "n/a":
+        try:
+            lc = f"{float(lc):.3f}"
+        except (TypeError, ValueError):
+            lc = str(lc)
+    n_ep = src.get("n_eval_episodes", metrics.get("n_eval_episodes", "?"))
+    progress = _f(src, "mean_progress", "PL", default=_f(metrics, "mean_progress", "PL"))
+    lines = [
+        (
+            f"Holdout eval ({n_ep} episodes): "
+            f"SR={_f(src, 'SR', 'sr'):.2f} CR={_f(src, 'CR', 'cr'):.2f} "
+            f"TR={_f(src, 'TR', 'tr'):.2f} mean_speed={_f(src, 'mean_speed', 'ITR'):.1f}m/s "
+            f"speed_p10={p10} "
+            f"progress={progress:.0f}m "
+            f"soft_success={_f(src, 'soft_success'):.2f} "
+            f"lane_change_rate={lc}"
+        ),
+        (
+            f"Fitness={float(comps.get('fitness', 0.0)):.3f} "
+            f"(speed_gate={float(comps.get('gate', 0.0)):.3f} at "
+            f"v_eff={float(comps.get('v_eff', 0.0)):.1f}, "
+            f"v_min={comps.get('v_min', '?')}, v_target={comps.get('v_target', '?')}, "
+            f"low_speed_penalty={float(comps.get('low_speed_penalty', 0.0)):.3f})"
+        ),
+    ]
+    if score1 is not None and _finite(score1):
+        lines.append(f"Score1={float(score1):.3f}")
+    return "\n".join(lines)
 
 
 def focus_note_from_metrics(metrics: Mapping[str, Any]) -> str:
-    """One-line editing hint for mutation / D.3 — name the hack when present."""
-    mode = classify_highway_hack(metrics)
+    """CrowdNav-only editing hint (highway uses evidence_block instead)."""
+    if _is_highway_metrics(metrics):
+        # Highway path never interprets; keep a neutral stub for legacy callers.
+        return evidence_block(metrics)
+
     sr = _f(metrics, "SR", "sr")
     cr = _f(metrics, "CR", "cr")
     tr = _f(metrics, "TR", "tr")
-    speed = _f(metrics, "mean_speed", "ITR")
-    progress = _f(metrics, "mean_progress", "PL")
-    soft = _f(metrics, "soft_success") if "soft_success" in metrics else None
-
-    if mode == "crash_attract":
-        return (
-            "REWARD HACKING / FAIL: crash attractor — PPO learned high speed then "
-            "collides (CR high). Strengthen collision/off-road penalties relative "
-            "to speed/progress; keep clearance shaping; still target ~25 m/s traffic "
-            "when safe — do NOT only maximize speed"
-        )
-    if mode == "constant_cruise_hack":
-        return (
-            "REWARD HACKING DETECTED: constant-cruise exploit — policy locks near "
-            f"~{speed:.1f} m/s with almost zero speed variance / lane changes / "
-            "progress variance (soft-threshold gaming). Break the plateau: reward "
-            f"matching traffic near {_HIGHWAY_TRAFFIC_MPS:.0f} m/s, penalize flat "
-            "constant speed just above a soft floor, and do not treat SR=1 alone "
-            "as success without throughput diversity"
-        )
-    if mode == "below_traffic_soft":
-        return (
-            "REWARD HACKING RISK: soft_success low while surviving — ego stays "
-            f"below traffic (~{speed:.1f} m/s vs target ~{_HIGHWAY_TRAFFIC_MPS:.0f}). "
-            "Raise shaping toward traffic cruise; soft_success needs survive AND "
-            f">={_HIGHWAY_TRAFFIC_MPS:.0f} m/s AND meaningful progress"
-        )
-    if mode == "lag_traffic":
-        return (
-            "lags traffic — surrounding flow is ~20–30 m/s (target ~25); increase "
-            "reward for matching that band and forward progress; penalize ego "
-            "much slower while on-road"
-        )
-    if mode == "low_progress":
-        return (
-            "low forward progress — strengthen state.progress / speed terms; "
-            "avoid rewarding idle/lane-hold forever"
-        )
-    if mode == "offroad_timeout":
-        return (
-            "high off-road/timeout share — keep on_road shaping; still reward "
-            "forward progress at traffic speed (~25 m/s)"
-        )
-
-    if str(metrics.get("domain", "")).lower() == "highway" or "mean_speed" in metrics:
-        if soft is not None and soft < 0.3 and sr >= 0.4:
-            return (
-                "soft_success low — survive AND match traffic (~>=25 m/s) with "
-                "meaningful progress; balance safety with throughput"
-            )
-        return (
-            "improve safe throughput: higher soft_success (survive+~25 m/s+"
-            "progress) without raising CR; avoid constant-speed lane-keep hacks"
-        )
 
     if tr >= 0.5 and tr >= cr:
         return (
@@ -184,6 +118,9 @@ def format_proxy_feedback_block(
     score1: Optional[float] = None,
 ) -> str:
     """Compact block embedded in mutation weakness / D.3 feedback."""
+    if _is_highway_metrics(metrics):
+        return evidence_block(metrics, score1=score1)
+
     sr = _f(metrics, "SR", "sr")
     cr = _f(metrics, "CR", "cr")
     tr = _f(metrics, "TR", "tr")
@@ -192,39 +129,9 @@ def format_proxy_feedback_block(
     if score1 is not None and _finite(score1):
         s1_bit = f" | Score1={float(score1):.3f}"
     focus = focus_note_from_metrics(metrics)
-    mode = classify_highway_hack(metrics)
-    mode_bit = f" | mode={mode}" if mode else ""
-    extra = ""
-    if "mean_speed" in metrics or str(metrics.get("domain", "")).lower() == "highway":
-        spd = _f(metrics, "mean_speed", "ITR")
-        pl = _f(metrics, "mean_progress", "PL")
-        soft = _f(metrics, "soft_success") if "soft_success" in metrics else 0.0
-        lc = _f(metrics, "lane_change_rate") if "lane_change_rate" in metrics else None
-        p10 = metrics.get("speed_p10")
-        p90 = metrics.get("speed_p90")
-        pstd = metrics.get("progress_std")
-        extra = f" | speed={spd:.1f}m/s progress={pl:.0f}m soft={soft:.2f}"
-        if lc is not None:
-            extra += f" laneΔ={lc:.3f}"
-        if p10 is not None and p90 is not None:
-            try:
-                extra += f" spd_band=[{float(p10):.1f},{float(p90):.1f}]"
-            except (TypeError, ValueError):
-                pass
-        if pstd is not None:
-            try:
-                extra += f" prog_std={float(pstd):.2f}"
-            except (TypeError, ValueError):
-                pass
-        fit = metrics.get("fitness", metrics.get("selection_scalar"))
-        if fit is not None:
-            try:
-                extra += f" fitness={float(fit):.3f}"
-            except (TypeError, ValueError):
-                pass
     return (
         f"ProxyRefine: SR={sr:.2f} CR={cr:.2f} TR={tr:.2f} "
-        f"scalar={sc:.2f}{extra}{s1_bit}{mode_bit}\nFocus: {focus}"
+        f"scalar={sc:.2f}{s1_bit}\nFocus: {focus}"
     )
 
 
@@ -236,33 +143,18 @@ def should_attach_proxy_feedback(
     population_scalars: Optional[Sequence[float]] = None,
 ) -> bool:
     """
-    Attach when proxy looks bad, reward-hacking fingerprint is present, or
-    Score1 looks strong while proxy scalar is weak.
+    CrowdNav: attach when proxy looks bad or Score1/proxy mismatch.
+
+    Highway: always True (callers should prefer ``evidence_block`` attach).
     """
+    if _is_highway_metrics(metrics):
+        return True
+
     sr = _f(metrics, "SR", "sr")
     cr = _f(metrics, "CR", "cr")
     tr = _f(metrics, "TR", "tr")
     if sr < 0.10 or tr >= 0.50 or cr >= 0.50:
         return True
-    # Named highway hacks (including high-SR constant cruise) always surface.
-    if classify_highway_hack(metrics) is not None:
-        return True
-    is_highway = str(metrics.get("domain", "")).lower() == "highway"
-    has_speed = "mean_speed" in metrics or "ITR" in metrics
-    if is_highway or has_speed:
-        soft = (
-            float(metrics["soft_success"])
-            if "soft_success" in metrics and metrics.get("soft_success") is not None
-            else None
-        )
-        # Clear lag only; mild shortfall vs 25 m/s is covered by classify_* /
-        # soft_success — do not flag every 24 m/s survivor as a hack.
-        speed = _f(metrics, "mean_speed", "ITR")
-        lag_floor = 18.0 if is_highway else 12.0
-        if sr >= 0.5 and speed < lag_floor:
-            return True
-        if soft is not None and sr >= 0.5 and soft < 0.25:
-            return True
     if (
         score1 is not None
         and _finite(score1)
@@ -293,8 +185,8 @@ def attach_proxy_feedback(
     """
     Write ``proxy_feedback`` (+ related keys) onto ``candidate.metadata``.
 
-    Always stores ``last_metrics`` if missing. Returns True when a prompt-facing
-    ``proxy_feedback`` block was attached.
+    Highway: when enabled, always attach ``evidence_block`` (no threshold gate).
+    CrowdNav: selective attach after epoch/label gates (unchanged).
     """
     md = dict(candidate.metadata or {})
     md["last_metrics"] = dict(metrics)
@@ -304,26 +196,39 @@ def attach_proxy_feedback(
             score1 = float(md["score1_train"])
         except (TypeError, ValueError):
             score1 = None
+    score1_f = float(score1) if score1 is not None and _finite(score1) else None
 
-    attach = bool(enabled) and int(n_labeled_dataset) >= int(min_labels) and int(epoch) >= 1
+    if _is_highway_metrics(metrics):
+        if not bool(enabled):
+            md.pop("proxy_feedback", None)
+            md.pop("proxy_feedback_focus", None)
+            md.pop("proxy_hack_mode", None)
+            candidate.metadata = md
+            return False
+        block = evidence_block(metrics, score1=score1_f)
+        md["proxy_feedback"] = block
+        md["proxy_nav_scalar"] = nav_scalar(metrics)
+        md.pop("proxy_feedback_focus", None)
+        md.pop("proxy_hack_mode", None)
+        candidate.metadata = md
+        return True
+
+    attach = (
+        bool(enabled)
+        and int(n_labeled_dataset) >= int(min_labels)
+        and int(epoch) >= 1
+    )
     if attach and should_attach_proxy_feedback(
         metrics,
-        score1=float(score1) if score1 is not None and _finite(score1) else None,
+        score1=score1_f,
         population_score1=population_score1,
         population_scalars=population_scalars,
     ):
-        block = format_proxy_feedback_block(
-            metrics,
-            score1=float(score1) if score1 is not None and _finite(score1) else None,
-        )
+        block = format_proxy_feedback_block(metrics, score1=score1_f)
         md["proxy_feedback"] = block
         md["proxy_nav_scalar"] = nav_scalar(metrics)
         md["proxy_feedback_focus"] = focus_note_from_metrics(metrics)
-        mode = classify_highway_hack(metrics)
-        if mode:
-            md["proxy_hack_mode"] = mode
-        else:
-            md.pop("proxy_hack_mode", None)
+        md.pop("proxy_hack_mode", None)
         candidate.metadata = md
         return True
 
@@ -338,7 +243,7 @@ def attach_proxy_feedback(
 
 
 def proxy_summary_for_reflection(candidates: Sequence[RewardCandidate]) -> Optional[str]:
-    """One-line population summary for the global reflection string."""
+    """One-line population summary for the global reflection string (CrowdNav)."""
     rows: List[Tuple[str, float, float, float, float]] = []
     for c in candidates:
         md = c.metadata or {}
@@ -409,6 +314,7 @@ def apply_in_loop_d3(
     """
     from dataclasses import replace
 
+    from raise_core.explore import extract_llm_diagnosis
     from raise_core.llm import extract_python_code, normalize_to_compute_reward
 
     if prompts is not None:
@@ -445,6 +351,7 @@ def apply_in_loop_d3(
     try:
         raw = llm.complete(full_prompt)
         new_code = normalize_to_compute_reward(extract_python_code(raw))
+        diagnosis = extract_llm_diagnosis(raw)
     except Exception:  # noqa: BLE001
         return candidate
     reward_fn, err = validator.try_validate(new_code)
@@ -453,6 +360,7 @@ def apply_in_loop_d3(
     new_md = dict(md)
     new_md["in_loop_d3"] = True
     new_md["in_loop_d3_parent"] = candidate.candidate_id
+    new_md["llm_diagnosis"] = diagnosis
     return replace(
         candidate,
         candidate_id=f"{candidate.candidate_id}_d3",

@@ -1,4 +1,4 @@
-"""Unit tests for selective Stage-II proxy feedback → LLM prompts."""
+"""Unit tests for selective Stage-II proxy feedback → LLM prompts (CrowdNav path)."""
 
 from __future__ import annotations
 
@@ -56,59 +56,15 @@ def test_should_attach_on_bad_proxy():
     assert not should_attach_proxy_feedback({"SR": 0.4, "CR": 0.1, "TR": 0.1})
 
 
-def test_constant_cruise_hack_named_and_attached():
-    from raise_core.raise_loop.proxy_feedback import classify_highway_hack
-
-    cruise = {
-        "domain": "highway",
-        "SR": 1.0,
-        "CR": 0.0,
-        "TR": 0.0,
-        "mean_speed": 20.06,
-        "PL": 803.0,
-        "soft_success": 0.0,
-        "lane_change_rate": 0.0,
-        "speed_p10": 20.06,
-        "speed_p90": 20.06,
-        "progress_std": 0.0,
-        "fitness": 0.5,
-    }
-    assert classify_highway_hack(cruise) == "constant_cruise_hack"
-    assert should_attach_proxy_feedback(cruise)
-    note = focus_note_from_metrics(cruise)
-    assert "REWARD HACKING" in note
-    block = format_proxy_feedback_block(cruise, score1=0.3)
-    assert "mode=constant_cruise_hack" in block
-    assert "laneΔ=" in block
-
-
-def test_crash_attract_focus():
-    from raise_core.raise_loop.proxy_feedback import classify_highway_hack
-
-    crash = {
-        "domain": "highway",
-        "SR": 0.05,
-        "CR": 0.95,
-        "TR": 0.0,
-        "mean_speed": 25.0,
-        "PL": 400.0,
-        "soft_success": 0.05,
-    }
-    assert classify_highway_hack(crash) == "crash_attract"
-    assert "REWARD HACKING" in focus_note_from_metrics(crash)
-
-
 def test_should_attach_score1_proxy_mismatch():
-    # High Score1 + weak scalar vs population → attach
     pop_s1 = [0.1, 0.2, 0.3, 0.8, 0.9]
     pop_sc = [0.5, 0.4, 0.3, 0.2, -0.1]
     assert should_attach_proxy_feedback(
-        {"SR": 0.15, "CR": 0.1, "TR": 0.2},  # scalar ~ -0.05
+        {"SR": 0.15, "CR": 0.1, "TR": 0.2},
         score1=0.9,
         population_score1=pop_s1,
         population_scalars=pop_sc,
     )
-    # Mid Score1, mid scalar → no mismatch attach
     assert not should_attach_proxy_feedback(
         {"SR": 0.4, "CR": 0.1, "TR": 0.1},
         score1=0.3,
@@ -131,20 +87,7 @@ def test_attach_gates_on_epoch_and_labels():
     )
     assert "ProxyRefine" in (c.metadata or {})["proxy_feedback"]
 
-    # Good varied traffic-matching metrics clear stale block
-    good = {
-        "domain": "highway",
-        "SR": 0.75,
-        "CR": 0.05,
-        "TR": 0.05,
-        "mean_speed": 24.5,
-        "PL": 750.0,
-        "soft_success": 0.7,
-        "lane_change_rate": 0.05,
-        "speed_p10": 22.0,
-        "speed_p90": 27.0,
-        "progress_std": 35.0,
-    }
+    good = {"SR": 0.75, "CR": 0.05, "TR": 0.05}
     assert not attach_proxy_feedback(
         c, good, enabled=True, n_labeled_dataset=100, min_labels=16, epoch=2
     )
@@ -167,7 +110,7 @@ def test_proxy_summary_and_d3_select():
     pop = [
         _cand("a", metrics={"SR": 0.5, "CR": 0.0, "TR": 0.0}),
         _cand("b", metrics={"SR": 0.0, "CR": 0.5, "TR": 0.5}),
-        _cand("c", score=0.1),  # no metrics
+        _cand("c", score=0.1),
     ]
     summary = proxy_summary_for_reflection(pop)
     assert summary is not None

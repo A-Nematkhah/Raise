@@ -81,15 +81,15 @@ def test_gate_suppresses_low_speed_survival():
     }
     cruise = {
         **slow,
-        "mean_speed": 22.0,
+        "mean_speed": float(V_TARGET),
         "PL": 800.0,
         "soft_success": 1.0,
-        "speed_p10": 20.0,
-        "speed_p90": 24.0,
+        "speed_p10": float(V_TARGET) - 1.0,
+        "speed_p90": float(V_TARGET) + 1.0,
     }
     assert V_FLOOR < slow["speed_p10"] < V_MIN
     assert fitness_components(slow)["gate"] < 0.5
-    assert fitness_components(cruise)["gate"] > 0.9
+    assert fitness_components(cruise)["gate"] > 0.85
     assert highway_fitness(cruise) > highway_fitness(slow) + 0.5
 
 

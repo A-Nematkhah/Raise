@@ -13,21 +13,40 @@ from __future__ import annotations
 import math
 from typing import Any, Dict, Mapping, Optional
 
+from domains.highway.objective_constants import (
+    K_GATE,
+    LAG_SPEED_MPS,
+    V_FLOOR,
+    V_MIN,
+    V_TARGET,
+)
+
+# Re-export so existing ``from domains.highway.metrics import V_TARGET`` keeps working.
+__all__ = [
+    "V_TARGET",
+    "V_MIN",
+    "V_FLOOR",
+    "K_GATE",
+    "LAG_SPEED_MPS",
+    "HACK_PENALTY",
+    "highway_fitness",
+    "highway_navigation_scalar",
+    "fitness_components",
+    "attach_fitness",
+    "attach_selection_scalar",
+    "format_highway_metrics_line",
+]
+
+# Alias kept for callers that imported the private name.
+_LAG_SPEED_MPS = LAG_SPEED_MPS
 
 # Reference scales for ~40s highway-fast episodes at traffic cruise.
 _REF_PROGRESS_M = 800.0  # ~20 m/s * 40 s
-_REF_SPEED_MPS = 25.0
+_REF_SPEED_MPS = float(V_TARGET)
 
-# Speed gate (relative to target cruise).
-V_TARGET = 25.0  # m/s — nominal traffic / cruise target
-V_MIN = 0.4 * V_TARGET  # 10 m/s — below this, survival terms are gated down
-V_FLOOR = 0.15 * V_TARGET  # 3.75 m/s — hard disqualify (crawl / parked hack)
-K_GATE = 8.0  # sigmoid steepness around v_min
 HACK_PENALTY = 10.0  # magnitude when v_eff < v_floor (F = −HACK_PENALTY)
 LOW_SPEED_WEIGHT = 0.50  # weight on (v_min − v_eff)+ / v_target
 
-# Lag vs surrounding traffic (~≥20 m/s historically; soft@25 uses V_TARGET).
-_LAG_SPEED_MPS = 18.0
 # Constant-cruise detector extras (progress_std ≈ 0 + flat speed band).
 _CRUISE_PROGRESS_STD_MAX = 1.0
 _CRUISE_SPEED_SPREAD_MAX = 0.35
@@ -114,8 +133,10 @@ def _v_eff(src: Mapping[str, Any]) -> float:
 
 
 def _speed_gate(v_eff: float) -> float:
-    """sigmoid(k · (v_eff − v_min) / v_target) ∈ (0, 1)."""
-    return _sigmoid(K_GATE * (float(v_eff) - V_MIN) / V_TARGET)
+    """Continuous gate spanning V_MIN → V_TARGET (not saturated near V_MIN)."""
+    center = (V_MIN + V_TARGET) / 2.0
+    span = max(1e-6, V_TARGET - V_MIN)
+    return _sigmoid(K_GATE * (float(v_eff) - center) / span)
 
 
 def _low_speed_penalty(v_eff: float) -> float:
@@ -127,8 +148,8 @@ def _low_speed_penalty(v_eff: float) -> float:
 
 
 def _lag_penalty(sr: float, mean_speed: float) -> float:
-    if sr >= 0.5 and mean_speed < _LAG_SPEED_MPS:
-        return 0.40 * (_LAG_SPEED_MPS - mean_speed) / _LAG_SPEED_MPS
+    if sr >= 0.5 and mean_speed < LAG_SPEED_MPS:
+        return 0.40 * (LAG_SPEED_MPS - mean_speed) / LAG_SPEED_MPS
     return 0.0
 
 
@@ -141,11 +162,12 @@ def highway_fitness(metrics: Optional[Mapping[str, Any]]) -> float:
         v_eff = speed_p10 if present else mean_speed
         if v_eff < v_floor:  return −hack_penalty   # hard disqualify
 
-        gate = sigmoid(k · (v_eff − v_min) / v_target)
+        center = (v_min + v_target) / 2
+        gate = sigmoid(k · (v_eff − center) / (v_target − v_min))
 
         F = gate · (SR − CR − 0.5·TR)
           + 0.35 · tanh(progress / 800)
-          + 0.25 · tanh(mean_speed / 25)
+          + 0.25 · tanh(mean_speed / v_target)
           + 0.15 · soft_success · gate
           − lag_penalty − degeneracy_penalty − low_speed_penalty
     """
@@ -200,6 +222,10 @@ def fitness_components(metrics: Optional[Mapping[str, Any]]) -> Dict[str, float]
             "gate": 0.0,
             "disqualified": 1.0,
             "hack_penalty": float(HACK_PENALTY),
+            "v_min": float(V_MIN),
+            "v_floor": float(V_FLOOR),
+            "v_target": float(V_TARGET),
+            "low_speed_penalty": 0.0,
         }
     gate = _speed_gate(v_eff)
     return {
