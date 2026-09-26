@@ -89,11 +89,12 @@ PROFILE = {
     # Carry Score1-best into next gen so best-so-far cannot vanish when
     # every slot is overwritten by children (Alg.1 default is off).
     "elitism": True,
-    # Parent order = official highway_fitness (holdout). Pareto is diagnostic only.
-    "evolve_rank": "scalar",
+    # Parent order = auto-calibrated Pareto (matches LLM evidence / reflection).
+    # ``scalar`` (highway_fitness) remains available for diagnostics only.
+    "evolve_rank": "pareto",
     "evolve_rank_score1_weight": 0.4,
     # Wall-clock: DummyVecEnv n_envs>1 was slower on this CPU (serial envs).
-    # holdout_only skips train-dist eval; selection still uses holdout fitness.
+    # holdout_only skips train-dist eval; selection uses holdout metrics.
     "highway_n_envs": 1,
     "highway_label_workers": 1,
     "highway_warm_start": True,

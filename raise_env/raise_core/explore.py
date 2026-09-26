@@ -21,7 +21,7 @@ import os
 import re
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from raise_core.llm import (
     LLMClient,
@@ -150,8 +150,8 @@ class StageIEvolver:
         self.history: List[GenerationRecord] = []
         self.global_best: Optional[RewardCandidate] = None
         # Highway evidence trends (numbers only; fed into reflection).
-        self._highway_best_fitness_trend: List[float] = []
-        self._highway_best_mean_speed_trend: List[float] = []
+        self._highway_best_speed_feasible_trend: List[float] = []
+        self._highway_n_feasible_trend: List[str] = []
 
         n = self.config.population_size
         if self.config.n_crossover + self.config.n_mutation + self.config.n_random != n:
@@ -804,75 +804,115 @@ class StageIEvolver:
     def _build_highway_evidence_reflection(
         self, ranked: Sequence[RewardCandidate], *, generation: int
     ) -> str:
-        """Numbers-only trends + population table + prior LLM diagnoses."""
-        from raise_core.selection import candidate_fitness
+        """Pareto-ordered population table + feasible-speed trends + diagnoses."""
+
+        def _score1(c: RewardCandidate) -> float:
+            if c.score is None:
+                return float("-inf")
+            try:
+                return float(c.score)
+            except (TypeError, ValueError):
+                return float("-inf")
+
+        def _pareto_key(c: RewardCandidate) -> Tuple[int, int, float]:
+            md = c.metadata or {}
+            pr = md.get("pareto_rank")
+            if pr is not None:
+                try:
+                    return (0, int(pr), 0.0)
+                except (TypeError, ValueError):
+                    pass
+            # Unlabeled / not yet stamped: after all ranked, Score1 desc.
+            return (1, 0, -_score1(c))
+
+        ordered = sorted(ranked, key=_pareto_key)
 
         rows: List[Dict[str, Any]] = []
-        for c in ranked:
+        n_feasible = 0
+        n_total = 0
+        best_feas_speed: Optional[float] = None
+        for c in ordered:
             md = c.metadata or {}
             m = md.get("last_metrics")
             if not isinstance(m, dict):
                 m = {}
             holdout = m.get("holdout") if isinstance(m.get("holdout"), dict) else m
             try:
-                fit = float(candidate_fitness(c))
-            except Exception:  # noqa: BLE001
-                fit = float("-inf")
-            try:
                 speed = float(
-                    holdout.get("mean_speed", holdout.get("ITR", float("nan")))
+                    (holdout or {}).get(
+                        "mean_speed", (holdout or {}).get("ITR", float("nan"))
+                    )
                 )
             except (TypeError, ValueError):
                 speed = float("nan")
+            feas = md.get("pareto_feasible")
+            if feas is True:
+                n_feasible += 1
+                if speed == speed and (
+                    best_feas_speed is None or speed > best_feas_speed
+                ):
+                    best_feas_speed = float(speed)
+            if md.get("pareto_rank") is not None or isinstance(m, dict) and m:
+                n_total += 1
+            pr = md.get("pareto_rank")
             rows.append(
                 {
                     "id": str(c.candidate_id),
                     "SR": float(
-                        (holdout or {}).get("SR", (holdout or {}).get("sr", float("nan")))
+                        (holdout or {}).get(
+                            "SR", (holdout or {}).get("sr", float("nan"))
+                        )
                     ),
                     "CR": float(
-                        (holdout or {}).get("CR", (holdout or {}).get("cr", float("nan")))
+                        (holdout or {}).get(
+                            "CR", (holdout or {}).get("cr", float("nan"))
+                        )
                     ),
                     "mean_speed": speed,
-                    "fitness": fit,
+                    "pareto_rank": pr,
+                    "feasible": feas,
                     "diagnosis": md.get("llm_diagnosis"),
                 }
             )
-        rows_sorted = sorted(
-            rows, key=lambda r: r["fitness"], reverse=True
-        )
-        if rows_sorted:
-            best_fit = rows_sorted[0]["fitness"]
-            best_speed = rows_sorted[0]["mean_speed"]
-            if best_fit == best_fit:  # not NaN
-                self._highway_best_fitness_trend.append(float(best_fit))
-            if best_speed == best_speed:
-                self._highway_best_mean_speed_trend.append(float(best_speed))
-            self._highway_best_fitness_trend = self._highway_best_fitness_trend[-5:]
-            self._highway_best_mean_speed_trend = (
-                self._highway_best_mean_speed_trend[-5:]
-            )
 
-        def _fmt_trend(vals: Sequence[float]) -> str:
-            return "[" + ", ".join(f"{v:.3f}" for v in vals) + "]"
+        if n_total <= 0:
+            n_total = len(ordered)
+        if best_feas_speed is not None:
+            self._highway_best_speed_feasible_trend.append(float(best_feas_speed))
+        self._highway_n_feasible_trend.append(f"{n_feasible}/{max(1, n_total)}")
+        self._highway_best_speed_feasible_trend = (
+            self._highway_best_speed_feasible_trend[-5:]
+        )
+        self._highway_n_feasible_trend = self._highway_n_feasible_trend[-5:]
+
+        def _fmt_speed_trend(vals: Sequence[float]) -> str:
+            return "[" + ", ".join(f"{v:.1f}" for v in vals) + "]"
 
         trend = (
-            f"Gen{generation} best_fitness_trend="
-            f"{_fmt_trend(self._highway_best_fitness_trend)} "
-            f"best_mean_speed_trend="
-            f"{_fmt_trend(self._highway_best_mean_speed_trend)}"
+            f"Gen{generation} best_speed_among_feasible="
+            f"{_fmt_speed_trend(self._highway_best_speed_feasible_trend)} "
+            f"n_feasible_trend="
+            f"[{', '.join(self._highway_n_feasible_trend)}]"
         )
         table_bits = []
-        for r in rows_sorted:
+        for r in rows:
+            pr = r["pareto_rank"]
+            pr_s = f"pareto_rank={int(pr)}" if pr is not None else "pareto_rank=?"
+            feas = r["feasible"]
+            feas_s = (
+                f"feasible={bool(feas)}"
+                if feas is not None
+                else "feasible=?"
+            )
             table_bits.append(
                 f"{r['id']}: SR={r['SR']:.2f} CR={r['CR']:.2f} "
-                f"mean_speed={r['mean_speed']:.1f} fitness={r['fitness']:.3f}"
+                f"mean_speed={r['mean_speed']:.1f} {pr_s} {feas_s}"
             )
-        table = "Population(fitness desc): " + (
+        table = "Population(pareto_rank asc): " + (
             "; ".join(table_bits) if table_bits else "(empty)"
         )
         diag_bits: List[str] = []
-        for r in rows_sorted:
+        for r in rows:
             d = r.get("diagnosis")
             if d:
                 diag_bits.append(f"{r['id']}: {str(d).strip()}")

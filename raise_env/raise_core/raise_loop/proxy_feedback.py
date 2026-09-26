@@ -1,7 +1,7 @@
 """Attach Stage-II proxy metrics to LLM prompts inside the RAISE loop.
 
-Highway: always attach raw evidence (numbers + fitness decomposition) — the LLM
-diagnoses failure modes itself. CrowdNav: keep selective attach + focus notes.
+Highway: always attach raw holdout numbers + Pareto metadata when stamped —
+never the legacy ``highway_fitness`` scalar. CrowdNav: selective attach + focus notes.
 """
 
 from __future__ import annotations
@@ -36,15 +36,14 @@ def evidence_block(
     metrics: Mapping[str, Any],
     *,
     score1: Optional[float] = None,
+    metadata: Optional[Mapping[str, Any]] = None,
 ) -> str:
-    """Raw evaluation evidence + fitness decomposition — no interpretation."""
-    from domains.highway.metrics import fitness_components
-
+    """Holdout metrics + Pareto selection evidence (no legacy fitness/gate)."""
     src = metrics
     holdout = metrics.get("holdout")
     if isinstance(holdout, Mapping) and holdout:
         src = holdout
-    comps = fitness_components(metrics)
+    md = metadata or {}
     p10 = src.get("speed_p10", metrics.get("speed_p10", "n/a"))
     if p10 is not None and p10 != "n/a":
         try:
@@ -69,17 +68,54 @@ def evidence_block(
             f"soft_success={_f(src, 'soft_success'):.2f} "
             f"lane_change_rate={lc}"
         ),
-        (
-            f"Fitness={float(comps.get('fitness', 0.0)):.3f} "
-            f"(speed_gate={float(comps.get('gate', 0.0)):.3f} at "
-            f"v_eff={float(comps.get('v_eff', 0.0)):.1f}, "
-            f"v_min={comps.get('v_min', '?')}, v_target={comps.get('v_target', '?')}, "
-            f"low_speed_penalty={float(comps.get('low_speed_penalty', 0.0)):.3f})"
-        ),
     ]
+    if md.get("pareto_rank") is not None:
+        n = int(md.get("pareto_n") or 0) or "?"
+        feasible = md.get("pareto_feasible")
+        feas_s = (
+            f"feasible={bool(feasible)}"
+            if feasible is not None
+            else "feasible=unknown"
+        )
+        lines.append(
+            f"Pareto rank: {int(md['pareto_rank'])}/{n} "
+            f"(front-relative; lower is better; {feas_s})"
+        )
+        if md.get("pareto_v_floor") is not None:
+            lines.append(
+                "Auto-calibrated feasibility this run: "
+                f"min_speed≈{float(md['pareto_v_floor']):.1f}m/s "
+                "(measured from the environment's own traffic, not a fixed target), "
+                f"max_collision_rate≈{float(md.get('pareto_cr_ceiling', float('nan'))):.2f}, "
+                f"max_offroad_rate≈{float(md.get('pareto_tr_ceiling', float('nan'))):.2f}"
+            )
     if score1 is not None and _finite(score1):
         lines.append(f"Score1={float(score1):.3f}")
     return "\n".join(lines)
+
+
+def refresh_highway_evidence_after_pareto(
+    candidates: Sequence[RewardCandidate],
+) -> None:
+    """Re-render ``proxy_feedback`` once ``pareto_*`` keys are stamped."""
+    for c in candidates:
+        md = dict(getattr(c, "metadata", None) or {})
+        metrics = md.get("last_metrics")
+        if not isinstance(metrics, dict) or not metrics:
+            continue
+        if not _is_highway_metrics(metrics):
+            continue
+        score1 = getattr(c, "score", None)
+        if score1 is None and md.get("score1_train") is not None:
+            try:
+                score1 = float(md["score1_train"])
+            except (TypeError, ValueError):
+                score1 = None
+        score1_f = float(score1) if score1 is not None and _finite(score1) else None
+        md["proxy_feedback"] = evidence_block(
+            metrics, score1=score1_f, metadata=md
+        )
+        c.metadata = md
 
 
 def focus_note_from_metrics(metrics: Mapping[str, Any]) -> str:
@@ -116,10 +152,11 @@ def format_proxy_feedback_block(
     metrics: Mapping[str, Any],
     *,
     score1: Optional[float] = None,
+    metadata: Optional[Mapping[str, Any]] = None,
 ) -> str:
     """Compact block embedded in mutation weakness / D.3 feedback."""
     if _is_highway_metrics(metrics):
-        return evidence_block(metrics, score1=score1)
+        return evidence_block(metrics, score1=score1, metadata=metadata)
 
     sr = _f(metrics, "SR", "sr")
     cr = _f(metrics, "CR", "cr")
@@ -205,7 +242,7 @@ def attach_proxy_feedback(
             md.pop("proxy_hack_mode", None)
             candidate.metadata = md
             return False
-        block = evidence_block(metrics, score1=score1_f)
+        block = evidence_block(metrics, score1=score1_f, metadata=md)
         md["proxy_feedback"] = block
         md["proxy_nav_scalar"] = nav_scalar(metrics)
         md.pop("proxy_feedback_focus", None)
@@ -224,7 +261,9 @@ def attach_proxy_feedback(
         population_score1=population_score1,
         population_scalars=population_scalars,
     ):
-        block = format_proxy_feedback_block(metrics, score1=score1_f)
+        block = format_proxy_feedback_block(
+            metrics, score1=score1_f, metadata=md
+        )
         md["proxy_feedback"] = block
         md["proxy_nav_scalar"] = nav_scalar(metrics)
         md["proxy_feedback_focus"] = focus_note_from_metrics(metrics)
@@ -339,6 +378,7 @@ def apply_in_loop_d3(
     feedback = md.get("proxy_feedback") or format_proxy_feedback_block(
         metrics,
         score1=float(candidate.score) if candidate.score is not None else None,
+        metadata=md,
     )
     last_score = float(md.get("proxy_nav_scalar") or nav_scalar(metrics))
     user_prompt = format_d3_refinement(

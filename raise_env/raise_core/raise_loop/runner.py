@@ -370,7 +370,8 @@ class ClosedLoopRunner:
                 labeled_this_epoch = set()
                 epoch_resumed = False
                 ranked = evolver.score_population(population)
-                evolver.reflection = evolver._build_reflection(ranked, generation=g)
+                # Highway reflection is built AFTER Pareto evolve ranking (below)
+                # so the LLM sees the same order that selects parents.
                 if evolver.global_best is None or (
                     ranked[0].score is not None
                     and (
@@ -775,6 +776,19 @@ class ClosedLoopRunner:
                         elite,
                     )
                     ranked_for_evo = [live] + rest
+
+            # Refresh LLM evidence with stamped pareto_* (label-time attach
+            # runs before stamp_pareto_ranks) and build reflection from the
+            # same list used for breeding.
+            if domain_key == "highway":
+                from raise_core.raise_loop.proxy_feedback import (
+                    refresh_highway_evidence_after_pareto,
+                )
+
+                refresh_highway_evidence_after_pareto(ranked_for_evo)
+            evolver.reflection = evolver._build_reflection(
+                ranked_for_evo, generation=g
+            )
 
             epoch_rec = {
                 "epoch": g,

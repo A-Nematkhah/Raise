@@ -154,10 +154,11 @@ def _lag_penalty(sr: float, mean_speed: float) -> float:
 
 
 def highway_fitness(metrics: Optional[Mapping[str, Any]]) -> float:
+    # LEGACY: human-facing diagnostic scalar only. NOT used for evolutionary
+    # selection (see domains/highway/pareto_rank.py) and MUST NOT be surfaced to
+    # the LLM (see raise_core/raise_loop/proxy_feedback.py::evidence_block).
     """
-    Official highway fitness (higher better).
-
-    Prefer holdout metrics when present.
+    Legacy diagnostic scalar (higher better). Prefer holdout metrics when present.
 
         v_eff = speed_p10 if present else mean_speed
         if v_eff < v_floor:  return −hack_penalty   # hard disqualify

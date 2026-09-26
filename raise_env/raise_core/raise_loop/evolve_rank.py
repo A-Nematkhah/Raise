@@ -2,11 +2,12 @@
 
 CrowdNav / paper path keeps Score1-only ranking (``evolve_rank=score1``).
 
-Highway defaults to ``evolve_rank=scalar``: labeled parents ordered by
-``highway_fitness`` (holdout) so each generation breeds from the best
-navigation objective. Unlabeled seats stay Score1-ordered.
+Highway defaults to ``evolve_rank=pareto``: auto-calibrated feasibility +
+Pareto / crowding (see ``domains.highway.pareto_rank``). Unlabeled seats stay
+Score1-ordered after all labeled.
 
-``pareto`` remains available as an explicit diagnostic mode (not the default).
+``scalar`` (``highway_fitness``) remains available as an explicit diagnostic
+mode for human-facing logs — not the LLM-facing / breeding default.
 """
 
 from __future__ import annotations
@@ -22,12 +23,12 @@ _VALID = frozenset({"score1", "scalar", "hybrid", "pareto"})
 
 
 def parse_evolve_rank(value: object, *, domain: str = "crowdnav") -> EvolveRankMode:
-    """Default: score1 for crowdnav; scalar (fitness) for highway when unset/empty."""
+    """Default: score1 for crowdnav; pareto for highway when unset/empty."""
     raw = str(value or "").strip().lower()
     if raw in _VALID:
         return raw  # type: ignore[return-value]
     if str(domain).strip().lower() == "highway":
-        return "scalar"
+        return "pareto"
     return "score1"
 
 
@@ -66,7 +67,7 @@ def rank_population_pareto(
 ) -> List[RewardCandidate]:
     """
     Order labeled candidates via highway Pareto pipeline; unlabeled by Score1
-    after all labeled. Diagnostic / optional — not the highway breeding default.
+    after all labeled. Highway breeding default when ``evolve_rank=pareto``.
     """
     from domains.highway.pareto_rank import (
         calibrate_from_population,
@@ -129,10 +130,10 @@ def rank_population_for_evolution(
     score1
         Analytical Score1 only (CrowdNav / Alg.1 default).
     scalar
-        Highway default: labeled by ``highway_fitness`` / nav scalar; unlabeled
-        by Score1 after all labeled.
+        Labeled by legacy ``highway_fitness`` / nav scalar; unlabeled by Score1
+        after all labeled (diagnostic / human logs).
     pareto
-        Diagnostic: auto-calibrated feasibility + Pareto / crowding.
+        Highway default: auto-calibrated feasibility + Pareto / crowding.
     hybrid
         Among labeled: ``w·norm(Score1) + (1-w)·norm(fitness)``.
     """

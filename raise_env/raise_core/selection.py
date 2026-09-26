@@ -4,8 +4,9 @@ Fitness / navigation helpers for Stage II / III selection.
 Paper (Alg. 1): final rankings R2 / R3 use LLM evaluation of multi-objective
 M(r). Pipeline default is ``final_rank=llm`` (see ``ranking.py``).
 
-Highway uses an explicit ``fitness`` (``highway_fitness`` on holdout metrics).
-CrowdNav keeps the engineering scalar:
+Highway caches a legacy diagnostic ``fitness`` (``highway_fitness``) for
+human-facing logs/plots only — evolutionary parent selection uses Pareto
+(``domains.highway.pareto_rank`` / ``evolve_rank=pareto``). CrowdNav keeps:
 
     SR - CR - 0.5 * TR
 

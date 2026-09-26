@@ -4,32 +4,29 @@ from __future__ import annotations
 
 from typing import Optional
 
-from domains.highway.objective_constants import K_GATE, V_MIN, V_TARGET
+from domains.highway.objective_constants import V_TARGET
 
 DOMAIN_NAME = "highway"
 
-_FITNESS_OBJECTIVE = (
-    "The reward function you write is NOT the selection score. After PPO "
-    "training, policies are scored on held-out rollouts using this fitness "
-    "function (higher is better):\n"
-    "  v_eff = 10th-percentile speed over the episode\n"
-    f"  gate  = sigmoid({K_GATE} * (v_eff - ({V_MIN}+{V_TARGET})/2) / "
-    f"({V_TARGET}-{V_MIN}))\n"
-    "  fitness = gate * (SR - CR - 0.5*TR)\n"
-    f"          + 0.35*tanh(progress/800) + 0.25*tanh(mean_speed/{V_TARGET})\n"
-    "          + 0.15*soft_success*gate - penalties\n"
-    f"  where V_MIN={V_MIN}, V_TARGET={V_TARGET} m/s.\n"
-    "Use this to reason about trade-offs yourself; do not assume any specific "
-    "failure mode is or isn't present."
+_SELECTION_OBJECTIVE = (
+    "Your reward function is judged by training a PPO policy and evaluating it "
+    "on held-out rollouts. Among policies that meet a MINIMUM safety/speed bar "
+    "(auto-measured each run from the environment's own built-in traffic — not "
+    "a number we chose), candidates are ranked by Pareto dominance across: "
+    "survival rate, collision rate, off-road rate, forward progress, mean "
+    "speed, and traffic-matching (soft_success). A candidate is only worse than "
+    "another if it is equal-or-worse on every one of these and strictly worse "
+    "on at least one — there is no fixed weighting between safety and speed. "
+    "Reason about these trade-offs directly from the evidence given to you."
 )
 
 _DIAGNOSIS_BEFORE_CODE = (
     "Before writing code:\n"
     "1) In 2-4 sentences, based ONLY on the evidence given above (not on any "
     "assumption about what 'usually' goes wrong), diagnose what is currently "
-    "limiting fitness from improving further — e.g. a saturated objective term, "
-    "an unexploited safety/speed trade-off, a degenerate strategy, or something "
-    "else you notice in the numbers.\n"
+    "limiting the holdout objectives / Pareto standing — e.g. an unexploited "
+    "safety/speed trade-off, a degenerate strategy visible in the numbers, or "
+    "something else you notice.\n"
     "2) Then revise the reward function to address your own diagnosis.\n"
     "Output your diagnosis as plain text BEFORE the code fence. The code fence "
     "must contain ONLY the function, no diagnosis text inside it."
@@ -38,7 +35,7 @@ _DIAGNOSIS_BEFORE_CODE = (
 D1_SYSTEM_PROMPT = (
     "You are an expert in reinforcement learning and autonomous highway driving. "
     "Your goal is to design reward functions for highway-fast-v0. "
-    + _FITNESS_OBJECTIVE
+    + _SELECTION_OBJECTIVE
     + " Return **only** valid Python code enclosed within a fenced code block "
     "for this initial generation (no commentary outside the block). "
     "The code must be fully executable."
@@ -46,7 +43,7 @@ D1_SYSTEM_PROMPT = (
 
 D1_USER_PROMPT = """Please write a Python function named {func_name} for highway driving (highway-fast-v0).
 Task Description:
-- Output a scalar reward from the ego vehicle's current state so a policy can learn safe forward driving under the fitness objective above.
+- Output a scalar reward from the ego vehicle's current state so a policy can learn safe forward driving under the selection objective above.
 Function Interface (EXACT FIELD STRUCTURE):
 - Inputs:
   - state: A HighwayRewardState snapshot with ONLY these fields:
@@ -65,7 +62,7 @@ Function Interface (EXACT FIELD STRUCTURE):
 - Design Principles:
 - Prefer dense, finite shaping from documented state fields.
 - Interpretability: clear local variables; no extra signature args.
-- Reason about fitness trade-offs yourself from the objective statement; do not assume a named failure mode.
+- Reason about multi-objective trade-offs yourself from the selection objective; do not assume a named failure mode.
 Episode memory example:
 ```python
 def compute_reward(state, memory):
@@ -159,7 +156,7 @@ Mutation Task:
 
 D3_SYSTEM_PROMPT = (
     "You are a senior researcher in autonomous driving and RL. "
-    + _FITNESS_OBJECTIVE
+    + _SELECTION_OBJECTIVE
     + " IMPORTANT SCHEMA: def compute_reward(state, memory): — memory is a plain dict. "
     "state.ego has .x .y .vx .vy .heading .speed .lane_index .on_road. "
     "state.others is a tuple; iterate with 'for v in state.others:'. "
@@ -185,12 +182,12 @@ D4_EXTERNAL_KNOWLEDGE = f"""# External Knowledge — Highway Fast
 ## Task
 - Domain: multi-lane highway driving (highway-fast-v0)
 ## Selection objective (not the reward itself)
-{_FITNESS_OBJECTIVE}
+{_SELECTION_OBJECTIVE}
 ## Metrics (mapped to RAISE ProxyMetrics)
 - SR: fraction of episodes survived without collision/off-road
 - CR: collision rate; TR: off-road rate
 - mean_speed / mean_progress / soft_success / lane_change_rate as logged
-- soft_success: survive AND speed ≥ V_TARGET ({V_TARGET} m/s) AND meaningful progress
+- soft_success: traffic-matching indicator from held-out rollouts (as logged)
 """
 
 D5_SEED_FUNCTION = f'''def compute_reward(state, memory):

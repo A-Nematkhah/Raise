@@ -4,16 +4,15 @@ Automatic, formula-free ranking for the highway RAISE / EUREKA loop.
 Replaces hand-weighted ``highway_fitness`` for *population ordering*:
 
 1. Auto-calibrated feasibility thresholds (reference rollout or generation
-   percentiles) — no hand-picked ``v_min`` / ``v_floor``.
+   percentiles) — no hand-picked ``v_min`` / ``v_floor`` as the breeding bar.
 2. Pareto non-dominated sorting (NSGA-II) on raw objectives + crowding
    distance — no hand-picked linear weights.
 
-``rank_population()`` returns candidates best → worst for *diagnostic*
-Pareto mode. Highway breeding defaults to ``evolve_rank=scalar``
-(``highway_fitness``); see ``raise_core.raise_loop.evolve_rank``.
+``rank_population()`` returns candidates best → worst. Highway breeding
+defaults to ``evolve_rank=pareto`` (see ``raise_core.raise_loop.evolve_rank``).
 
-Scalar ``highway_fitness`` is the official parent / elite objective under
-``evolve_rank=scalar``.
+Scalar ``highway_fitness`` remains a human-facing diagnostic only and must
+not be shown to the LLM as the selection objective.
 """
 
 from __future__ import annotations

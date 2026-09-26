@@ -39,7 +39,7 @@ def _c(
 
 def test_parse_defaults():
     assert parse_evolve_rank("", domain="crowdnav") == "score1"
-    assert parse_evolve_rank(None, domain="highway") == "scalar"
+    assert parse_evolve_rank(None, domain="highway") == "pareto"
     assert parse_evolve_rank("hybrid", domain="crowdnav") == "hybrid"
     assert parse_evolve_rank("scalar", domain="highway") == "scalar"
     assert parse_evolve_rank("pareto", domain="highway") == "pareto"
