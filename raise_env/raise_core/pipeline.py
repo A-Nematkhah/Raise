@@ -139,6 +139,20 @@ class RaiseRunConfig:
     highway_label_workers: int = 1
     highway_warm_start: bool = True
     highway_eval_mode: str = "both"
+    # Observational mid-train holdout evals (diagnostics only; default off).
+    highway_diagnostics_groundtruth: bool = False
+    # Action space: meta_default | meta_fine | continuous (default keeps 6-gear meta).
+    highway_action_mode: str = "meta_default"
+    highway_action_continuous_lateral: bool = True
+    highway_meta_fine_low: float = 15.0
+    highway_meta_fine_high: float = 35.0
+    highway_meta_fine_n: int = 21
+    # Pareto feasibility: no_speed_floor | env_measured | population (legacy).
+    highway_calibration_mode: str = "no_speed_floor"
+    highway_pareto_use_progress: bool = True
+    highway_pareto_use_lane_change: bool = True
+    highway_pareto_use_overtake: bool = True
+    highway_elite_archive: str = "auto"
     # Crash-safe Stage III resume from output_dir/stage3/checkpoint.json (+ mid-PPO).
     stage3_resume: bool = True
     stage3_save_interval_updates: int = 50
@@ -349,6 +363,39 @@ class RaisePipeline:
             highway_warm_start=bool(getattr(cfg, "highway_warm_start", True)),
             highway_eval_mode=str(
                 getattr(cfg, "highway_eval_mode", None) or "both"
+            ),
+            highway_diagnostics_groundtruth=bool(
+                getattr(cfg, "highway_diagnostics_groundtruth", False)
+            ),
+            highway_action_mode=str(
+                getattr(cfg, "highway_action_mode", None) or "meta_default"
+            ),
+            highway_action_continuous_lateral=bool(
+                getattr(cfg, "highway_action_continuous_lateral", True)
+            ),
+            highway_meta_fine_low=float(
+                getattr(cfg, "highway_meta_fine_low", 15.0) or 15.0
+            ),
+            highway_meta_fine_high=float(
+                getattr(cfg, "highway_meta_fine_high", 35.0) or 35.0
+            ),
+            highway_meta_fine_n=int(
+                getattr(cfg, "highway_meta_fine_n", 21) or 21
+            ),
+            highway_calibration_mode=str(
+                getattr(cfg, "highway_calibration_mode", None) or "no_speed_floor"
+            ),
+            highway_pareto_use_progress=bool(
+                getattr(cfg, "highway_pareto_use_progress", True)
+            ),
+            highway_pareto_use_lane_change=bool(
+                getattr(cfg, "highway_pareto_use_lane_change", True)
+            ),
+            highway_pareto_use_overtake=bool(
+                getattr(cfg, "highway_pareto_use_overtake", True)
+            ),
+            highway_elite_archive=str(
+                getattr(cfg, "highway_elite_archive", None) or "auto"
             ),
         )
         if cfg.fast:
@@ -910,6 +957,24 @@ class RaisePipeline:
             resume=bool(getattr(cfg, "stage3_resume", True)),
             save_interval_updates=int(
                 getattr(cfg, "stage3_save_interval_updates", 50) or 0
+            ),
+            highway_diagnostics_groundtruth=bool(
+                getattr(cfg, "highway_diagnostics_groundtruth", False)
+            ),
+            highway_action_mode=str(
+                getattr(cfg, "highway_action_mode", None) or "meta_default"
+            ),
+            highway_action_continuous_lateral=bool(
+                getattr(cfg, "highway_action_continuous_lateral", True)
+            ),
+            highway_meta_fine_low=float(
+                getattr(cfg, "highway_meta_fine_low", 15.0) or 15.0
+            ),
+            highway_meta_fine_high=float(
+                getattr(cfg, "highway_meta_fine_high", 35.0) or 35.0
+            ),
+            highway_meta_fine_n=int(
+                getattr(cfg, "highway_meta_fine_n", 21) or 21
             ),
         )
         if cfg.stage3_use_stub:

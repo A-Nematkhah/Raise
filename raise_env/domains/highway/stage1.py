@@ -333,7 +333,7 @@ def _crawl_penalty(
     Positive penalty if mean return on lag/crawl successes ≥ fast ones.
 
     Crawl/lag trajs: behavior contains crawl|lag|decoy_lag, or mean_speed < 18.
-    Fast trajs: safe/fast tag or mean_speed ≥ 20 (traffic cruise).
+    Fast trajs: safe/fast tag or mean_speed ≥ 22 (mid-gear cruise).
     """
     crawl_rets: List[float] = []
     fast_rets: List[float] = []
@@ -345,7 +345,7 @@ def _crawl_penalty(
         beh = str(t.behavior or "").lower()
         if any(tag in beh for tag in ("crawl", "lag", "decoy_lag")) or spd < 18.0:
             crawl_rets.append(r)
-        elif "safe" in beh or "fast" in beh or spd >= 20.0:
+        elif "safe" in beh or "fast" in beh or spd >= 22.0:
             fast_rets.append(r)
     if not crawl_rets or not fast_rets:
         return 0.0
@@ -371,7 +371,7 @@ def _collision_decoy_penalty(
         if t.label == "collision" or "decoy_crash" in beh or "decoy_collision" in beh:
             crash_rets.append(r)
         elif t.label == "success" and (
-            "safe" in beh or "fast" in beh or _traj_mean_speed(t) >= 20.0
+            "safe" in beh or "fast" in beh or _traj_mean_speed(t) >= 22.0
         ):
             fast_rets.append(r)
     if not crash_rets or not fast_rets:

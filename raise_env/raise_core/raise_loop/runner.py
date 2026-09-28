@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from dataclasses import asdict, dataclass, field
@@ -135,6 +136,33 @@ class ClosedLoopRunner:
         self.trainer = trainer
         self.validator = validator
 
+    def _highway_ambient_traffic(self, cfg: ClosedLoopConfig) -> Optional[Dict[str, float]]:
+        """Cached non-ego traffic speed stats (``env_measured``; informational)."""
+        if hasattr(self, "_highway_ambient_cache"):
+            return self._highway_ambient_cache
+        self._highway_ambient_cache: Optional[Dict[str, float]] = None
+        path = os.path.join(closed_loop_dir(cfg.output_dir), "ambient_traffic.json")
+        if os.path.isfile(path):
+            try:
+                with open(path, "r", encoding="utf-8") as fh:
+                    self._highway_ambient_cache = dict(json.load(fh) or {}) or None
+                return self._highway_ambient_cache
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Failed to load ambient_traffic.json (%s)", exc)
+        if bool(cfg.use_stub):
+            return None
+        try:
+            from domains.highway.pareto_rank import collect_ambient_traffic_stats
+
+            stats = collect_ambient_traffic_stats(seed=int(cfg.seed))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Ambient traffic measurement failed (%s)", exc)
+            return None
+        if stats:
+            write_json(path, stats)
+            self._highway_ambient_cache = stats
+        return self._highway_ambient_cache
+
     def run(self) -> ClosedLoopResult:
         from raise_core.domains import load_domain, make_stage2_trainer_for_domain
         from raise_core.sandbox.validator import RewardValidator
@@ -155,6 +183,10 @@ class ClosedLoopRunner:
         resumed = ckpt is not None
 
         pack = load_domain(str(getattr(cfg, "domain", "crowdnav") or "crowdnav"))
+        if str(getattr(pack, "name", "")).lower() == "highway":
+            from domains.highway.action_config import configure_action_mode_from_config
+
+            configure_action_mode_from_config(cfg)
         from raise_core.surrogate.features import set_behavior_smoke_states
 
         if pack.smoke_states_fn is not None:
@@ -238,6 +270,24 @@ class ClosedLoopRunner:
             highway_n_envs=max(1, int(getattr(cfg, "highway_n_envs", 1) or 1)),
             highway_warm_start=bool(getattr(cfg, "highway_warm_start", True)),
             highway_eval_mode=str(getattr(cfg, "highway_eval_mode", None) or "both"),
+            highway_diagnostics_groundtruth=bool(
+                getattr(cfg, "highway_diagnostics_groundtruth", False)
+            ),
+            highway_action_mode=str(
+                getattr(cfg, "highway_action_mode", None) or "meta_default"
+            ),
+            highway_action_continuous_lateral=bool(
+                getattr(cfg, "highway_action_continuous_lateral", True)
+            ),
+            highway_meta_fine_low=float(
+                getattr(cfg, "highway_meta_fine_low", 15.0) or 15.0
+            ),
+            highway_meta_fine_high=float(
+                getattr(cfg, "highway_meta_fine_high", 35.0) or 35.0
+            ),
+            highway_meta_fine_n=int(
+                getattr(cfg, "highway_meta_fine_n", 21) or 21
+            ),
         )
 
         known_ids = existing_example_ids(cfg.surrogate_dataset)
@@ -671,7 +721,36 @@ class ClosedLoopRunner:
             w = float(getattr(cfg, "evolve_rank_score1_weight", 0.4) or 0.4)
 
             pareto_ref = None
-            if evolve_mode == "pareto" and domain_key == "highway":
+            calib_mode = None
+            pareto_objectives = None
+            ambient = None
+            if domain_key == "highway":
+                from domains.highway.pareto_rank import (
+                    ParetoObjectives,
+                    parse_calibration_mode,
+                )
+
+                calib_mode = parse_calibration_mode(
+                    getattr(cfg, "highway_calibration_mode", None)
+                )
+                pareto_objectives = ParetoObjectives(
+                    progress=bool(getattr(cfg, "highway_pareto_use_progress", True)),
+                    lane_change=bool(
+                        getattr(cfg, "highway_pareto_use_lane_change", True)
+                    ),
+                    overtake=bool(getattr(cfg, "highway_pareto_use_overtake", True)),
+                )
+            if (
+                evolve_mode == "pareto"
+                and domain_key == "highway"
+                and calib_mode == "env_measured"
+            ):
+                ambient = self._highway_ambient_traffic(cfg)
+            if (
+                evolve_mode == "pareto"
+                and domain_key == "highway"
+                and calib_mode == "population"
+            ):
                 # One-shot IDM / IDLE reference for auto thresholds (cached).
                 if not hasattr(self, "_highway_pareto_ref"):
                     self._highway_pareto_ref = None
@@ -743,14 +822,23 @@ class ClosedLoopRunner:
                 mode=evolve_mode,
                 hybrid_score1_weight=w,
                 pareto_ref=pareto_ref,
+                calibration_mode=calib_mode,
+                pareto_objectives=pareto_objectives,
+                ambient=ambient,
             )
             # Highway: demote identical Stage-II metric clones before breeding.
             if domain_key == "highway":
                 from raise_core.raise_loop.diversity import diversify_ranking
+                from raise_core.raise_loop.evolve_rank import (
+                    resolve_elite_archive_mode,
+                    select_pareto_elite,
+                )
 
                 ranked_for_evo = diversify_ranking(ranked_for_evo)
-                # Monotonic elite archive: best-ever fitness stays front for
-                # keep_runtime_elite / crossover parents.
+                elite_mode = resolve_elite_archive_mode(
+                    getattr(cfg, "highway_elite_archive", "auto"), calib_mode
+                )
+                # Legacy fitness is still tracked for epoch logs.
                 for c in ranked_for_evo:
                     fit = float(candidate_fitness(c))
                     if fit > float(
@@ -758,7 +846,17 @@ class ClosedLoopRunner:
                     ):
                         self._highway_best_ever_fitness = fit
                         self._highway_best_ever_cand = c
-                elite = getattr(self, "_highway_best_ever_cand", None)
+                if elite_mode == "pareto":
+                    self._highway_pareto_elite = select_pareto_elite(
+                        ranked_for_evo,
+                        getattr(self, "_highway_pareto_elite", None),
+                        calibration_mode=str(calib_mode),
+                        objectives=pareto_objectives,
+                        ambient=ambient,
+                    )
+                    elite = self._highway_pareto_elite
+                else:
+                    elite = getattr(self, "_highway_best_ever_cand", None)
                 if elite is not None and bool(cfg.keep_runtime_elite):
                     eid = str(elite.candidate_id)
                     rest = [
@@ -801,6 +899,17 @@ class ClosedLoopRunner:
                     if md.get("pareto_front0") or md.get("pareto_front") == 0:
                         front0_ids.append(str(c.candidate_id))
                 pareto_summary = {
+                    "calibration_mode": calib_mode,
+                    "objectives": (
+                        list(pareto_objectives.names())
+                        if pareto_objectives is not None
+                        else None
+                    ),
+                    "elite_id": (
+                        str(self._highway_pareto_elite.candidate_id)
+                        if getattr(self, "_highway_pareto_elite", None) is not None
+                        else None
+                    ),
                     "n_feasible": n_feas,
                     "n_population": len(ranked_for_evo),
                     "front0_ids": front0_ids,

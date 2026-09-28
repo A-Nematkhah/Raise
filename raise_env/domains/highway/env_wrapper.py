@@ -6,6 +6,10 @@ from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 
+from domains.highway.action_config import (
+    META_DEFAULT_SPEEDS_MPS as TARGET_SPEEDS_MPS,
+    resolve_action_dict,
+)
 from domains.highway.state import (
     EgoVehicle,
     HighwayRewardState,
@@ -35,7 +39,7 @@ def _require_highway_deps() -> None:
         ) from exc
 
 
-def default_env_config() -> Dict[str, Any]:
+def _base_env_config(action: Dict[str, Any]) -> Dict[str, Any]:
     # absolute=True: ego x is world frame so progress = Δx is well-defined.
     return {
         "observation": {
@@ -46,7 +50,7 @@ def default_env_config() -> Dict[str, Any]:
             "normalize": False,
             "see_behind": True,
         },
-        "action": {"type": "DiscreteMetaAction"},
+        "action": dict(action),
         "lanes_count": DEFAULT_LANES,
         "vehicles_count": DEFAULT_VEHICLES,
         "duration": DEFAULT_DURATION,
@@ -62,14 +66,30 @@ def default_env_config() -> Dict[str, Any]:
     }
 
 
+def default_env_config() -> Dict[str, Any]:
+    """Always ``meta_default`` six gears — Score1 collectors / legacy tests."""
+    return _base_env_config(
+        {
+            "type": "DiscreteMetaAction",
+            "target_speeds": list(TARGET_SPEEDS_MPS),
+        }
+    )
+
+
+def training_env_config() -> Dict[str, Any]:
+    """Env config for PPO train/eval using the active ``action_mode`` settings."""
+    return _base_env_config(resolve_action_dict())
+
+
 def holdout_env_config() -> Dict[str, Any]:
     """
     Harder eval distribution (not used for PPO rollouts).
 
     Denser traffic so a constant-speed lane-keep cruise is more likely to
     collide — selection metrics should come from this profile.
+    Uses the active action_mode so train/eval action spaces match.
     """
-    cfg = default_env_config()
+    cfg = training_env_config()
     cfg["vehicles_count"] = int(HOLDOUT_VEHICLES)
     cfg["lanes_count"] = int(DEFAULT_LANES)
     return cfg
@@ -89,7 +109,11 @@ def make_base_env(
     if config:
         nested = dict(cfg)
         for key, value in config.items():
-            if isinstance(value, dict) and isinstance(nested.get(key), dict):
+            # Always replace the whole action dict so ContinuousAction does not
+            # inherit leftover DiscreteMetaAction target_speeds from defaults.
+            if key == "action" and isinstance(value, dict):
+                nested[key] = dict(value)
+            elif isinstance(value, dict) and isinstance(nested.get(key), dict):
                 merged = dict(nested[key])
                 merged.update(value)
                 nested[key] = merged

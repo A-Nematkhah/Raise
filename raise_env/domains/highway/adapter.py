@@ -8,6 +8,7 @@ import time
 import warnings
 from typing import Any, Dict, Optional
 
+from domains.highway.overtake import OvertakeTracker
 from raise_core.refine import ProxyMetrics, StubPolicyTrainer
 
 logger = logging.getLogger(__name__)
@@ -155,19 +156,17 @@ def _eval_metrics(
     total_steps = 0
     high_speed_steps = 0
     outcomes: list[str] = []
+    ep_overtakes: list[int] = []
+    ep_passed_by: list[int] = []
 
-    # Soft-success: survive AND match *nominal traffic cruise* + progress.
+    # Soft-success: survive AND mean_speed ≥ V_TARGET AND progress ≥ threshold.
     #
-    # Threshold is intentionally FIXED at V_TARGET (not auto-calibrated like
-    # pareto_rank.v_floor). soft_success is an aspirational task-level bar
-    # ("did the policy match highway-fast nominal traffic speed?") and one of
-    # the six raw Pareto objectives. v_floor is a separate feasibility floor
-    # derived from measured env traffic / population percentiles — mixing the
-    # two would collapse soft_success into "above v_floor" and remove a
-    # distinct objective dimension. Empirical note: on recent 4h runs softμ≈0
-    # while mean_speed≈20–22 m/s (below V_TARGET=25), so this dimension stays
-    # near-constant until policies approach traffic cruise — that is expected
-    # for an aspirational bar, not a bug in calibration.
+    # Legacy human-facing diagnostic only — same convention as highway_fitness:
+    # NOT a Pareto / selection / LLM objective. Threshold stays FIXED at
+    # V_TARGET (intentionally NOT auto-calibrated) so the logged indicator is
+    # a stable aspirational bar for humans reading reports; selection uses
+    # continuous mean_speed instead. Do not feed this into pareto_rank or
+    # any breeding decision.
     from domains.highway.objective_constants import V_TARGET
 
     min_speed_for_soft = float(
@@ -191,14 +190,18 @@ def _eval_metrics(
         ep_high = 0
         crashed = False
         off = False
+        overtake_tracker = OvertakeTracker()
+        overtake_tracker.observe(env)
         while not done:
             action, _ = model.predict(obs, deterministic=True)
-            action_i = int(np.asarray(action).reshape(-1)[0])
-            # DiscreteMetaAction: 0=LANE_LEFT, 2=LANE_RIGHT — count each such step.
-            if action_i in (0, 2):
+            prev_lane = _lane_index_from_obs(obs)
+            obs, reward, terminated, truncated, info = env.step(action)
+            # Lane-change from lane index Δ (works for Discrete + Continuous).
+            # Continuous lateral=False never changes lane → rate stays 0.
+            cur_lane = _lane_index_from_obs(obs)
+            if prev_lane is not None and cur_lane is not None and prev_lane != cur_lane:
                 ep_lane_chg += 1
 
-            obs, reward, terminated, truncated, info = env.step(action)
             dt = float(getattr(env, "_time_step", 0.2))
             ep_t += dt
             prog = float(info.get("raise_progress", 0.0))
@@ -217,8 +220,12 @@ def _eval_metrics(
                 crashed = True
             if info.get("raise_off_road"):
                 off = True
+            if not (crashed or off):
+                overtake_tracker.observe(env)
             done = bool(terminated or truncated)
 
+        ep_overtakes.append(overtake_tracker.passes)
+        ep_passed_by.append(overtake_tracker.passed_by)
         if crashed:
             cr += 1
             outcomes.append("collision")
@@ -247,6 +254,9 @@ def _eval_metrics(
         high_speed_steps += ep_high
 
     n = float(n_eps)
+    total_km = float(sum(dists)) / 1000.0
+    total_overtakes = float(sum(ep_overtakes))
+    total_passed_by = float(sum(ep_passed_by))
     metrics = ProxyMetrics(
         sr=sr / n,
         cr=cr / n,
@@ -261,6 +271,11 @@ def _eval_metrics(
         "mean_progress": float(np.mean(dists)) if dists else 0.0,
         "soft_success": soft_ok / n,
         "lane_change_rate": float(lane_changes) / float(max(1, total_steps)),
+        "overtakes_per_km": total_overtakes / total_km if total_km > 0 else 0.0,
+        "passed_by_per_km": total_passed_by / total_km if total_km > 0 else 0.0,
+        "overtake_episode_frac": (
+            float(sum(1 for k in ep_overtakes if k > 0)) / n
+        ),
         "high_speed_frac": float(high_speed_steps) / float(max(1, total_steps)),
         "speed_p10": float(np.percentile(speeds, 10)) if speeds else 0.0,
         "speed_p90": float(np.percentile(speeds, 90)) if speeds else 0.0,
@@ -291,6 +306,21 @@ def _nearest_gap_from_obs(obs: Any) -> Optional[float]:
         if best is None or dist < best:
             best = dist
     return best
+
+
+def _lane_index_from_obs(obs: Any) -> Optional[int]:
+    """Discrete lane index from kinematics y (same mapping as kinematics_to_state)."""
+    import numpy as np
+
+    from domains.highway.env_wrapper import DEFAULT_LANES
+
+    arr = np.asarray(obs, dtype=np.float64)
+    if arr.ndim != 2 or arr.shape[0] < 1 or arr.shape[1] < 3:
+        return None
+    if float(arr[0][0]) <= 0.5:
+        return None
+    ego_y = float(arr[0][2])
+    return int(max(0, min(DEFAULT_LANES - 1, int(round(ego_y / 4.0 + 1.5)))))
 
 
 def metrics_to_highway_dict(metrics: ProxyMetrics) -> Dict[str, float]:
@@ -335,7 +365,13 @@ def _highway_warm_start_enabled(config: Any) -> bool:
 
 
 def _make_train_vec_env(reward_fn: Any, *, seed: int, n_envs: int, env_config: Optional[Dict] = None):
-    """DummyVecEnv of RewardInjectedHighwayEnv (Windows-safe; same-process)."""
+    """DummyVecEnv of Monitor(RewardInjectedHighwayEnv) (Windows-safe; same-process).
+
+    ``Monitor`` (no filename → no CSV) injects ``info["episode"]`` on episode
+    end so SB3 can log ``rollout/ep_rew_mean`` / ``ep_len_mean``. Eval uses a
+    separate unwrapped env in ``_eval_metrics`` and does not need Monitor.
+    """
+    from stable_baselines3.common.monitor import Monitor
     from stable_baselines3.common.vec_env import DummyVecEnv
 
     from domains.highway.env_wrapper import RewardInjectedHighwayEnv
@@ -344,11 +380,13 @@ def _make_train_vec_env(reward_fn: Any, *, seed: int, n_envs: int, env_config: O
 
     def _thunk(rank: int):
         def _init():
-            return RewardInjectedHighwayEnv(
+            env = RewardInjectedHighwayEnv(
                 reward_fn,
                 seed=int(seed) + int(rank) * 997,
                 config=env_config,
             )
+            # filename omitted on purpose — avoid per-worker Monitor CSVs.
+            return Monitor(env)
 
         return _init
 
@@ -469,8 +507,18 @@ class HighwayPPOTrainer:
             stage=stage_tag,
         )
 
+        from domains.highway.action_config import (
+            configure_action_mode_from_config,
+            is_continuous_mode,
+            spaces_compatible,
+        )
+        from domains.highway.env_wrapper import training_env_config
+
+        configure_action_mode_from_config(config)
+        env_cfg = training_env_config()
+
         train_env = _make_train_vec_env(
-            candidate.reward_fn, seed=seed, n_envs=n_envs
+            candidate.reward_fn, seed=seed, n_envs=n_envs, env_config=env_cfg
         )
         # Per-env rollout length; keep ~256 total steps/env as before when n_envs=1.
         n_steps = min(256, max(16, train_steps // max(1, n_envs)))
@@ -479,6 +527,7 @@ class HighwayPPOTrainer:
         # PPO.load + mutating n_steps leaves a stale RolloutBuffer (IndexError).
         # Warm-start copies policy weights only (new model → _last_obs is None,
         # so SB3 resets the env regardless of reset_num_timesteps).
+        # MlpPolicy: Discrete → Categorical; Box → Gaussian (read from env).
         model = PPO(
             "MlpPolicy",
             train_env,
@@ -492,7 +541,17 @@ class HighwayPPOTrainer:
         if warm_path:
             try:
                 donor = PPO.load(warm_path, device=device)
-                model.policy.load_state_dict(donor.policy.state_dict())
+                if not spaces_compatible(donor.action_space, model.action_space):
+                    logger.warning(
+                        "Warm-start skipped for %s: parent action_space %s "
+                        "!= current %s (action_mode mismatch)",
+                        cid,
+                        donor.action_space,
+                        model.action_space,
+                    )
+                    warm_path = None
+                else:
+                    model.policy.load_state_dict(donor.policy.state_dict())
                 del donor
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
@@ -504,10 +563,37 @@ class HighwayPPOTrainer:
 
         t0 = time.perf_counter()
         cb = _ppo_progress_callback(train_steps, desc=f"PPO {cid} ({stage_tag})")
+        from domains.highway.diagnostics_callback import (
+            GroundTruthCheckpointCallback,
+            RolloutDiagnosticsCallback,
+            combine_train_callbacks,
+        )
+
+        # Part 1: free PPO logger signals every rollout (always on; side-effect only).
+        diag_cbs = [
+            cb,
+            RolloutDiagnosticsCallback(
+                candidate_id=cid,
+                log_path=os.path.join(out_dir, "diagnostics_rollout.jsonl"),
+                continuous_actions=is_continuous_mode(),
+            ),
+        ]
+        # Part 2: cheap ground-truth evals — opt-in; never touches metadata/selection.
+        if bool(getattr(config, "highway_diagnostics_groundtruth", False)):
+            diag_cbs.append(
+                GroundTruthCheckpointCallback(
+                    candidate_id=cid,
+                    log_path=os.path.join(out_dir, "diagnostics_groundtruth.jsonl"),
+                    train_env_steps=train_steps,
+                    reward_fn=candidate.reward_fn,
+                    seed=seed,
+                    n_episodes=4,
+                )
+            )
         model.learn(
             total_timesteps=max(1, train_steps),
             progress_bar=False,
-            callback=cb,
+            callback=combine_train_callbacks(diag_cbs),
             # reset_num_timesteps omitted on purpose: this PPO is always freshly
             # constructed (_last_obs is None), so SB3 resets the env regardless
             # of that flag — passing it would be misleading documentation.
@@ -539,7 +625,9 @@ class HighwayPPOTrainer:
 
         train_dict: Dict[str, float] = {}
         if eval_mode == "both":
-            eval_env = RewardInjectedHighwayEnv(candidate.reward_fn, seed=seed)
+            eval_env = RewardInjectedHighwayEnv(
+                candidate.reward_fn, seed=seed, config=env_cfg
+            )
             try:
                 train_metrics = _eval_metrics(
                     eval_env,
@@ -607,6 +695,13 @@ class HighwayPPOTrainer:
             "pareto_v_floor",
             "pareto_cr_ceiling",
             "pareto_tr_ceiling",
+            "pareto_calibration_source",
+            "pareto_require_survival",
+            "pareto_ambient_traffic",
+            "pareto_use_progress",
+            "pareto_objectives",
+            "pareto_front",
+            "pareto_front0",
         ):
             md.pop(key, None)
         md["checkpoint_path"] = ckpt

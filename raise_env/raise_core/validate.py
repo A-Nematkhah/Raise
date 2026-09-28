@@ -104,6 +104,13 @@ class Stage3Config:
     resume: bool = True
     # Write policy weights every N PPO updates (0 = only final save).
     save_interval_updates: int = 50
+    # Highway observational mid-train holdout evals (diagnostics only; default off).
+    highway_diagnostics_groundtruth: bool = False
+    highway_action_mode: str = "meta_default"
+    highway_action_continuous_lateral: bool = True
+    highway_meta_fine_low: float = 15.0
+    highway_meta_fine_high: float = 35.0
+    highway_meta_fine_n: int = 21
 
 
 @dataclass

@@ -1,13 +1,21 @@
 #!/usr/bin/env python
 """Collect a Stage I trajectory dataset for the highway domain pack.
 
-Balanced labels for hybrid Score1 (incl. anti-hacking decoys):
+Balanced labels for hybrid Score1 (incl. anti-hacking decoys).
+Speed bands are non-overlapping and aligned with Score1 thresholds
+(crawl/lag < 18 m/s; traffic cruise ≥ 20 m/s; env gears 20..30):
 
-- ``safe`` / ``safe_fast`` → success with traffic cruise (~≥20 m/s)
-- ``crawl`` → success but very low speed (Score1 must *not* prefer)
-- ``lag`` / ``decoy_lag`` → success but lag behind traffic (~15 m/s decoy)
-- ``aggressive`` / ``random`` / ``decoy_crash`` → collisions (bait for crash-loving rewards)
-- ``swerve`` → collisions / rare off-road; synth timeout fill if needed
+- ``safe`` / ``safe_fast`` → success cruise in [22, 25] (mid gears)
+- ``crawl`` → success in [10, 14] (hard negative; well below Score1's 18)
+- ``lag`` / ``decoy_lag`` → success in [15, 17.5] (alive but lagging; still < 18)
+- ``aggressive`` / ``random`` / ``decoy_crash`` → collisions (crash bait)
+- ``swerve`` → lane-change collisions at spawn gear (~24); synth timeout fill
+
+NOTE (known limitation): this collector always uses DiscreteMetaAction
+(``meta_default`` gears via ``default_env_config`` / ``make_base_env``).
+It does **not** follow PPO ``highway_action_mode=continuous|meta_fine``.
+Score1 therefore remains a meta-action dataset and is not matched to
+continuous policies — out of scope for the action_mode switch.
 """
 
 from __future__ import annotations
@@ -38,30 +46,73 @@ def _clip_action(action: int, action_n: int) -> int:
     return int(max(0, min(int(action_n) - 1, int(action))))
 
 
+# Success speed bands after synthesis (m/s). Keep gaps so Score1 buckets
+# (crawl/lag < 18, fast ≥ 20) never double-count the same traj.
+_CRAWL_LO, _CRAWL_HI = 10.0, 14.0
+_LAG_LO, _LAG_HI = 15.0, 17.5
+_FAST_LO, _FAST_HI = 22.0, 25.0
+
+
 def _behavior_action(behavior: str, step: int, action_n: int) -> int:
     if behavior in ("safe", "safe_fast"):
-        # Cruise: mostly FASTER with occasional IDLE.
-        return _clip_action(_FASTER if step % 4 else _IDLE, action_n)
+        # Mostly IDLE on spawn gear (~24); rare FASTER. Synth → [22, 25].
+        return _clip_action(_IDLE if step % 5 else _FASTER, action_n)
     if behavior == "crawl":
-        # Survive by crawling — for Score1 negative example.
+        # Lowest gear (~20 raw); synth scales into [10, 14].
         return _clip_action(_SLOWER, action_n)
     if behavior in ("lag", "decoy_lag"):
-        # Mild lag behind traffic (~15 m/s after synth) — decoy success.
+        # Mix IDLE/SLOWER so raw stays near floor; synth → [15, 17.5].
         return _clip_action(_IDLE if step % 3 else _SLOWER, action_n)
     if behavior == "idle":
         return _clip_action(_IDLE, action_n)
     if behavior in ("aggressive", "decoy_crash"):
         return _clip_action(_FASTER if step % 2 else _IDLE, action_n)
     if behavior == "swerve":
+        # Lane-only: stays on spawn gear (~24) → collision bait, not a success band.
         return _clip_action(_LEFT if (step // 3) % 2 == 0 else _RIGHT, action_n)
     if behavior == "random":
         return int(np.random.randint(0, action_n))
     return _clip_action(_IDLE, action_n)
 
 
+def _scale_success_speeds(
+    states: list,
+    *,
+    target: float,
+    lo: float,
+    hi: float,
+    scale_lo: float,
+    scale_hi: float,
+) -> tuple[list, float, float]:
+    """Rescale speeds/progress of a success traj into ``[lo, hi]`` around ``target``."""
+    mean_speed = float(sum(float(s.speed) for s in states) / max(1, len(states)))
+    scale_v = float(target) / max(mean_speed, 1e-3)
+    scale_v = float(min(max(scale_v, scale_lo), scale_hi))
+    new_states = []
+    x = float(states[0].ego.x) if states else 0.0
+    for s in states:
+        spd = max(lo, min(hi, float(s.speed) * scale_v))
+        prog = float(s.progress) * scale_v
+        x = x + prog
+        new_states.append(
+            dc_replace(
+                s,
+                progress=prog,
+                speed=spd,
+                ego=dc_replace(s.ego, x=x, vx=spd, speed=spd),
+            )
+        )
+    mean_speed_out = float(
+        sum(float(s.speed) for s in new_states) / max(1, len(new_states))
+    )
+    mean_progress_out = float(sum(float(s.progress) for s in new_states))
+    return new_states, mean_speed_out, mean_progress_out
+
+
 def _env_overrides(behavior: str) -> dict:
     if behavior in ("safe", "safe_fast"):
-        return {"vehicles_count": 6, "lanes_count": 4, "duration": 40}
+        # Light traffic so cruise can finish episode (need enough success_fast).
+        return {"vehicles_count": 3, "lanes_count": 4, "duration": 40}
     if behavior == "crawl":
         return {"vehicles_count": 4, "lanes_count": 4, "duration": 40}
     if behavior in ("lag", "decoy_lag"):
@@ -84,8 +135,8 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=425)
     parser.add_argument(
         "--behaviors",
-        default="safe_fast,safe_fast,crawl,lag,aggressive,decoy_crash,random,swerve",
-        help="Comma-separated behaviors (repeat safe_fast for more cruise successes)",
+        default="safe_fast,safe_fast,safe_fast,crawl,lag,aggressive,decoy_crash,random,swerve",
+        help="Comma-separated behaviors (safe_fast repeated for more cruise successes)",
     )
     parser.add_argument(
         "--min-per-label",
@@ -123,6 +174,11 @@ def main() -> int:
     reward_fn = validator.validate_code(D5_SEED_FUNCTION)
 
     behaviors = [b.strip() for b in str(args.behaviors).split(",") if b.strip()]
+    print(
+        "NOTE: Stage1 collector uses DiscreteMetaAction (meta_default) only; "
+        "Score1 dataset is not matched to continuous PPO policies.",
+        flush=True,
+    )
     trajs = []
     tid = 0
     base_cfg = default_env_config()
@@ -188,69 +244,47 @@ def main() -> int:
             beh_out = behavior
             states_out = list(states)
 
-            # highway-env SLOWER often still cruises ~20 m/s; synthesize a true
-            # crawl / lag profile for Score1 negative / decoy examples.
+            # Raw SLOWER/FASTER land on discrete gears (~20 / ~30). Rescale
+            # success trajs into non-overlapping Score1 bands.
             if label == "success" and behavior == "crawl":
+                # Hard negative: well below Score1 crawl threshold (18).
                 beh_out = "crawl"
-                scale_v = 7.0 / max(mean_speed, 1e-3)
-                scale_v = float(min(max(scale_v, 0.15), 0.45))
-                new_states = []
-                x = float(states[0].ego.x) if states else 0.0
-                for s in states:
-                    spd = max(4.0, float(s.speed) * scale_v)
-                    prog = float(s.progress) * scale_v
-                    x = x + prog
-                    new_states.append(
-                        dc_replace(
-                            s,
-                            progress=prog,
-                            speed=spd,
-                            ego=dc_replace(
-                                s.ego,
-                                x=x,
-                                vx=spd,
-                                speed=spd,
-                            ),
-                        )
-                    )
-                states_out = new_states
-                mean_speed = float(sum(float(s.speed) for s in states_out) / max(1, len(states_out)))
-                mean_progress = float(sum(float(s.progress) for s in states_out))
+                target = _CRAWL_LO + (_CRAWL_HI - _CRAWL_LO) * float(ep % 5) / 4.0
+                states_out, mean_speed, mean_progress = _scale_success_speeds(
+                    states,
+                    target=target,
+                    lo=_CRAWL_LO,
+                    hi=_CRAWL_HI,
+                    scale_lo=0.35,
+                    scale_hi=1.0,
+                )
             elif label == "success" and behavior in ("lag", "decoy_lag"):
-                # Target ~15 m/s — looks “alive” but lags traffic (≥20).
+                # Soft decoy: still < 18 so Score1 lag/crawl path fires; above crawl.
                 beh_out = "decoy_lag"
-                target = 15.0
-                scale_v = target / max(mean_speed, 1e-3)
-                scale_v = float(min(max(scale_v, 0.45), 0.85))
-                new_states = []
-                x = float(states[0].ego.x) if states else 0.0
-                for s in states:
-                    spd = max(12.0, min(17.5, float(s.speed) * scale_v))
-                    prog = float(s.progress) * scale_v
-                    x = x + prog
-                    new_states.append(
-                        dc_replace(
-                            s,
-                            progress=prog,
-                            speed=spd,
-                            ego=dc_replace(
-                                s.ego,
-                                x=x,
-                                vx=spd,
-                                speed=spd,
-                            ),
-                        )
-                    )
-                states_out = new_states
-                mean_speed = float(sum(float(s.speed) for s in states_out) / max(1, len(states_out)))
-                mean_progress = float(sum(float(s.progress) for s in states_out))
+                target = _LAG_LO + (_LAG_HI - _LAG_LO) * float(ep % 3) / 2.0
+                states_out, mean_speed, mean_progress = _scale_success_speeds(
+                    states,
+                    target=target,
+                    lo=_LAG_LO,
+                    hi=_LAG_HI,
+                    scale_lo=0.45,
+                    scale_hi=0.95,
+                )
             elif label == "collision" and behavior == "decoy_crash":
                 beh_out = "decoy_crash"
-            elif label == "success" and (
-                behavior in ("safe", "safe_fast") or mean_speed >= 20.0
-            ):
+            elif label == "success" and behavior in ("safe", "safe_fast"):
+                # Positive cruise: mid-band [22, 25] (above Score1 fast floor of 20).
                 beh_out = "safe_fast"
-
+                target = _FAST_LO + (_FAST_HI - _FAST_LO) * float(ep % 4) / 3.0
+                states_out, mean_speed, mean_progress = _scale_success_speeds(
+                    states,
+                    target=target,
+                    lo=_FAST_LO,
+                    hi=_FAST_HI,
+                    scale_lo=0.70,
+                    scale_hi=1.10,
+                )
+            # Do not auto-relabel other successes (e.g. rare swerve) as safe_fast.
             trajs.append(
                 HighwayTrajectoryRecord(
                     trajectory_id=f"hw_{tid:04d}",
@@ -287,7 +321,16 @@ def main() -> int:
     counts = Counter(t.label for t in trajs)
     need_to = max(0, int(args.min_per_label) - int(counts.get("timeout", 0)))
     if need_to > 0:
-        donors = [t for t in trajs if t.label == "success" and len(t.states) >= 4]
+        # Prefer cruise donors so synth timeouts keep high-speed kinematics.
+        donors = [
+            t
+            for t in trajs
+            if t.label == "success"
+            and len(t.states) >= 4
+            and "safe" in str(t.behavior).lower()
+        ]
+        if not donors:
+            donors = [t for t in trajs if t.label == "success" and len(t.states) >= 4]
         if not donors:
             donors = [t for t in trajs if len(t.states) >= 4]
         for i in range(need_to):
@@ -336,7 +379,10 @@ def main() -> int:
         1
         for t in trajs
         if t.label == "success"
-        and float((t.metadata or {}).get("mean_speed") or 0) >= 20.0
+        and (
+            any(tag in str(t.behavior).lower() for tag in ("safe", "fast"))
+            or float((t.metadata or {}).get("mean_speed") or 0) >= _FAST_LO
+        )
     )
     decoy_crash_n = sum(
         1

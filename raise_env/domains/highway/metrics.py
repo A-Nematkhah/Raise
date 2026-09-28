@@ -260,6 +260,7 @@ def format_highway_metrics_line(metrics: Mapping[str, Any]) -> str:
     spd = _finite(src.get("mean_speed", src.get("ITR")))
     soft = _finite(src.get("soft_success"))
     lc = _finite(src.get("lane_change_rate"))
+    ovt = _finite(src.get("overtakes_per_km"))
     fit = highway_fitness(metrics)
     v_eff = _v_eff(src)
     gate = 0.0 if v_eff < V_FLOOR else _speed_gate(v_eff)
@@ -273,7 +274,7 @@ def format_highway_metrics_line(metrics: Mapping[str, Any]) -> str:
     return (
         f"{tag}SR={sr:.2f} CR={cr:.2f} TR={tr:.2f} "
         f"progress={pl:.1f}m speed={spd:.1f}m/s v_eff={v_eff:.1f} "
-        f"gate={gate:.2f} soft={soft:.3f} laneΔ={lc:.3f} "
+        f"gate={gate:.2f} soft={soft:.3f} laneΔ={lc:.3f} ovt/km={ovt:.2f} "
         f"fitness={fit:.3f}{dq}{counts}"
     )
 

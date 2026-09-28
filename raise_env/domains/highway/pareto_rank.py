@@ -13,6 +13,15 @@ defaults to ``evolve_rank=pareto`` (see ``raise_core.raise_loop.evolve_rank``).
 
 Scalar ``highway_fitness`` remains a human-facing diagnostic only and must
 not be shown to the LLM as the selection objective.
+
+Calibration modes (``calibration_mode``):
+
+* ``population``      — legacy: speed floor + CR/TR ceilings from generation
+  percentiles (IDLE-ego reference rollout first when usable).
+* ``env_measured``    — survival-only feasibility; ambient non-ego traffic
+  speed stats measured on the holdout config are attached as information.
+* ``no_speed_floor``  — survival-only feasibility (SR > 0), no speed floor,
+  no CR/TR ceilings; safety is handled by SR/CR/TR Pareto objectives.
 """
 
 from __future__ import annotations
@@ -21,6 +30,28 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
+
+from domains.highway.env_wrapper import (
+    HOLDOUT_SEED_OFFSET,
+    HOLDOUT_VEHICLES,
+    default_env_config,
+    make_base_env,
+)
+
+CALIBRATION_MODES = ("population", "env_measured", "no_speed_floor")
+DEFAULT_CALIBRATION_MODE = "no_speed_floor"
+LEGACY_CALIBRATION_MODE = "population"
+
+
+def parse_calibration_mode(value: object) -> str:
+    key = str(value or "").strip().lower()
+    if not key:
+        return DEFAULT_CALIBRATION_MODE
+    if key not in CALIBRATION_MODES:
+        raise ValueError(
+            f"calibration_mode must be one of {CALIBRATION_MODES}, got {value!r}"
+        )
+    return key
 
 
 @dataclass
@@ -36,15 +67,64 @@ class Metrics:
     soft_success: float
     speed_samples: Optional[np.ndarray] = field(default=None, repr=False)
     speed_p10: Optional[float] = None
+    lane_change_rate: float = 0.0
+    overtakes_per_km: float = 0.0
+
+
+@dataclass(frozen=True)
+class ParetoObjectives:
+    """Which optional objectives join SR, −CR, −TR, mean_speed in dominance."""
+
+    progress: bool = True
+    lane_change: bool = False
+    overtake: bool = False
+
+    def names(self) -> Tuple[str, ...]:
+        out = ["SR", "-CR", "-TR"]
+        if self.progress:
+            out.append("progress")
+        out.append("mean_speed")
+        if self.lane_change:
+            out.append("lane_change_rate")
+        if self.overtake:
+            out.append("overtakes_per_km")
+        return tuple(out)
+
+
+LEGACY_OBJECTIVES = ParetoObjectives()
 
 
 @dataclass
 class ReferenceStats:
-    """Auto-derived feasibility thresholds — no hand-picked constants."""
+    """
+    Feasibility thresholds. ``None`` disables a gate.
 
-    v_floor: float
-    cr_ceiling: float
-    tr_ceiling: float
+    ``require_survival`` makes a candidate feasible only if SR > 0.
+    ``source`` records how thresholds were obtained (shown verbatim to the LLM
+    so it is never told a population statistic was measured from traffic).
+    """
+
+    v_floor: Optional[float]
+    cr_ceiling: Optional[float]
+    tr_ceiling: Optional[float]
+    require_survival: bool = False
+    source: str = "population_percentile"
+    ambient: Optional[Dict[str, float]] = None
+
+
+def survival_only_reference(
+    *,
+    source: str = "no_speed_floor",
+    ambient: Optional[Mapping[str, float]] = None,
+) -> ReferenceStats:
+    return ReferenceStats(
+        v_floor=None,
+        cr_ceiling=None,
+        tr_ceiling=None,
+        require_survival=True,
+        source=str(source),
+        ambient=dict(ambient) if ambient else None,
+    )
 
 
 def calibrate_from_reference_rollout(
@@ -62,11 +142,14 @@ def calibrate_from_reference_rollout(
     Derive thresholds from a short non-RL rollout.
 
     Returns ``None`` when the reference ego is too crashy (e.g. IDLE with
-    CR≈1): that calibration made soft@20 cruise *infeasible* while crash@25
-    looked feasible. Callers should fall back to ``calibrate_from_population``.
+    CR≈1): that calibration made high-SR cruise *infeasible* while crashy
+    high-speed policies looked feasible. Callers should fall back to
+    ``calibrate_from_population``.
 
-    When usable, ``v_floor`` is clamped to ``[V_MIN, V_TARGET]`` so soft@25
-    policies are not auto-rejected.
+    When usable, ``v_floor`` is clamped to ``[V_MIN, V_TARGET]`` so the
+    feasibility floor stays inside the fitness diagnostic speed band
+    (``V_TARGET`` here is *not* an LLM/selection target — only a clamp for
+    auto-calibrated feasibility).
     """
     cr = float(reference_cr)
     if cr > float(max_usable_cr):
@@ -83,7 +166,7 @@ def calibrate_from_reference_rollout(
         v_lo, v_hi = float(_VMIN), float(_VT)
     except Exception:  # noqa: BLE001
         v_lo, v_hi = 10.0, 25.0
-    # Cap below soft@V_TARGET so matching-traffic survivors stay feasible.
+    # Keep auto-calibrated floor inside the diagnostic fitness speed band.
     v_floor = float(min(v_hi, max(v_lo, v_raw)))
     tr = float(reference_tr)
     cr_ceiling = min(1.0, cr * float(safety_margin) + 0.05)
@@ -96,6 +179,7 @@ def calibrate_from_reference_rollout(
         v_floor=v_floor,
         cr_ceiling=float(cr_ceiling),
         tr_ceiling=float(tr_ceiling),
+        source="idle_ego_reference_rollout",
     )
 
 
@@ -121,7 +205,10 @@ def calibrate_from_population(
             absolute_v_floor = 0.0
     if not population:
         return ReferenceStats(
-            v_floor=float(absolute_v_floor), cr_ceiling=1.0, tr_ceiling=1.0
+            v_floor=float(absolute_v_floor),
+            cr_ceiling=1.0,
+            tr_ceiling=1.0,
+            source="population_percentile",
         )
     speeds = np.asarray([effective_speed(m) for m in population], dtype=np.float64)
     crs = np.asarray([m.cr for m in population], dtype=np.float64)
@@ -147,7 +234,23 @@ def calibrate_from_population(
         v_floor=v_floor,
         cr_ceiling=float(cr_ceiling),
         tr_ceiling=float(np.percentile(trs, safety_percentile)),
+        source="population_percentile",
     )
+
+
+def reference_for_mode(
+    mode: str,
+    population: Sequence[Metrics],
+    *,
+    ambient: Optional[Mapping[str, float]] = None,
+) -> ReferenceStats:
+    """Per-generation thresholds for ``mode`` (see module docstring)."""
+    key = parse_calibration_mode(mode)
+    if key == "population":
+        return calibrate_from_population(population)
+    if key == "env_measured":
+        return survival_only_reference(source="env_measured", ambient=ambient)
+    return survival_only_reference(source="no_speed_floor")
 
 
 def effective_speed(m: Metrics, percentile: float = 10.0) -> float:
@@ -165,27 +268,39 @@ def effective_speed(m: Metrics, percentile: float = 10.0) -> float:
 
 
 def is_feasible(m: Metrics, ref: ReferenceStats) -> bool:
-    return (
-        effective_speed(m) >= ref.v_floor
-        and m.cr <= ref.cr_ceiling
-        and m.tr <= ref.tr_ceiling
-    )
+    if ref.require_survival and not m.sr > 0.0:
+        return False
+    if ref.v_floor is not None and effective_speed(m) < ref.v_floor:
+        return False
+    if ref.cr_ceiling is not None and m.cr > ref.cr_ceiling:
+        return False
+    if ref.tr_ceiling is not None and m.tr > ref.tr_ceiling:
+        return False
+    return True
 
 
-def _objectives(m: Metrics) -> np.ndarray:
-    """Objectives to maximize."""
-    return np.array(
-        [m.sr, -m.cr, -m.tr, m.progress, m.mean_speed, m.soft_success],
-        dtype=np.float64,
-    )
+def _objectives(m: Metrics, objectives: Optional[ParetoObjectives] = None) -> np.ndarray:
+    """Raw objectives to maximize (soft_success is diagnostic-only)."""
+    spec = objectives or LEGACY_OBJECTIVES
+    vals = [m.sr, -m.cr, -m.tr]
+    if spec.progress:
+        vals.append(m.progress)
+    vals.append(m.mean_speed)
+    if spec.lane_change:
+        vals.append(m.lane_change_rate)
+    if spec.overtake:
+        vals.append(m.overtakes_per_km)
+    return np.asarray(vals, dtype=np.float64)
 
 
-def dominates(a: Metrics, b: Metrics) -> bool:
-    oa, ob = _objectives(a), _objectives(b)
+def dominates(a: Metrics, b: Metrics, objectives: Optional[ParetoObjectives] = None) -> bool:
+    oa, ob = _objectives(a, objectives), _objectives(b, objectives)
     return bool(np.all(oa >= ob) and np.any(oa > ob))
 
 
-def pareto_fronts(feasible: Sequence[Metrics]) -> List[List[Metrics]]:
+def pareto_fronts(
+    feasible: Sequence[Metrics], objectives: Optional[ParetoObjectives] = None
+) -> List[List[Metrics]]:
     """Non-dominated sorting (NSGA-II front assignment)."""
     remaining = list(feasible)
     fronts: List[List[Metrics]] = []
@@ -193,7 +308,9 @@ def pareto_fronts(feasible: Sequence[Metrics]) -> List[List[Metrics]]:
         front = [
             a
             for a in remaining
-            if not any(dominates(b, a) for b in remaining if b is not a)
+            if not any(
+                dominates(b, a, objectives) for b in remaining if b is not a
+            )
         ]
         if not front:
             # Degenerate guard — should not happen; dump rest as last front.
@@ -205,7 +322,9 @@ def pareto_fronts(feasible: Sequence[Metrics]) -> List[List[Metrics]]:
     return fronts
 
 
-def crowding_distance(front: Sequence[Metrics]) -> Dict[str, float]:
+def crowding_distance(
+    front: Sequence[Metrics], objectives: Optional[ParetoObjectives] = None
+) -> Dict[str, float]:
     """
     Diversity tie-breaker within a front.
 
@@ -218,19 +337,21 @@ def crowding_distance(front: Sequence[Metrics]) -> Dict[str, float]:
         for m in front:
             dist[m.candidate_id] = float("inf")
         return dist
-    n_obj = len(_objectives(front[0]))
+    n_obj = len(_objectives(front[0], objectives))
     for k in range(n_obj):
-        ordered = sorted(front, key=lambda m: float(_objectives(m)[k]))
-        vmin = float(_objectives(ordered[0])[k])
-        vmax = float(_objectives(ordered[-1])[k])
+        ordered = sorted(
+            front, key=lambda m: float(_objectives(m, objectives)[k])
+        )
+        vmin = float(_objectives(ordered[0], objectives)[k])
+        vmax = float(_objectives(ordered[-1], objectives)[k])
         dist[ordered[0].candidate_id] = float("inf")
         dist[ordered[-1].candidate_id] = float("inf")
         if vmax == vmin:
             continue
         span = vmax - vmin
         for i in range(1, n - 1):
-            prev_v = float(_objectives(ordered[i - 1])[k])
-            next_v = float(_objectives(ordered[i + 1])[k])
+            prev_v = float(_objectives(ordered[i - 1], objectives)[k])
+            next_v = float(_objectives(ordered[i + 1], objectives)[k])
             dist[ordered[i].candidate_id] += (next_v - prev_v) / span
     return dist
 
@@ -241,6 +362,7 @@ def rank_population(
     reference_cr: Optional[float] = None,
     reference_tr: Optional[float] = None,
     ref: Optional[ReferenceStats] = None,
+    objectives: Optional[ParetoObjectives] = None,
 ) -> List[Metrics]:
     """
     Drop-in replacement for scalar fitness sort: best → worst.
@@ -268,13 +390,23 @@ def rank_population(
     infeasible = [m for m in pop if id(m) not in feas_ids]
 
     ordered: List[Metrics] = []
-    for front in pareto_fronts(feasible):
-        cd = crowding_distance(front)
+    for front in pareto_fronts(feasible, objectives):
+        cd = crowding_distance(front, objectives)
         # Higher crowding distance first (more diverse = preferred tie-break).
         front_sorted = sorted(
             front, key=lambda m: cd[m.candidate_id], reverse=True
         )
         ordered.extend(front_sorted)
+
+    if ref.require_survival:
+        # Survival-only mode carries no speed preference: order the non-
+        # surviving candidates by the same dominance + crowding.
+        for front in pareto_fronts(infeasible, objectives):
+            cd = crowding_distance(front, objectives)
+            ordered.extend(
+                sorted(front, key=lambda m: cd[m.candidate_id], reverse=True)
+            )
+        return ordered
 
     # Among infeasible: prefer closer-to-driving over pure crawlers (desc speed).
     infeasible_sorted = sorted(
@@ -332,6 +464,8 @@ def metrics_from_mapping(
         soft_success=_f("soft_success"),
         speed_samples=arr,
         speed_p10=p10,
+        lane_change_rate=_f("lane_change_rate"),
+        overtakes_per_km=_f("overtakes_per_km"),
     )
 
 
@@ -340,6 +474,7 @@ def stamp_pareto_ranks(
     ordered_metrics: Sequence[Metrics],
     *,
     ref: Optional[ReferenceStats] = None,
+    objectives: Optional[ParetoObjectives] = None,
 ) -> None:
     """
     Write Pareto rank metadata onto candidates (best rank = 0).
@@ -360,7 +495,7 @@ def stamp_pareto_ranks(
     else:
         feasible = list(ordered_metrics)
     front_of: Dict[str, int] = {}
-    for fi, front in enumerate(pareto_fronts(feasible)):
+    for fi, front in enumerate(pareto_fronts(feasible, objectives)):
         for m in front:
             front_of[str(m.candidate_id)] = int(fi)
 
@@ -380,11 +515,25 @@ def stamp_pareto_ranks(
             # Infeasible (or unknown): not on any feasible front.
             md["pareto_front"] = None
             md["pareto_front0"] = False
+        md.pop("pareto_use_progress", None)
+        md["pareto_objectives"] = list((objectives or LEGACY_OBJECTIVES).names())
         if ref is not None:
             md["pareto_feasible"] = bool(is_feasible(m, ref))
-            md["pareto_v_floor"] = float(ref.v_floor)
-            md["pareto_cr_ceiling"] = float(ref.cr_ceiling)
-            md["pareto_tr_ceiling"] = float(ref.tr_ceiling)
+            md["pareto_calibration_source"] = str(ref.source)
+            md["pareto_require_survival"] = bool(ref.require_survival)
+            for key, val in (
+                ("pareto_v_floor", ref.v_floor),
+                ("pareto_cr_ceiling", ref.cr_ceiling),
+                ("pareto_tr_ceiling", ref.tr_ceiling),
+            ):
+                if val is None:
+                    md.pop(key, None)
+                else:
+                    md[key] = float(val)
+            if ref.ambient:
+                md["pareto_ambient_traffic"] = dict(ref.ambient)
+            else:
+                md.pop("pareto_ambient_traffic", None)
         c.metadata = md
 
 
@@ -398,8 +547,6 @@ def collect_reference_rollout_stats(
 
     Returns (speed_samples, cr, tr) for ``calibrate_from_reference_rollout``.
     """
-    from domains.highway.env_wrapper import make_base_env
-
     speeds: List[float] = []
     n_crash = 0
     n_off = 0
@@ -438,6 +585,46 @@ def collect_reference_rollout_stats(
     cr = float(n_crash) / float(n_eps)
     tr = float(n_off) / float(n_eps)
     return np.asarray(speeds, dtype=np.float64), cr, tr
+
+
+def collect_ambient_traffic_stats(
+    *,
+    n_episodes: int = 4,
+    seed: int = 425,
+) -> Dict[str, float]:
+    """
+    Measure the speeds of the **non-ego** vehicles on the holdout traffic
+    config (ego held at its spawn gear with IDLE). Informational only — the
+    result never gates feasibility.
+    """
+    cfg = default_env_config()
+    cfg["vehicles_count"] = int(HOLDOUT_VEHICLES)
+    speeds: List[float] = []
+    n_eps = max(1, int(n_episodes))
+    for ep in range(n_eps):
+        env = make_base_env(seed=int(seed) + ep, config=cfg)
+        env.reset(seed=int(seed) + int(HOLDOUT_SEED_OFFSET) + ep)
+        done = False
+        while not done:
+            _obs, _r, terminated, truncated, _info = env.step(1)
+            ego = env.unwrapped.vehicle
+            for v in env.unwrapped.road.vehicles:
+                if v is not ego:
+                    speeds.append(float(v.speed))
+            done = bool(terminated or truncated)
+        env.close()
+    arr = np.asarray(speeds, dtype=np.float64)
+    if arr.size == 0:
+        return {}
+    return {
+        "traffic_speed_mean": float(np.mean(arr)),
+        "traffic_speed_p10": float(np.percentile(arr, 10)),
+        "traffic_speed_p50": float(np.percentile(arr, 50)),
+        "traffic_speed_p90": float(np.percentile(arr, 90)),
+        "n_samples": float(arr.size),
+        "n_episodes": float(n_eps),
+        "vehicles_count": float(HOLDOUT_VEHICLES),
+    }
 
 
 if __name__ == "__main__":

@@ -58,14 +58,23 @@ def test_evidence_block_pareto_not_legacy_fitness():
         "pareto_v_floor": 17.3,
         "pareto_cr_ceiling": 0.25,
         "pareto_tr_ceiling": 0.05,
+        "pareto_calibration_source": "population_percentile",
     }
     block = evidence_block(_metrics(), score1=0.4, metadata=md)
     low = block.lower()
     assert "Pareto rank" in block
     assert "Auto-calibrated feasibility" in block
+    assert "population statistic" in block
+    assert "measured from the environment's own traffic" not in block
     assert "fitness" not in low
     assert "gate" not in low
     assert "v_target" not in low
+
+
+def test_selection_objective_has_no_false_traffic_claim():
+    text = hwy_prompts._SELECTION_OBJECTIVE
+    assert "environment's own built-in traffic" not in text
+    assert "SR > 0" in text or "survive" in text.lower()
 
 
 def test_evidence_block_without_pareto_is_raw_metrics_only():
@@ -180,8 +189,29 @@ def test_prompts_describe_pareto_not_gate_formula():
     assert "V_TARGET" not in hwy_prompts.D1_SYSTEM_PROMPT
     assert "K_GATE" not in hwy_prompts.D1_SYSTEM_PROMPT
     assert "Pareto dominance" in hwy_prompts.D4_EXTERNAL_KNOWLEDGE
-    # Seed may still use a numeric traffic heuristic internally — allowed.
-    assert "traffic_speed" in hwy_prompts.D5_SEED_FUNCTION
+    assert "soft_success" not in hwy_prompts._SELECTION_OBJECTIVE
+    assert "traffic_speed" not in hwy_prompts.D5_SEED_FUNCTION
+    assert "V_TARGET" not in hwy_prompts.D5_SEED_FUNCTION
+    assert "typical highway speed" in hwy_prompts.D1_SYSTEM_PROMPT
+
+
+def test_d5_seed_has_no_fixed_speed_threshold():
+    """Guard: seed must not compare state.speed to a numeric literal."""
+    import re
+
+    src = hwy_prompts.D5_SEED_FUNCTION
+    assert "traffic_speed" not in src
+    # No state.speed < / <= / > / >= numeric comparison (fixed threshold).
+    pat = re.compile(
+        r"state\.speed\s*(?:<|>|<=|>=|==)\s*\d+(?:\.\d+)?|"
+        r"\d+(?:\.\d+)?\s*(?:<|>|<=|>=|==)\s*state\.speed"
+    )
+    assert pat.search(src) is None, src
+    # Five Pareto objectives (soft_success excluded).
+    from domains.highway.pareto_rank import Metrics, _objectives
+
+    m = Metrics("t", 1.0, 0.0, 0.0, 100.0, 20.0, 0.0)
+    assert len(_objectives(m)) == 5
 
 
 def test_runner_builds_reflection_after_ranked_for_evo():

@@ -6,8 +6,8 @@ redefine or hand-pick parallel literals downstream.
 
 from __future__ import annotations
 
-# Nominal traffic / cruise target (m/s). Soft-success and fitness speed terms
-# are expressed relative to this value.
+# Nominal traffic / cruise reference (m/s) for *diagnostic* fitness /
+# soft_success logging only — must NOT appear in LLM prompts or seed code.
 V_TARGET = 25.0
 
 # Below this, survival terms are gated down (m/s).

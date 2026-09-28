@@ -336,7 +336,7 @@ CLOSED_LOOP_PROFILES: Dict[str, Dict[str, Any]] = {
         "proxy_d3_per_epoch": 1,
         "stage2_eval": 20,
         "max_val_mae_gate": 0.35,
-        "stage3_k3": 80_000,
+        "stage3_k3": 70_000,
         "stage3_eval": 30,
         "stage3_rounds": 1,
         "elitism": True,
@@ -346,6 +346,13 @@ CLOSED_LOOP_PROFILES: Dict[str, Dict[str, Any]] = {
         "highway_label_workers": 1,
         "highway_warm_start": True,
         "highway_eval_mode": "holdout_only",
+        "highway_action_mode": "meta_default",
+        "highway_action_continuous_lateral": True,
+        "highway_calibration_mode": "no_speed_floor",
+        "highway_pareto_use_progress": True,
+        "highway_pareto_use_lane_change": True,
+        "highway_pareto_use_overtake": True,
+        "highway_elite_archive": "auto",
         "closed_loop": True,
         "output_dir_prefix": "results/highway_4h_",
     },
@@ -475,4 +482,32 @@ def profile_to_run_raise_argv(name: str) -> List[str]:
             argv.append("--no-highway-warm-start")
     if p.get("highway_eval_mode"):
         _flag("--highway-eval-mode", p["highway_eval_mode"])
+    if p.get("highway_action_mode"):
+        _flag("--highway-action-mode", p["highway_action_mode"])
+    if "highway_action_continuous_lateral" in p:
+        if p["highway_action_continuous_lateral"]:
+            argv.append("--highway-action-continuous-lateral")
+        else:
+            argv.append("--no-highway-action-continuous-lateral")
+    if p.get("highway_meta_fine_n") is not None:
+        _flag("--highway-meta-fine-n", p["highway_meta_fine_n"])
+    if p.get("highway_calibration_mode"):
+        _flag("--highway-calibration-mode", p["highway_calibration_mode"])
+    if "highway_pareto_use_progress" in p:
+        if p["highway_pareto_use_progress"]:
+            argv.append("--highway-pareto-use-progress")
+        else:
+            argv.append("--no-highway-pareto-use-progress")
+    if "highway_pareto_use_lane_change" in p:
+        if p["highway_pareto_use_lane_change"]:
+            argv.append("--highway-pareto-use-lane-change")
+        else:
+            argv.append("--no-highway-pareto-use-lane-change")
+    if "highway_pareto_use_overtake" in p:
+        if p["highway_pareto_use_overtake"]:
+            argv.append("--highway-pareto-use-overtake")
+        else:
+            argv.append("--no-highway-pareto-use-overtake")
+    if p.get("highway_elite_archive"):
+        _flag("--highway-elite-archive", p["highway_elite_archive"])
     return argv

@@ -355,6 +355,74 @@ def main() -> int:
         help="Warm-start highway PPO from parent checkpoint when available",
     )
     parser.add_argument(
+        "--highway-action-mode",
+        choices=("meta_default", "meta_fine", "continuous"),
+        default="meta_default",
+        help=(
+            "Highway action space: meta_default=6 gears DiscreteMetaAction (default), "
+            "meta_fine=linspace gears, continuous=ContinuousAction Box"
+        ),
+    )
+    parser.add_argument(
+        "--highway-action-continuous-lateral",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="ContinuousAction: include steering (Box(2,)); False → accel-only Box(1,)",
+    )
+    parser.add_argument(
+        "--highway-meta-fine-n",
+        type=int,
+        default=21,
+        help="meta_fine: number of target_speeds in linspace(low, high)",
+    )
+    parser.add_argument(
+        "--highway-calibration-mode",
+        choices=("no_speed_floor", "env_measured", "population"),
+        default="no_speed_floor",
+        help=(
+            "Highway Pareto feasibility: no_speed_floor=SR>0 only (default); "
+            "env_measured=SR>0 + measured non-ego traffic speeds shown as info; "
+            "population=legacy percentile speed floor + CR/TR ceilings"
+        ),
+    )
+    parser.add_argument(
+        "--highway-pareto-use-progress",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Include forward progress as a Pareto objective (default on)",
+    )
+    parser.add_argument(
+        "--highway-pareto-use-lane-change",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Include lane_change_rate as a Pareto objective (default on)",
+    )
+    parser.add_argument(
+        "--highway-pareto-use-overtake",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Include overtakes_per_km as a Pareto objective (default on)",
+    )
+    parser.add_argument(
+        "--highway-elite-archive",
+        choices=("auto", "pareto", "fitness"),
+        default="auto",
+        help=(
+            "Runtime elite kept across generations: pareto rank-0 or legacy "
+            "highway_fitness; auto=fitness only with --highway-calibration-mode population"
+        ),
+    )
+    parser.add_argument(
+        "--diagnostics-groundtruth-checkpoints",
+        action="store_true",
+        default=False,
+        help=(
+            "Highway only: during PPO, run cheap holdout evals at 20/40/60/80/100%% "
+            "of K2/K3 and log to diagnostics_groundtruth.jsonl (observational; "
+            "default off)"
+        ),
+    )
+    parser.add_argument(
         "--closed-loop-refit-every",
         type=int,
         default=8,
@@ -509,6 +577,19 @@ def main() -> int:
         highway_label_workers=max(1, int(args.highway_label_workers)),
         highway_warm_start=bool(args.highway_warm_start),
         highway_eval_mode=str(args.highway_eval_mode or "both"),
+        highway_diagnostics_groundtruth=bool(
+            args.diagnostics_groundtruth_checkpoints
+        ),
+        highway_action_mode=str(args.highway_action_mode or "meta_default"),
+        highway_action_continuous_lateral=bool(
+            args.highway_action_continuous_lateral
+        ),
+        highway_meta_fine_n=int(args.highway_meta_fine_n),
+        highway_calibration_mode=str(args.highway_calibration_mode),
+        highway_pareto_use_progress=bool(args.highway_pareto_use_progress),
+        highway_pareto_use_lane_change=bool(args.highway_pareto_use_lane_change),
+        highway_pareto_use_overtake=bool(args.highway_pareto_use_overtake),
+        highway_elite_archive=str(args.highway_elite_archive),
         closed_loop_k2=int(args.closed_loop_k2),
         closed_loop_refit_every_new_labels=int(args.closed_loop_refit_every),
         closed_loop_min_stage2_per_gen=int(args.closed_loop_min_stage2),

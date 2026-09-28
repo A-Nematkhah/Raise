@@ -170,10 +170,12 @@ def fingerprint_smoke_states(
         lab = str(traj.label or "").lower()
         spd = float(getattr(mid, "speed", 0.0) or 0.0)
         if buckets["crawl"] is None and (
-            "crawl" in beh or (lab == "success" and spd < 12.0)
+            "crawl" in beh
+            or "lag" in beh
+            or (lab == "success" and spd < 18.0)
         ):
             buckets["crawl"] = mid
-        elif buckets["fast"] is None and lab == "success" and spd >= 18.0:
+        elif buckets["fast"] is None and lab == "success" and spd >= 22.0:
             buckets["fast"] = mid
         elif buckets["collision"] is None and lab == "collision":
             buckets["collision"] = mid

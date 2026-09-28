@@ -121,6 +121,10 @@ def make_validator_for_domain(pack: DomainPack) -> Any:
 
     config = getattr(pack, "sandbox_config", None)
     smoke = pack.smoke_states_fn() if pack.smoke_states_fn is not None else None
+    if str(getattr(pack, "name", "")).lower() == "highway":
+        from domains.highway.reward_checks import make_highway_validator
+
+        return make_highway_validator(config=config, smoke_states=smoke)
     if smoke is not None:
         return RewardValidator(config=config, smoke_states=smoke)
     if config is not None:

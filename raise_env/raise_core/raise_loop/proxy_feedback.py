@@ -64,6 +64,20 @@ def evidence_block(
     except (TypeError, ValueError):
         n_ep_s = str(n_ep)
     progress = _f(src, "mean_progress", "PL", default=_f(metrics, "mean_progress", "PL"))
+    ovt = src.get("overtakes_per_km", metrics.get("overtakes_per_km", "n/a"))
+    if ovt is not None and ovt != "n/a":
+        try:
+            ovt = f"{float(ovt):.2f}"
+        except (TypeError, ValueError):
+            ovt = str(ovt)
+    ovt_frac = src.get(
+        "overtake_episode_frac", metrics.get("overtake_episode_frac", "n/a")
+    )
+    if ovt_frac is not None and ovt_frac != "n/a":
+        try:
+            ovt_frac = f"{float(ovt_frac):.2f}"
+        except (TypeError, ValueError):
+            ovt_frac = str(ovt_frac)
     lines = [
         (
             f"Holdout eval ({n_ep_s} episodes): "
@@ -71,8 +85,9 @@ def evidence_block(
             f"TR={_f(src, 'TR', 'tr'):.2f} mean_speed={_f(src, 'mean_speed', 'ITR'):.1f}m/s "
             f"speed_p10={p10} "
             f"progress={progress:.0f}m "
-            f"soft_success={_f(src, 'soft_success'):.2f} "
-            f"lane_change_rate={lc}"
+            f"lane_change_rate={lc} "
+            f"overtakes_per_km={ovt} "
+            f"overtake_episode_frac={ovt_frac}"
         ),
     ]
     if md.get("pareto_rank") is not None:
@@ -93,17 +108,71 @@ def evidence_block(
             f"Pareto rank: {int(md['pareto_rank'])}/{n} "
             f"(front-relative; lower is better; {feas_s}; {front_s})"
         )
-        if md.get("pareto_v_floor") is not None:
+        lines.extend(_feasibility_lines(md))
+        try:
+            from domains.highway.action_config import physical_speed_range
+
+            lo, hi = physical_speed_range()
             lines.append(
-                "Auto-calibrated feasibility this run: "
-                f"min_speed≈{float(md['pareto_v_floor']):.1f}m/s "
-                "(measured from the environment's own traffic, not a fixed target), "
-                f"max_collision_rate≈{float(md.get('pareto_cr_ceiling', float('nan'))):.2f}, "
-                f"max_offroad_rate≈{float(md.get('pareto_tr_ceiling', float('nan'))):.2f}"
+                f"Reachable action speed range this run: "
+                f"[{float(lo):.1f}, {float(hi):.1f}] m/s "
+                f"(from action config; not a preferred target)"
             )
+        except Exception:  # noqa: BLE001
+            pass
     if score1 is not None and _finite(score1):
         lines.append(f"Score1={float(score1):.3f}")
     return "\n".join(lines)
+
+
+def _feasibility_lines(md: Mapping[str, Any]) -> List[str]:
+    """Truthful description of how feasibility was decided this generation."""
+    out: List[str] = []
+    source = str(md.get("pareto_calibration_source") or "").strip()
+    if md.get("pareto_require_survival") or source in (
+        "no_speed_floor",
+        "env_measured",
+    ):
+        objs = md.get("pareto_objectives")
+        if isinstance(objs, (list, tuple)) and objs:
+            obj_s = ", ".join(str(x) for x in objs)
+        else:
+            obj_s = "SR, CR, TR, progress, mean_speed, lane_change_rate, overtakes_per_km"
+        out.append(
+            "Feasibility this run: survival only (SR > 0 on holdout). "
+            "No speed floor and no CR/TR ceilings — Pareto objectives: "
+            f"{obj_s}."
+        )
+    elif md.get("pareto_v_floor") is not None:
+        label = {
+            "population_percentile": (
+                "population statistic (percentile of this generation's "
+                "candidates — not measured from traffic)"
+            ),
+            "idle_ego_reference_rollout": (
+                "IDLE-ego reference rollout (ego speed, not ambient traffic)"
+            ),
+        }.get(source, source or "unknown source")
+        out.append(
+            "Auto-calibrated feasibility this run: "
+            f"min_speed≈{float(md['pareto_v_floor']):.1f}m/s "
+            f"({label}), "
+            f"max_collision_rate≈{float(md.get('pareto_cr_ceiling', float('nan'))):.2f}, "
+            f"max_offroad_rate≈{float(md.get('pareto_tr_ceiling', float('nan'))):.2f}"
+        )
+    ambient = md.get("pareto_ambient_traffic")
+    if isinstance(ambient, Mapping) and ambient:
+        mean = ambient.get("traffic_speed_mean")
+        p10 = ambient.get("traffic_speed_p10")
+        p90 = ambient.get("traffic_speed_p90")
+        if mean is not None and p10 is not None and p90 is not None:
+            out.append(
+                "Measured ambient (non-ego) traffic speed on holdout config: "
+                f"mean≈{float(mean):.1f}m/s "
+                f"p10≈{float(p10):.1f} p90≈{float(p90):.1f} "
+                "(informational only — not a target and not a feasibility gate)"
+            )
+    return out
 
 
 def refresh_highway_evidence_after_pareto(

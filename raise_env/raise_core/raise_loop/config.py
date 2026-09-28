@@ -71,6 +71,20 @@ class ClosedLoopConfig:
     highway_label_workers: int = 1
     highway_warm_start: bool = True
     highway_eval_mode: str = "both"  # both | holdout_only
+    # Observational mid-train holdout evals (diagnostics only; default off).
+    highway_diagnostics_groundtruth: bool = False
+    highway_action_mode: str = "meta_default"
+    highway_action_continuous_lateral: bool = True
+    highway_meta_fine_low: float = 15.0
+    highway_meta_fine_high: float = 35.0
+    highway_meta_fine_n: int = 21
+    # Pareto feasibility: no_speed_floor | env_measured | population (legacy).
+    highway_calibration_mode: str = "no_speed_floor"
+    highway_pareto_use_progress: bool = True
+    highway_pareto_use_lane_change: bool = True
+    highway_pareto_use_overtake: bool = True
+    # Runtime elite archive: auto (fitness iff population) | pareto | fitness.
+    highway_elite_archive: str = "auto"
 
     def apply_fast_profile(self) -> None:
         self.use_stub = True

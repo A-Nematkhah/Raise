@@ -12,7 +12,7 @@ mode for human-facing logs — not the LLM-facing / breeding default.
 
 from __future__ import annotations
 
-from typing import Any, List, Literal, Optional, Sequence, Tuple
+from typing import Any, List, Literal, Mapping, Optional, Sequence, Tuple
 
 from raise_core.explore import RewardCandidate
 from raise_core.selection import candidate_fitness, candidate_nav_scalar
@@ -64,16 +64,24 @@ def rank_population_pareto(
     reference_cr: Optional[float] = None,
     reference_tr: Optional[float] = None,
     ref: Any = None,
+    calibration_mode: Optional[str] = None,
+    objectives: Any = None,
+    ambient: Optional[Mapping[str, float]] = None,
 ) -> List[RewardCandidate]:
     """
     Order labeled candidates via highway Pareto pipeline; unlabeled by Score1
     after all labeled. Highway breeding default when ``evolve_rank=pareto``.
+
+    ``calibration_mode=None`` keeps the legacy population/reference behavior
+    for callers that do not pass a mode (final_select, older tests).
     """
     from domains.highway.pareto_rank import (
         calibrate_from_population,
         calibrate_from_reference_rollout,
         metrics_from_mapping,
+        parse_calibration_mode,
         rank_population,
+        reference_for_mode,
         stamp_pareto_ranks,
     )
 
@@ -90,6 +98,13 @@ def rank_population_pareto(
         blob = _metrics_blob(c) or {}
         metrics_list.append(metrics_from_mapping(str(c.candidate_id), blob))
 
+    mode_key = (
+        parse_calibration_mode(calibration_mode)
+        if calibration_mode is not None
+        else "population"
+    )
+    if ref is None and mode_key != "population":
+        ref = reference_for_mode(mode_key, metrics_list, ambient=ambient)
     if ref is None:
         if reference_speed_samples is not None:
             ref = calibrate_from_reference_rollout(
@@ -100,8 +115,8 @@ def rank_population_pareto(
         if ref is None:
             ref = calibrate_from_population(metrics_list)
 
-    ordered_m = rank_population(metrics_list, ref=ref)
-    stamp_pareto_ranks(labeled, ordered_m, ref=ref)
+    ordered_m = rank_population(metrics_list, ref=ref, objectives=objectives)
+    stamp_pareto_ranks(labeled, ordered_m, ref=ref, objectives=objectives)
 
     by_id = {str(m.candidate_id): i for i, m in enumerate(ordered_m)}
     ranked_l = sorted(
@@ -110,6 +125,63 @@ def rank_population_pareto(
     )
     ranked_u = sorted(unlabeled, key=_score1, reverse=True)
     return ranked_l + ranked_u
+
+
+ELITE_ARCHIVE_MODES = ("auto", "pareto", "fitness")
+
+
+def resolve_elite_archive_mode(value: object, calibration_mode: Optional[str]) -> str:
+    """``auto`` → legacy ``fitness`` for ``population`` calibration, else ``pareto``."""
+    key = str(value or "auto").strip().lower()
+    if key not in ELITE_ARCHIVE_MODES:
+        raise ValueError(
+            f"elite archive mode must be one of {ELITE_ARCHIVE_MODES}, got {value!r}"
+        )
+    if key != "auto":
+        return key
+    return "fitness" if str(calibration_mode or "") == "population" else "pareto"
+
+
+def select_pareto_elite(
+    population: Sequence[RewardCandidate],
+    previous_elite: Optional[RewardCandidate],
+    *,
+    calibration_mode: str,
+    objectives: Any = None,
+    ambient: Optional[Mapping[str, float]] = None,
+) -> Optional[RewardCandidate]:
+    """
+    Pareto rank-0 of ``population`` ∪ ``previous_elite`` (no metadata stamping).
+
+    The previous elite is listed first so it survives crowding-distance ties
+    and is only displaced when dominated or out-diversified.
+    """
+    from domains.highway.pareto_rank import (
+        metrics_from_mapping,
+        rank_population,
+        reference_for_mode,
+    )
+
+    pool: List[RewardCandidate] = []
+    seen: set = set()
+    for c in ([previous_elite] if previous_elite is not None else []) + list(
+        population
+    ):
+        cid = str(c.candidate_id)
+        if cid in seen or not _metrics_blob(c):
+            continue
+        seen.add(cid)
+        pool.append(c)
+    if not pool:
+        return previous_elite
+    metrics_list = [
+        metrics_from_mapping(str(c.candidate_id), _metrics_blob(c) or {})
+        for c in pool
+    ]
+    ref = reference_for_mode(calibration_mode, metrics_list, ambient=ambient)
+    ordered = rank_population(metrics_list, ref=ref, objectives=objectives)
+    best_id = str(ordered[0].candidate_id)
+    return next(c for c in pool if str(c.candidate_id) == best_id)
 
 
 def rank_population_for_evolution(
@@ -121,6 +193,9 @@ def rank_population_for_evolution(
     reference_cr: Optional[float] = None,
     reference_tr: Optional[float] = None,
     pareto_ref: Any = None,
+    calibration_mode: Optional[str] = None,
+    pareto_objectives: Any = None,
+    ambient: Optional[Mapping[str, float]] = None,
 ) -> List[RewardCandidate]:
     """
     Return a new list sorted best-first for crossover/mutation parents.
@@ -153,6 +228,9 @@ def rank_population_for_evolution(
             reference_cr=reference_cr,
             reference_tr=reference_tr,
             ref=pareto_ref,
+            calibration_mode=calibration_mode,
+            objectives=pareto_objectives,
+            ambient=ambient,
         )
 
     labeled = [c for c in pop if _has_proxy(c)]

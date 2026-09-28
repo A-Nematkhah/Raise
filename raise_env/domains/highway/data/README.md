@@ -15,8 +15,9 @@ python scripts/collect_highway_stage1_dataset.py
 ```
 
 Expect roughly:
-- `success` with `behavior=safe_fast` (high speed/progress)
-- `success` with `behavior=crawl` (low speed — negative example for Score1)
+- `success` with `behavior=safe_fast` (cruise [22, 25] m/s)
+- `success` with `behavior=crawl` ([10, 14] m/s — hard negative for Score1)
+- `success` with `behavior=decoy_lag` ([15, 17.5] m/s — soft lag decoy)
 - `collision` / `timeout`
 
 Manifest lists labels; each traj stores `metadata.mean_speed` / `mean_progress`.

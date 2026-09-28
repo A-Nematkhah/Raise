@@ -10,7 +10,7 @@ Locked PROFILE (SB3 PPO, env_steps):
 
   Warm:   n=16 labels @ K2=12_000 env steps
   Loop:   N=6, G=4, K2=12_000, min_labels_gate=16 (or MAE≤0.35), E2=20, AL=2/epoch
-  Stage III: R=1, K3=80_000, E3=30, no H-sweep; elites=kept∪best_s2∪best_fitness
+  Stage III: R=1, K3=70_000, E3=30, no H-sweep; elites=kept∪best_s2∪best_fitness
 
 From raise_env/:
 
@@ -211,12 +211,21 @@ def _print_profile(args, *, warm_n=None) -> None:
         "highway_label_workers",
         "highway_warm_start",
         "highway_eval_mode",
+        "highway_calibration_mode",
+        "highway_pareto_use_progress",
+        "highway_pareto_use_lane_change",
+        "highway_pareto_use_overtake",
+        "highway_elite_archive",
     ):
-        print(f"  {key}: {PROFILE[key]}")
+        print(f"  {key}: {PROFILE.get(key)}")
     print(f"  llm: {args.llm}")
     print(f"  device: {args.device}")
     print(f"  dataset: {PROFILE['stage1_dataset']}")
     print(f"  warm_root: {PROFILE['warm_root']}")
+    print(
+        f"  diagnostics_groundtruth: "
+        f"{bool(getattr(args, 'diagnostics_groundtruth_checkpoints', False))}"
+    )
     if warm_n is not None:
         print(f"  warm labels copied: ≈{warm_n}")
     print("  estimate: ~3.5–5 h wall (GPU + seed/groq LLM)")
@@ -261,6 +270,54 @@ def main() -> int:
         "--skip-prereq-check",
         action="store_true",
         help="Start even if Groq keys / dataset pre-flight checks fail",
+    )
+    parser.add_argument(
+        "--diagnostics-groundtruth-checkpoints",
+        action="store_true",
+        default=False,
+        help=(
+            "Observational: cheap mid-train holdout evals at 20/40/60/80/100%% of "
+            "each candidate's train budget (see diagnostics_groundtruth.jsonl). "
+            "Default off — enables Part 2 of the adaptive-budget study."
+        ),
+    )
+    parser.add_argument(
+        "--highway-action-mode",
+        choices=("meta_default", "meta_fine", "continuous"),
+        default=None,
+        help="Override PROFILE highway_action_mode (default: meta_default)",
+    )
+    parser.add_argument(
+        "--no-highway-action-continuous-lateral",
+        action="store_true",
+        help="ContinuousAction: acceleration only (Box(1,))",
+    )
+    parser.add_argument(
+        "--highway-calibration-mode",
+        choices=("no_speed_floor", "env_measured", "population"),
+        default=None,
+        help="Override PROFILE highway_calibration_mode (default: no_speed_floor)",
+    )
+    parser.add_argument(
+        "--no-highway-pareto-use-progress",
+        action="store_true",
+        help="Drop forward progress from the Pareto objectives",
+    )
+    parser.add_argument(
+        "--no-highway-pareto-use-lane-change",
+        action="store_true",
+        help="Drop lane_change_rate from the Pareto objectives",
+    )
+    parser.add_argument(
+        "--no-highway-pareto-use-overtake",
+        action="store_true",
+        help="Drop overtakes_per_km from the Pareto objectives",
+    )
+    parser.add_argument(
+        "--highway-elite-archive",
+        choices=("auto", "pareto", "fitness"),
+        default=None,
+        help="Override PROFILE highway_elite_archive (default: auto)",
     )
     args = parser.parse_args()
 
@@ -418,14 +475,72 @@ def main() -> int:
         cmd.append("--highway-warm-start")
     else:
         cmd.append("--no-highway-warm-start")
+    action_mode = str(
+        args.highway_action_mode
+        or PROFILE.get("highway_action_mode")
+        or "meta_default"
+    )
+    cmd.extend(["--highway-action-mode", action_mode])
+    if bool(args.no_highway_action_continuous_lateral) or not bool(
+        PROFILE.get("highway_action_continuous_lateral", True)
+    ):
+        cmd.append("--no-highway-action-continuous-lateral")
+    else:
+        cmd.append("--highway-action-continuous-lateral")
+    calib_mode = str(
+        args.highway_calibration_mode
+        or PROFILE.get("highway_calibration_mode")
+        or "no_speed_floor"
+    )
+    cmd.extend(["--highway-calibration-mode", calib_mode])
+    if bool(args.no_highway_pareto_use_progress) or not bool(
+        PROFILE.get("highway_pareto_use_progress", True)
+    ):
+        cmd.append("--no-highway-pareto-use-progress")
+    else:
+        cmd.append("--highway-pareto-use-progress")
+    if bool(args.no_highway_pareto_use_lane_change) or not bool(
+        PROFILE.get("highway_pareto_use_lane_change", True)
+    ):
+        cmd.append("--no-highway-pareto-use-lane-change")
+    else:
+        cmd.append("--highway-pareto-use-lane-change")
+    if bool(args.no_highway_pareto_use_overtake) or not bool(
+        PROFILE.get("highway_pareto_use_overtake", True)
+    ):
+        cmd.append("--no-highway-pareto-use-overtake")
+    else:
+        cmd.append("--highway-pareto-use-overtake")
+    elite_archive = str(
+        args.highway_elite_archive or PROFILE.get("highway_elite_archive") or "auto"
+    )
+    cmd.extend(["--highway-elite-archive", elite_archive])
     if args.llm_model:
         cmd.extend(["--llm-model", str(args.llm_model)])
     if args.verbose:
         cmd.append("--verbose")
+    if bool(args.diagnostics_groundtruth_checkpoints):
+        cmd.append("--diagnostics-groundtruth-checkpoints")
 
     resume_cmd = f"python scripts/run_raise_highway_4h.py --resume {out}"
+    if bool(args.diagnostics_groundtruth_checkpoints):
+        resume_cmd += " --diagnostics-groundtruth-checkpoints"
+    if args.highway_action_mode:
+        resume_cmd += f" --highway-action-mode {args.highway_action_mode}"
+    if args.highway_calibration_mode:
+        resume_cmd += f" --highway-calibration-mode {args.highway_calibration_mode}"
+    if args.no_highway_pareto_use_progress:
+        resume_cmd += " --no-highway-pareto-use-progress"
+    if args.no_highway_pareto_use_lane_change:
+        resume_cmd += " --no-highway-pareto-use-lane-change"
+    if args.no_highway_pareto_use_overtake:
+        resume_cmd += " --no-highway-pareto-use-overtake"
+    if args.highway_elite_archive:
+        resume_cmd += f" --highway-elite-archive {args.highway_elite_archive}"
     print("cmd:", " ".join(cmd))
     print(f"mode:   {'RESUME' if resuming else 'NEW'}")
+    print(f"action_mode: {action_mode}")
+    print(f"calibration_mode: {calib_mode}  elite_archive: {elite_archive}")
     print(f"output: {out}")
     print(f"If interrupted: {resume_cmd}")
     code = int(subprocess.call(cmd))

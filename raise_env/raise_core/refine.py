@@ -94,6 +94,13 @@ class Stage2Config:
     highway_n_envs: int = 1
     highway_warm_start: bool = True
     highway_eval_mode: str = "both"
+    # Observational mid-train holdout evals (diagnostics only; default off).
+    highway_diagnostics_groundtruth: bool = False
+    highway_action_mode: str = "meta_default"
+    highway_action_continuous_lateral: bool = True
+    highway_meta_fine_low: float = 15.0
+    highway_meta_fine_high: float = 35.0
+    highway_meta_fine_n: int = 21
 
 
 @dataclass

@@ -4,20 +4,20 @@ from __future__ import annotations
 
 from typing import Optional
 
-from domains.highway.objective_constants import V_TARGET
-
 DOMAIN_NAME = "highway"
 
 _SELECTION_OBJECTIVE = (
     "Your reward function is judged by training a PPO policy and evaluating it "
-    "on held-out rollouts. Among policies that meet a MINIMUM safety/speed bar "
-    "(auto-measured each run from the environment's own built-in traffic — not "
-    "a number we chose), candidates are ranked by Pareto dominance across: "
+    "on held-out rollouts. Among policies that survive at least one holdout "
+    "episode (SR > 0), candidates are ranked by Pareto dominance across: "
     "survival rate, collision rate, off-road rate, forward progress, mean "
-    "speed, and traffic-matching (soft_success). A candidate is only worse than "
-    "another if it is equal-or-worse on every one of these and strictly worse "
-    "on at least one — there is no fixed weighting between safety and speed. "
-    "Reason about these trade-offs directly from the evidence given to you."
+    "speed, lane_change_rate, and overtakes_per_km (successful passes of a "
+    "vehicle that was ahead). A candidate is only worse than another if it is "
+    "equal-or-worse on every one of these and strictly worse on at least one "
+    "— there is no fixed weighting between safety, speed, and overtaking, and "
+    "there is no preferred target speed. Pure low-speed lane-keeping that "
+    "never passes slower traffic is not automatically preferred. Reason about "
+    "these trade-offs directly from the evidence given to you."
 )
 
 _DIAGNOSIS_BEFORE_CODE = (
@@ -29,14 +29,28 @@ _DIAGNOSIS_BEFORE_CODE = (
     "something else you notice.\n"
     "2) Then revise the reward function to address your own diagnosis.\n"
     "Output your diagnosis as plain text BEFORE the code fence. The code fence "
-    "must contain ONLY the function, no diagnosis text inside it."
+    "must contain ONLY the function, no diagnosis text inside it.\n"
+    "A 'small precise change' can still mean removing or replacing a constant "
+    "entirely if the evidence suggests it no longer reflects reality — don't "
+    "assume an inherited number is correct just because it came from the "
+    "parent."
+)
+
+_BASE_MODEL_SPEED_PRIOR = (
+    "Do not assume a real-world 'typical highway speed' is the right target "
+    "here — this environment's actual safe/achievable speed range must be "
+    "inferred from the evidence given to you (population trade-offs, feasible "
+    "range), not from general driving knowledge, since it depends on this "
+    "specific simulator's traffic density and dynamics. "
 )
 
 D1_SYSTEM_PROMPT = (
     "You are an expert in reinforcement learning and autonomous highway driving. "
     "Your goal is to design reward functions for highway-fast-v0. "
     + _SELECTION_OBJECTIVE
-    + " Return **only** valid Python code enclosed within a fenced code block "
+    + " "
+    + _BASE_MODEL_SPEED_PRIOR
+    + "Return **only** valid Python code enclosed within a fenced code block "
     "for this initial generation (no commentary outside the block). "
     "The code must be fully executable."
 )
@@ -90,6 +104,7 @@ state.robot.px        # CrowdNav-only; use state.ego.x
 state.humans          # does not exist; use state.others
 ```
 - Output Format: only the Python function in a single code block.
+{action_space_block}
 {seed_block}
 {reflection_block}
 {external_knowledge_block}
@@ -157,7 +172,9 @@ Mutation Task:
 D3_SYSTEM_PROMPT = (
     "You are a senior researcher in autonomous driving and RL. "
     + _SELECTION_OBJECTIVE
-    + " IMPORTANT SCHEMA: def compute_reward(state, memory): — memory is a plain dict. "
+    + " "
+    + _BASE_MODEL_SPEED_PRIOR
+    + "IMPORTANT SCHEMA: def compute_reward(state, memory): — memory is a plain dict. "
     "state.ego has .x .y .vx .vy .heading .speed .lane_index .on_road. "
     "state.others is a tuple; iterate with 'for v in state.others:'. "
     "state.collision / state.off_road / state.timeout (bool). "
@@ -186,26 +203,22 @@ D4_EXTERNAL_KNOWLEDGE = f"""# External Knowledge — Highway Fast
 ## Metrics (mapped to RAISE ProxyMetrics)
 - SR: fraction of episodes survived without collision/off-road
 - CR: collision rate; TR: off-road rate
-- mean_speed / mean_progress / soft_success / lane_change_rate as logged
-- soft_success: traffic-matching indicator from held-out rollouts (as logged)
+- mean_speed / mean_progress / lane_change_rate / overtakes_per_km as logged on holdout
+- soft_success: logged diagnostic only (not a Pareto / selection objective —
+  do not design the reward specifically to hit this indicator)
 """
 
-D5_SEED_FUNCTION = f'''def compute_reward(state, memory):
+D5_SEED_FUNCTION = '''def compute_reward(state, memory):
     """Highway seed: dense progress/speed shaping with collision/off-road costs."""
     collision_penalty = -20.0
     off_road_penalty = -10.0
     speed_coef = 0.08
     progress_coef = 1.0
-    traffic_speed = {V_TARGET}
-    lag_penalty = 0.15
     if state.collision:
         return float(collision_penalty)
     if state.off_road:
         return float(off_road_penalty)
-    reward = progress_coef * state.progress + speed_coef * state.speed
-    if (not state.timeout) and state.ego.on_road and state.speed < traffic_speed:
-        reward = reward - lag_penalty * (traffic_speed - state.speed)
-    return float(reward)
+    return float(progress_coef * state.progress + speed_coef * state.speed)
 '''
 
 
@@ -216,6 +229,8 @@ def format_d1_initial(
     include_external_knowledge: bool = True,
     reflection: str = "",
 ) -> str:
+    from domains.highway.action_config import action_space_prompt_block
+
     seed_block = ""
     if include_seed:
         seed_block = (
@@ -234,6 +249,7 @@ def format_d1_initial(
         external_block = f"External knowledge:\n{D4_EXTERNAL_KNOWLEDGE}\n"
     return D1_USER_PROMPT.format(
         func_name=func_name,
+        action_space_block=action_space_prompt_block(),
         seed_block=seed_block,
         reflection_block=reflection_block,
         external_knowledge_block=external_block,
@@ -245,6 +261,7 @@ Each function: def {func_name}_vK(state, memory) for K=1..{n}, returning a finit
 Use HighwayRewardState fields only (state.ego.*, state.others, state.collision/off_road/timeout, state.progress, state.speed, memory).
 FORBIDDEN fields (will be rejected): lane_position, distance, robot, humans, gx, gy, history.
 No imports, classes, getattr/hasattr. Prefer ** 0.5 for roots.
+{action_space_block}
 {seed_block}
 {reflection_block}
 {external_knowledge_block}
@@ -260,6 +277,8 @@ def format_d1_initial_batch(
     include_external_knowledge: bool = True,
     reflection: str = "",
 ) -> str:
+    from domains.highway.action_config import action_space_prompt_block
+
     if n < 1:
         raise ValueError("batch size n must be >= 1")
     seed_block = ""
@@ -277,6 +296,7 @@ def format_d1_initial_batch(
     return D1_BATCH_USER_PROMPT.format(
         n=int(n),
         func_name=func_name,
+        action_space_block=action_space_prompt_block(),
         seed_block=seed_block,
         reflection_block=reflection_block,
         external_knowledge_block=external_block,
