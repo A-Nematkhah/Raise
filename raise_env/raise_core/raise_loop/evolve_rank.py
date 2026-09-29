@@ -103,9 +103,15 @@ def rank_population_pareto(
         if calibration_mode is not None
         else "population"
     )
-    if ref is None and mode_key != "population":
+    if mode_key == "population":
+        # ``ref`` may already be a SLOWER/FASTER gear-endpoint ReferenceStats.
+        ref = reference_for_mode(
+            "population", metrics_list, ambient=ambient, gear_ref=ref
+        )
+    elif ref is None:
         ref = reference_for_mode(mode_key, metrics_list, ambient=ambient)
     if ref is None:
+        # Explicit legacy IDLE samples (rarely usable) or percentile fallback.
         if reference_speed_samples is not None:
             ref = calibrate_from_reference_rollout(
                 reference_speed_samples,

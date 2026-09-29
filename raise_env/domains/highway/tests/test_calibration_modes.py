@@ -94,9 +94,10 @@ def test_progress_objective_toggle():
     m = _m("x", sr=1.0, progress=500.0, speed=20.0)
     with_p = ParetoObjectives(progress=True)
     without = ParetoObjectives(progress=False)
-    assert len(_objectives(m, with_p)) == 5
-    assert len(_objectives(m, without)) == 4
-    assert list(_objectives(m, with_p))[3] == 500.0
+    # Default: −CR, −TR, [progress], mean_speed
+    assert len(_objectives(m, with_p)) == 4
+    assert len(_objectives(m, without)) == 3
+    assert list(_objectives(m, with_p))[2] == 500.0
 
 
 def test_crawler_and_faster_both_feasible_without_floor():

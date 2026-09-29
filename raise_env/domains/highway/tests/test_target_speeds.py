@@ -22,20 +22,20 @@ from domains.highway.env_wrapper import (
 )
 
 
-def test_meta_default_six_gears_and_discrete5():
+def test_meta_default_eleven_gears_and_discrete5():
     set_action_settings(ActionModeSettings(mode="meta_default"))
     action = default_env_config()["action"]
     assert action["type"] == "DiscreteMetaAction"
     assert action["target_speeds"] == list(TARGET_SPEEDS_MPS)
     assert action["target_speeds"] == list(META_DEFAULT_SPEEDS_MPS)
-    assert len(action["target_speeds"]) == 6
-    assert action["target_speeds"] == pytest.approx(list(np.linspace(20.0, 30.0, 6)))
+    assert len(action["target_speeds"]) == 11
+    assert action["target_speeds"] == pytest.approx(list(np.linspace(20.0, 30.0, 11)))
 
     env = make_base_env(seed=0)
     try:
         veh = env.unwrapped.vehicle
         gears = np.asarray(veh.target_speeds, dtype=np.float64)
-        assert gears.shape == (6,)
+        assert gears.shape == (11,)
         assert gears.tolist() == pytest.approx(list(TARGET_SPEEDS_MPS))
         assert env.action_space.n == 5
     finally:
@@ -130,6 +130,27 @@ def compute_reward(state, memory):
     with pytest.raises(Exception) as ei:
         check_target_speed_literals(code)
     assert "16" in str(ei.value)
+
+
+def test_truncated_code_is_soft_reject_not_crash():
+    """LLM mid-token cutoffs must not kill the closed-loop via bare SyntaxError."""
+    from raise_core.sandbox.errors import RewardSandboxError
+    from domains.highway.reward_checks import make_highway_validator
+    from domains.highway.state import default_smoke_states
+
+    broken = (
+        "def compute_reward(state, memory):\n"
+        '    prev_speed = memory.get("prev_speed", float(state\n'
+    )
+    with pytest.raises(RewardSandboxError, match="syntax error"):
+        check_target_speed_literals(broken)
+
+    fn, err = make_highway_validator(
+        smoke_states=default_smoke_states()
+    ).try_validate(broken)
+    assert fn is None
+    assert err is not None
+    assert "syntax" in err.lower()
 
 
 def test_physical_speed_range_meta_matches_gears():

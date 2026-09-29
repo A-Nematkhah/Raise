@@ -1,7 +1,7 @@
 """Highway action-space modes (DiscreteMetaAction vs ContinuousAction).
 
 Process-wide settings are set from pipeline/CLI config. Default is
-``meta_default`` (six gears 20..30) so prior runs stay reproducible.
+``meta_default`` (eleven gears 20..30) for denser DiscreteMetaAction steps.
 """
 
 from __future__ import annotations
@@ -15,12 +15,16 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
+from raise_core.sandbox.errors import RewardSandboxError
+
 logger = logging.getLogger(__name__)
 
 ACTION_MODES = ("meta_default", "meta_fine", "continuous")
 
-# meta_default gears — must match historical TARGET_SPEEDS_MPS.
-META_DEFAULT_SPEEDS_MPS: Tuple[float, ...] = (20.0, 22.0, 24.0, 26.0, 28.0, 30.0)
+# meta_default gears: 11 evenly spaced targets in [20, 30] m/s.
+META_DEFAULT_SPEEDS_MPS: Tuple[float, ...] = tuple(
+    float(x) for x in np.linspace(20.0, 30.0, 11)
+)
 
 _DEFAULT_ACCEL_RANGE: Tuple[float, float] = (-5.0, 5.0)
 _DEFAULT_STEER_RANGE: Tuple[float, float] = (-math.pi / 4.0, math.pi / 4.0)
@@ -239,7 +243,10 @@ def _literal_number(node: ast.AST) -> Optional[float]:
 
 def extract_speed_setpoints(code: str) -> List[Tuple[str, float]]:
     """Collect numeric assignments to *target_speed*-like names."""
-    tree = ast.parse(code)
+    try:
+        tree = ast.parse(code)
+    except SyntaxError as exc:
+        raise RewardSandboxError(f"syntax error: {exc}") from exc
     found: List[Tuple[str, float]] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Assign):
@@ -267,8 +274,6 @@ def check_target_speed_literals(code: str, settings: Optional[ActionModeSettings
     - meta_*: reject any target below ``min(target_speeds)`` or above ``max``.
     - continuous: reject targets outside the probed physical speed range.
     """
-    from raise_core.sandbox.errors import RewardSandboxError
-
     s = settings or get_action_settings()
     lo, hi = physical_speed_range(s)
     # Meta: user asked to reject below min(target_speeds); also reject above max.
@@ -303,11 +308,11 @@ def warn_inline_speed_literals(
     """
     s = settings or get_action_settings()
     lo, hi = physical_speed_range(s)
-    hard = {round(v, 6) for _, v in extract_speed_setpoints(code)}
     warnings: List[str] = []
     try:
+        hard = {round(v, 6) for _, v in extract_speed_setpoints(code)}
         tree = ast.parse(code)
-    except SyntaxError:
+    except (SyntaxError, RewardSandboxError):
         return warnings
 
     def _mentions_speed(node: ast.AST) -> bool:

@@ -16,12 +16,14 @@ not be shown to the LLM as the selection objective.
 
 Calibration modes (``calibration_mode``):
 
-* ``population``      — legacy: speed floor + CR/TR ceilings from generation
-  percentiles (IDLE-ego reference rollout first when usable).
+* ``population``      — legacy: SLOWER/FASTER fixed-action env reference for
+  v_floor / CR·TR ceilings (IDLE is useless here — CR≈1). Falls back to
+  generation percentiles only if the gear-endpoint rollout fails. SE slack
+  on CR/TR so eval noise does not hard-kill.
 * ``env_measured``    — survival-only feasibility; ambient non-ego traffic
   speed stats measured on the holdout config are attached as information.
 * ``no_speed_floor``  — survival-only feasibility (SR > 0), no speed floor,
-  no CR/TR ceilings; safety is handled by SR/CR/TR Pareto objectives.
+  no CR/TR ceilings; safety is handled by −CR/−TR Pareto objectives.
 """
 
 from __future__ import annotations
@@ -69,18 +71,28 @@ class Metrics:
     speed_p10: Optional[float] = None
     lane_change_rate: float = 0.0
     overtakes_per_km: float = 0.0
+    n_eval_episodes: float = 0.0
 
 
 @dataclass(frozen=True)
 class ParetoObjectives:
-    """Which optional objectives join SR, −CR, −TR, mean_speed in dominance."""
+    """
+    Optional extras beside −CR, −TR, mean_speed.
+
+    ``include_sr`` defaults False: with exclusive outcomes SR+CR+TR≈1, so SR
+    is redundant with −CR/−TR and double-weights safety in crowding.
+    """
 
     progress: bool = True
     lane_change: bool = False
     overtake: bool = False
+    include_sr: bool = False
 
     def names(self) -> Tuple[str, ...]:
-        out = ["SR", "-CR", "-TR"]
+        out: List[str] = []
+        if self.include_sr:
+            out.append("SR")
+        out.extend(["-CR", "-TR"])
         if self.progress:
             out.append("progress")
         out.append("mean_speed")
@@ -94,12 +106,22 @@ class ParetoObjectives:
 LEGACY_OBJECTIVES = ParetoObjectives()
 
 
+def bernoulli_se(p: float, n: float) -> float:
+    """Standard error of a Bernoulli rate estimate; 0 if ``n < 2``."""
+    nn = float(n)
+    if nn < 2.0:
+        return 0.0
+    pp = min(1.0, max(0.0, float(p)))
+    return float(np.sqrt(pp * (1.0 - pp) / nn))
+
+
 @dataclass
 class ReferenceStats:
     """
     Feasibility thresholds. ``None`` disables a gate.
 
     ``require_survival`` makes a candidate feasible only if SR > 0.
+    ``se_margin`` adds 2×Bernoulli SE slack on CR/TR ceilings (eval noise).
     ``source`` records how thresholds were obtained (shown verbatim to the LLM
     so it is never told a population statistic was measured from traffic).
     """
@@ -110,6 +132,7 @@ class ReferenceStats:
     require_survival: bool = False
     source: str = "population_percentile"
     ambient: Optional[Dict[str, float]] = None
+    se_margin: bool = False
 
 
 def survival_only_reference(
@@ -235,6 +258,44 @@ def calibrate_from_population(
         cr_ceiling=float(cr_ceiling),
         tr_ceiling=float(np.percentile(trs, safety_percentile)),
         source="population_percentile",
+        se_margin=True,
+    )
+
+
+def calibrate_from_gear_endpoints(
+    slower_speeds: np.ndarray,
+    slower_cr: float,
+    slower_tr: float,
+    faster_speeds: np.ndarray,
+    faster_cr: float,
+    faster_tr: float,
+    *,
+    floor_percentile: float = 10.0,
+) -> ReferenceStats:
+    """
+    Feasibility from fixed DiscreteMetaAction endpoints (SLOWER / FASTER).
+
+    ``v_floor`` = low percentile of SLOWER ego speed (env-measured, not a
+    hand-picked cruise target). CR/TR ceilings use the worse of the two
+    endpoint policies; ``is_feasible`` adds 2×SE slack when ``se_margin``.
+    """
+    slow = np.asarray(slower_speeds, dtype=np.float64).ravel()
+    if slow.size == 0:
+        slow = np.asarray([0.0], dtype=np.float64)
+    v_floor = float(np.percentile(slow, floor_percentile))
+    cr_ceiling = float(max(float(slower_cr), float(faster_cr)))
+    tr_ceiling = float(max(float(slower_tr), float(faster_tr)))
+    # Keep a usable gate even if both endpoints were perfect.
+    if cr_ceiling < 0.05:
+        cr_ceiling = 0.05
+    if tr_ceiling < 0.05:
+        tr_ceiling = 0.05
+    return ReferenceStats(
+        v_floor=v_floor,
+        cr_ceiling=cr_ceiling,
+        tr_ceiling=tr_ceiling,
+        source="gear_endpoints_slower_faster",
+        se_margin=True,
     )
 
 
@@ -243,11 +304,18 @@ def reference_for_mode(
     population: Sequence[Metrics],
     *,
     ambient: Optional[Mapping[str, float]] = None,
+    gear_ref: Optional[ReferenceStats] = None,
 ) -> ReferenceStats:
     """Per-generation thresholds for ``mode`` (see module docstring)."""
     key = parse_calibration_mode(mode)
     if key == "population":
-        return calibrate_from_population(population)
+        # Prefer fixed SLOWER/FASTER env reference over self-referential percentiles.
+        if gear_ref is not None:
+            return gear_ref
+        ref = calibrate_from_population(population)
+        # Still apply SE slack so noisy CR does not hard-kill.
+        ref.se_margin = True
+        return ref
     if key == "env_measured":
         return survival_only_reference(source="env_measured", ambient=ambient)
     return survival_only_reference(source="no_speed_floor")
@@ -272,17 +340,25 @@ def is_feasible(m: Metrics, ref: ReferenceStats) -> bool:
         return False
     if ref.v_floor is not None and effective_speed(m) < ref.v_floor:
         return False
-    if ref.cr_ceiling is not None and m.cr > ref.cr_ceiling:
-        return False
-    if ref.tr_ceiling is not None and m.tr > ref.tr_ceiling:
-        return False
+    n = float(m.n_eval_episodes or 0.0)
+    if ref.cr_ceiling is not None:
+        slack = 2.0 * bernoulli_se(m.cr, n) if ref.se_margin else 0.0
+        if m.cr > float(ref.cr_ceiling) + slack:
+            return False
+    if ref.tr_ceiling is not None:
+        slack = 2.0 * bernoulli_se(m.tr, n) if ref.se_margin else 0.0
+        if m.tr > float(ref.tr_ceiling) + slack:
+            return False
     return True
 
 
 def _objectives(m: Metrics, objectives: Optional[ParetoObjectives] = None) -> np.ndarray:
     """Raw objectives to maximize (soft_success is diagnostic-only)."""
     spec = objectives or LEGACY_OBJECTIVES
-    vals = [m.sr, -m.cr, -m.tr]
+    vals: List[float] = []
+    if spec.include_sr:
+        vals.append(m.sr)
+    vals.extend([-m.cr, -m.tr])
     if spec.progress:
         vals.append(m.progress)
     vals.append(m.mean_speed)
@@ -293,9 +369,43 @@ def _objectives(m: Metrics, objectives: Optional[ParetoObjectives] = None) -> np
     return np.asarray(vals, dtype=np.float64)
 
 
+def _objective_margins(
+    a: Metrics, b: Metrics, objectives: Optional[ParetoObjectives] = None
+) -> np.ndarray:
+    """
+    Per-objective noise margins (2×SE on rate dims; tiny absolute elsewhere).
+
+    Used so dominance ignores differences smaller than sampling noise.
+    """
+    spec = objectives or LEGACY_OBJECTIVES
+    na = float(a.n_eval_episodes or 0.0)
+    nb = float(b.n_eval_episodes or 0.0)
+    # Conservative: use the larger SE of the two candidates (0 if n unknown).
+    margins: List[float] = []
+    if spec.include_sr:
+        margins.append(2.0 * max(bernoulli_se(a.sr, na), bernoulli_se(b.sr, nb)))
+    margins.append(2.0 * max(bernoulli_se(a.cr, na), bernoulli_se(b.cr, nb)))
+    margins.append(2.0 * max(bernoulli_se(a.tr, na), bernoulli_se(b.tr, nb)))
+    if spec.progress:
+        margins.append(1e-6)
+    margins.append(1e-6)  # mean_speed
+    if spec.lane_change:
+        margins.append(1e-6)
+    if spec.overtake:
+        margins.append(1e-6)
+    return np.asarray(margins, dtype=np.float64)
+
+
 def dominates(a: Metrics, b: Metrics, objectives: Optional[ParetoObjectives] = None) -> bool:
+    """
+    a dominates b iff a is ≥ b on every objective within noise and strictly
+    better on at least one objective by more than the noise margin.
+    """
     oa, ob = _objectives(a, objectives), _objectives(b, objectives)
-    return bool(np.all(oa >= ob) and np.any(oa > ob))
+    m = _objective_margins(a, b, objectives)
+    not_worse = bool(np.all(oa >= ob - m))
+    strictly_better = bool(np.any(oa > ob + m))
+    return not_worse and strictly_better
 
 
 def pareto_fronts(
@@ -466,6 +576,7 @@ def metrics_from_mapping(
         speed_p10=p10,
         lane_change_rate=_f("lane_change_rate"),
         overtakes_per_km=_f("overtakes_per_km"),
+        n_eval_episodes=_f("n_eval_episodes", default=0.0),
     )
 
 
@@ -543,39 +654,47 @@ def collect_reference_rollout_stats(
     seed: int = 425,
 ) -> Tuple[np.ndarray, float, float]:
     """
-    Short non-RL rollout on highway-fast-v0 (IDLE ego; IDM traffic).
-
-    Returns (speed_samples, cr, tr) for ``calibrate_from_reference_rollout``.
+    Legacy IDLE-ego rollout. Prefer ``collect_gear_endpoint_reference_stats``:
+    IDLE on highway-fast-v0 typically has CR≈1 and is rejected by
+    ``calibrate_from_reference_rollout``.
     """
+    return _rollout_constant_action(
+        action=1, n_episodes=n_episodes, seed=seed, seed_offset=10_003
+    )
+
+
+def _rollout_constant_action(
+    *,
+    action: int,
+    n_episodes: int,
+    seed: int,
+    seed_offset: int,
+) -> Tuple[np.ndarray, float, float]:
     speeds: List[float] = []
     n_crash = 0
     n_off = 0
     n_eps = max(1, int(n_episodes))
     for ep in range(n_eps):
         env = make_base_env(seed=int(seed) + ep)
-        obs, _ = env.reset(seed=int(seed) + 10_003 + ep)
+        env.reset(seed=int(seed) + int(seed_offset) + ep)
         done = False
         crashed = False
         off = False
         while not done:
-            # DiscreteMetaAction IDLE = 1 — ego coasts; traffic is IDM.
-            action = 1
-            obs, _r, terminated, truncated, info = env.step(action)
+            _obs, _r, terminated, truncated, info = env.step(int(action))
             info = dict(info or {})
-            arr = np.asarray(obs, dtype=np.float64)
-            if arr.ndim == 2 and arr.shape[0] > 0 and arr.shape[1] >= 5:
-                vx, vy = float(arr[0][3]), float(arr[0][4])
-                speeds.append(float((vx * vx + vy * vy) ** 0.5))
+            try:
+                veh = getattr(env.unwrapped, "vehicle", None)
+                if veh is not None:
+                    speeds.append(float(veh.speed))
+                    if hasattr(veh, "on_road") and not bool(veh.on_road):
+                        off = True
+            except Exception:  # noqa: BLE001
+                pass
             if info.get("crashed"):
                 crashed = True
             if info.get("off_road"):
                 off = True
-            try:
-                veh = getattr(env.unwrapped, "vehicle", None)
-                if veh is not None and hasattr(veh, "on_road") and not bool(veh.on_road):
-                    off = True
-            except Exception:  # noqa: BLE001
-                pass
             done = bool(terminated or truncated)
         env.close()
         if crashed:
@@ -585,6 +704,28 @@ def collect_reference_rollout_stats(
     cr = float(n_crash) / float(n_eps)
     tr = float(n_off) / float(n_eps)
     return np.asarray(speeds, dtype=np.float64), cr, tr
+
+
+def collect_gear_endpoint_reference_stats(
+    *,
+    n_episodes: int = 4,
+    seed: int = 425,
+) -> Tuple[np.ndarray, float, float, np.ndarray, float, float]:
+    """
+    Fixed DiscreteMetaAction endpoints: SLOWER=4 and FASTER=3.
+
+    Returns
+    -------
+    slower_speeds, slower_cr, slower_tr, faster_speeds, faster_cr, faster_tr
+    """
+    # DiscreteMetaAction: LANE_LEFT=0 IDLE=1 LANE_RIGHT=2 FASTER=3 SLOWER=4
+    slow_s, slow_cr, slow_tr = _rollout_constant_action(
+        action=4, n_episodes=n_episodes, seed=seed, seed_offset=20_003
+    )
+    fast_s, fast_cr, fast_tr = _rollout_constant_action(
+        action=3, n_episodes=n_episodes, seed=seed + 17, seed_offset=30_003
+    )
+    return slow_s, slow_cr, slow_tr, fast_s, fast_cr, fast_tr
 
 
 def collect_ambient_traffic_stats(

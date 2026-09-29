@@ -137,7 +137,10 @@ def _feasibility_lines(md: Mapping[str, Any]) -> List[str]:
         if isinstance(objs, (list, tuple)) and objs:
             obj_s = ", ".join(str(x) for x in objs)
         else:
-            obj_s = "SR, CR, TR, progress, mean_speed, lane_change_rate, overtakes_per_km"
+            obj_s = (
+                "-CR, -TR, progress, mean_speed, lane_change_rate, "
+                "overtakes_per_km"
+            )
         out.append(
             "Feasibility this run: survival only (SR > 0 on holdout). "
             "No speed floor and no CR/TR ceilings — Pareto objectives: "

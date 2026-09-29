@@ -288,3 +288,49 @@ def test_next_generation_exact_242_without_runtime_elite():
     assert sum(1 for c in gen1 if c.origin == "mutation") == 4
     assert sum(1 for c in gen1 if c.origin == "random") == 2
     assert len(gen1) == 8
+
+
+def test_fill_valid_soft_fails_empty_completion_and_pads_seed():
+    from raise_core.llm import EmptyCompletionError, LLMClient
+
+    class FlakyLLM(LLMClient):
+        provider = "scripted"
+
+        def __init__(self) -> None:
+            self.n = 0
+
+        def complete(self, prompt: str, *, max_tokens=None) -> str:
+            self.n += 1
+            if self.n <= 3:
+                raise EmptyCompletionError("Groq returned an empty completion.")
+            return _valid_code(1.0)
+
+    evolver = StageIEvolver(
+        FlakyLLM(),
+        score_fn=_score_by_smoke,
+        config=StageIConfig(
+            population_size=2,
+            generations=0,
+            n_crossover=1,
+            n_mutation=1,
+            n_random=0,
+            max_invalid_replacements=2,
+        ),
+    )
+    # Gen0 batch raises empty → regen → more empties → seed fallback fills.
+    pop = evolver.initialize_population()
+    assert len(pop) == 2
+    assert all(c.valid for c in pop)
+
+
+def test_is_recoverable_llm_error_matches_known_messages():
+    from raise_core.llm import (
+        CompletionTruncatedError,
+        EmptyCompletionError,
+        is_recoverable_llm_error,
+    )
+
+    assert is_recoverable_llm_error(EmptyCompletionError("x"))
+    assert is_recoverable_llm_error(CompletionTruncatedError("truncated"))
+    assert is_recoverable_llm_error(RuntimeError("Groq returned an empty completion."))
+    assert not is_recoverable_llm_error(RuntimeError("auth failed 401"))

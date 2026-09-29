@@ -39,6 +39,25 @@ class CompletionTruncatedError(RuntimeError):
     """Raised when a fenced completion strongly appears truncated."""
 
 
+class EmptyCompletionError(RuntimeError):
+    """Provider returned HTTP success with empty/missing message content."""
+
+
+def is_recoverable_llm_error(exc: BaseException) -> bool:
+    """True for soft LLM failures that Stage I should retry / soft-fail on."""
+    if isinstance(exc, (CompletionTruncatedError, EmptyCompletionError)):
+        return True
+    msg = str(exc).lower()
+    return any(
+        needle in msg
+        for needle in (
+            "empty completion",
+            "truncated",
+            "no closing code fence",
+        )
+    )
+
+
 class ScriptedLLMClient(LLMClient):
     """Deterministic stand-in: returns pre-canned completions in order."""
 
@@ -160,6 +179,7 @@ class GroqLLMClient(LLMClient):
 
         if self._key_manager is not None:
             # Key pool owns 429 rotation + transient network retries.
+            # Empty content is also retried inside chat_completion.
             try:
                 response = self._key_manager.chat_completion(**create_kwargs)
             except ImportError as exc:
@@ -169,7 +189,7 @@ class GroqLLMClient(LLMClient):
                 ) from exc
             content = response.choices[0].message.content
             if not content or not str(content).strip():
-                raise RuntimeError("Groq returned an empty completion.")
+                raise EmptyCompletionError("Groq returned an empty completion.")
             return str(content)
 
         try:
@@ -202,7 +222,7 @@ class GroqLLMClient(LLMClient):
                 pacer.observe_response(response)
                 content = response.choices[0].message.content
                 if not content or not str(content).strip():
-                    raise RuntimeError("Groq returned an empty completion.")
+                    raise EmptyCompletionError("Groq returned an empty completion.")
                 return str(content)
             except Exception as exc:  # noqa: BLE001 — retry transient errors
                 last_error = exc
@@ -219,7 +239,12 @@ class GroqLLMClient(LLMClient):
                     raise RuntimeError(
                         f"Groq LLM non-retryable error for model={self.model!r}: {exc}"
                     ) from exc
-                if not _is_transient_error(exc) and not _is_rate_limit_error(exc):
+                recoverable = (
+                    isinstance(exc, EmptyCompletionError)
+                    or _is_transient_error(exc)
+                    or _is_rate_limit_error(exc)
+                )
+                if not recoverable:
                     raise
                 if attempt >= self.max_attempts:
                     break

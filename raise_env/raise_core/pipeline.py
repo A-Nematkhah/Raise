@@ -141,7 +141,7 @@ class RaiseRunConfig:
     highway_eval_mode: str = "both"
     # Observational mid-train holdout evals (diagnostics only; default off).
     highway_diagnostics_groundtruth: bool = False
-    # Action space: meta_default | meta_fine | continuous (default keeps 6-gear meta).
+    # Action space: meta_default | meta_fine | continuous (default: 11-gear meta).
     highway_action_mode: str = "meta_default"
     highway_action_continuous_lateral: bool = True
     highway_meta_fine_low: float = 15.0

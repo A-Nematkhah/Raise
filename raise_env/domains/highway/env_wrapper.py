@@ -67,7 +67,7 @@ def _base_env_config(action: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def default_env_config() -> Dict[str, Any]:
-    """Always ``meta_default`` six gears — Score1 collectors / legacy tests."""
+    """Always ``meta_default`` eleven gears — Score1 collectors / legacy tests."""
     return _base_env_config(
         {
             "type": "DiscreteMetaAction",

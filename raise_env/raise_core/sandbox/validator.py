@@ -67,3 +67,7 @@ class RewardValidator:
             return self.validate_code(code), None
         except RewardSandboxError as exc:
             return None, str(exc)
+        except SyntaxError as exc:
+            # Domain validators may ast.parse before the shared AST policy;
+            # never let a bad LLM fragment kill the closed-loop run.
+            return None, f"syntax error: {exc}"

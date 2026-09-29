@@ -120,3 +120,27 @@ def test_chat_completion_raises_immediately_on_401():
         with pytest.raises(AuthError):
             manager.chat_completion(model="m", messages=[])
     assert client.chat.completions.create.call_count == 1
+
+
+def test_chat_completion_retries_empty_content_then_succeeds():
+    manager = GroqKeyManager(
+        keys=["gsk_test_key_aaaaaaaaaaaaaaaa", "gsk_test_key_bbbbbbbbbbbbbbbb"]
+    )
+    empty = MagicMock()
+    empty.choices = [MagicMock(message=MagicMock(content=""))]
+    ok = MagicMock()
+    ok.choices = [MagicMock(message=MagicMock(content="def compute_reward(state, memory):\n    return 0.0\n"))]
+
+    client = MagicMock()
+    client.chat.completions.create.side_effect = [empty, ok]
+
+    with patch.object(manager, "get_client", return_value=(client, manager.keys[0])):
+        with patch("raise_core.key_manager.time.sleep"):
+            with patch("raise_core.key_manager.DEFAULT_MAX_ATTEMPTS", 4):
+                out = manager.chat_completion(model="m", messages=[])
+    assert out is ok
+    assert client.chat.completions.create.call_count == 2
+
+
+def test_empty_completion_is_transient():
+    assert _is_transient_error(RuntimeError("Groq returned an empty completion."))

@@ -24,8 +24,10 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from raise_core.llm import (
+    EmptyCompletionError,
     LLMClient,
     extract_python_code,
+    is_recoverable_llm_error,
     normalize_to_compute_reward,
     split_reward_function_sources,
 )
@@ -263,12 +265,21 @@ class StageIEvolver:
                 record["extracted_preview"],
             )
 
+    def _seed_code(self) -> str:
+        raw = getattr(self._prompts, "D5_SEED_FUNCTION", None)
+        return normalize_to_compute_reward(str(raw if raw is not None else D5_SEED_FUNCTION))
+
+    def _seed_fallback_candidate(self, *, origin: str = "seed_fallback") -> RewardCandidate:
+        return self._clone_valid(self._seed_code(), origin=origin)
+
     def _llm_raw(self, user_prompt: str, *, max_tokens: Optional[int] = None) -> str:
         sys_txt = self.system_prompt
         full = f"{sys_txt}\n\n{user_prompt}"
         raw = self.llm.complete(full, max_tokens=max_tokens)
         if not raw or not str(raw).strip():
-            raise RuntimeError("LLM returned empty completion (retry layer should raise).")
+            raise EmptyCompletionError(
+                "LLM returned empty completion (retry layer should raise)."
+            )
         effective_max_tokens = max_tokens or getattr(self.llm, "max_tokens", None)
         extract_python_code(str(raw), max_tokens=effective_max_tokens)
         return str(raw)
@@ -350,34 +361,52 @@ class StageIEvolver:
         attempts = 0
         budget = needed + max_extra
         while len(out) < needed and attempts < budget:
-            cand = factory(attempts + 1)
+            try:
+                cand = factory(attempts + 1)
+            except Exception as exc:  # noqa: BLE001
+                if not is_recoverable_llm_error(exc):
+                    raise
+                attempts += 1
+                logger.warning(
+                    "Phase %s: recoverable LLM failure on attempt %d/%d (%s): %s",
+                    phase,
+                    attempts,
+                    budget,
+                    type(exc).__name__,
+                    exc,
+                )
+                continue
             attempts += 1
             if cand.valid:
                 out.append(cand)
-        if len(out) < needed and fallback is not None:
-            fb = fallback()
-            if fb.valid:
-                logger.warning(
-                    "Phase %s: using fallback parent code after %d failed LLM attempt(s)",
-                    phase,
-                    attempts,
+        # Default fallback: domain seed so closed-loop never dies on LLM flakes.
+        pad = fallback if fallback is not None else self._seed_fallback_candidate
+        while len(out) < needed:
+            fb = pad()
+            if not fb.valid:
+                raise RuntimeError(
+                    f"Could not obtain {needed} valid candidates after {attempts} "
+                    f"attempts ({len(out)} valid); fallback also invalid."
                 )
-                self._log_rejection(
-                    phase=phase,
-                    attempt=attempts + 1,
-                    origin=str(fb.origin),
-                    raw_completion="",
-                    extracted_code=fb.code,
-                    validation_error=None,
-                    batch_id=None,
-                    accepted=True,
-                )
-                out.append(fb)
-        if len(out) < needed:
-            raise RuntimeError(
-                f"Could not obtain {needed} valid candidates after {attempts} attempts "
-                f"({len(out)} valid)."
+            logger.warning(
+                "Phase %s: using fallback after %d failed LLM attempt(s) "
+                "(%d/%d slots filled)",
+                phase,
+                attempts,
+                len(out) + 1,
+                needed,
             )
+            self._log_rejection(
+                phase=phase,
+                attempt=attempts + len(out) + 1,
+                origin=str(fb.origin),
+                raw_completion="",
+                extracted_code=fb.code,
+                validation_error=None,
+                batch_id=None,
+                accepted=True,
+            )
+            out.append(fb)
         return out
 
     def _clone_valid(
@@ -419,15 +448,38 @@ class StageIEvolver:
                 include_external_knowledge=cfg.include_external_knowledge,
                 reflection=self.reflection,
             )
-            raw_batch = self._llm_raw(
-                batch_prompt,
-                max_tokens=self._batch_max_tokens(needed),
-            )
+            try:
+                raw_batch = self._llm_raw(
+                    batch_prompt,
+                    max_tokens=self._batch_max_tokens(needed),
+                )
+            except Exception as exc:  # noqa: BLE001
+                if not is_recoverable_llm_error(exc):
+                    raise
+                logger.warning(
+                    "Gen0 batch LLM failed (%s): %s; falling back to per-slot regen",
+                    type(exc).__name__,
+                    exc,
+                )
+                self._log_rejection(
+                    phase="gen0_batch",
+                    attempt=1,
+                    origin="initial",
+                    raw_completion="",
+                    extracted_code="",
+                    validation_error=str(exc),
+                    batch_id=batch_id,
+                )
+                raw_batch = ""
         try:
-            codes = split_reward_function_sources(
-                raw_batch,
-                func_name=cfg.func_name,
-                max_tokens=self._batch_max_tokens(needed),
+            codes = (
+                split_reward_function_sources(
+                    raw_batch,
+                    func_name=cfg.func_name,
+                    max_tokens=self._batch_max_tokens(needed),
+                )
+                if raw_batch
+                else []
             )
         except Exception as exc:
             console.fail(f"Gen0 batch parse failed: {exc}", stage="Stage I")
@@ -691,8 +743,19 @@ class StageIEvolver:
             include_external_knowledge=self.config.include_external_knowledge,
             reflection=self.reflection,
         )
-        raw = self._llm_raw(prompt, max_tokens=self._batch_max_tokens(needed))
-        codes = split_reward_function_sources(raw, func_name=self.config.func_name)
+        try:
+            raw = self._llm_raw(prompt, max_tokens=self._batch_max_tokens(needed))
+            codes = split_reward_function_sources(raw, func_name=self.config.func_name)
+        except Exception as exc:  # noqa: BLE001
+            if not is_recoverable_llm_error(exc):
+                raise
+            logger.warning(
+                "random batch LLM failed (%s): %s; regenerating per-slot",
+                type(exc).__name__,
+                exc,
+            )
+            raw = ""
+            codes = []
         out: List[RewardCandidate] = []
         attempt = 0
         for code in codes:

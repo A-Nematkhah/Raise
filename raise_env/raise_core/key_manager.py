@@ -79,10 +79,25 @@ def _is_transient_error(exc: Exception) -> bool:
         "readerror",
         "writeerror",
         "network",
+        "empty completion",
+        "apiconnectionerror",
     )
     if any(n in name for n in ("timeout", "connect", "network", "unavailable")):
         return True
     return any(n in text for n in needles)
+
+
+def _message_text(response: Any) -> str:
+    """Best-effort extraction of chat message content from a Groq/OpenAI response."""
+    try:
+        choices = getattr(response, "choices", None) or []
+        if not choices:
+            return ""
+        msg = getattr(choices[0], "message", None)
+        content = getattr(msg, "content", None) if msg is not None else None
+        return str(content or "").strip()
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 def _is_non_retryable_client_error(exc: Exception) -> bool:
@@ -276,6 +291,26 @@ class GroqKeyManager:
             try:
                 response = client.chat.completions.create(**kwargs)
                 pacer.observe_response(response)
+                if not _message_text(response):
+                    # Successful HTTP with empty body (proxy flake / content
+                    # filter / reasoning budget). Retry on another key.
+                    last_exception = RuntimeError(
+                        "Groq returned an empty completion."
+                    )
+                    logger.warning(
+                        "Groq empty completion on key ...%s "
+                        "(attempt %d/%d); retrying",
+                        key[-6:],
+                        attempt,
+                        max_attempts,
+                    )
+                    delay = min(
+                        30.0,
+                        DEFAULT_TRANSIENT_BACKOFF * (2.0 ** (attempt - 1)),
+                    )
+                    time.sleep(delay)
+                    self._advance()
+                    continue
                 return response
             except Exception as exc:  # noqa: BLE001
                 last_exception = exc

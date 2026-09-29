@@ -85,7 +85,7 @@ def main() -> int:
     parser.add_argument(
         "--profile",
         default=None,
-        help="Named preset (1h/12h/18h/highway_4h); applied before other flags",
+        help="Named preset (1h/12h/18h/highway_4h/highway_7h); applied before other flags",
     )
     parser.add_argument("--output-dir", type=str, default="results/raise_run")
     parser.add_argument("--seed", type=int, default=425)
@@ -359,7 +359,7 @@ def main() -> int:
         choices=("meta_default", "meta_fine", "continuous"),
         default="meta_default",
         help=(
-            "Highway action space: meta_default=6 gears DiscreteMetaAction (default), "
+            "Highway action space: meta_default=11 gears DiscreteMetaAction (default), "
             "meta_fine=linspace gears, continuous=ContinuousAction Box"
         ),
     )

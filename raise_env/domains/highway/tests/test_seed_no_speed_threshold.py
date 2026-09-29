@@ -22,9 +22,10 @@ def test_d5_seed_no_numeric_speed_comparison():
     assert pat.search(D5_SEED_FUNCTION) is None, D5_SEED_FUNCTION
 
 
-def test_selection_objective_five_dims_no_soft_success():
+def test_selection_objective_ranked_dims_no_soft_success():
     assert "soft_success" not in _SELECTION_OBJECTIVE
     assert "traffic-matching" not in _SELECTION_OBJECTIVE
     m = Metrics("t", 1.0, 0.0, 0.0, 100.0, 20.0, soft_success=0.9)
-    assert list(_objectives(m)) == [1.0, -0.0, -0.0, 100.0, 20.0]
-    assert len(_objectives(m)) == 5
+    # −CR, −TR, progress, mean_speed (SR dropped as redundant)
+    assert list(_objectives(m)) == [-0.0, -0.0, 100.0, 20.0]
+    assert len(_objectives(m)) == 4

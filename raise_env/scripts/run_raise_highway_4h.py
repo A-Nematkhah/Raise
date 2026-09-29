@@ -1,16 +1,15 @@
 #!/usr/bin/env python
-"""RAISE full closed-loop on highway-fast-v0 — ~4h wall budget.
+"""RAISE full closed-loop on highway-fast-v0.
 
 This is the thesis RAISE path (not Stage I→II→III without surrogate):
 
   warm surrogate bootstrap → closed-loop (Score1 ↔ Stage II short ↔
   Surrogate gate + AL + proxy feedback) → Stage III validate
 
-Locked PROFILE (SB3 PPO, env_steps):
+Profiles (SB3 PPO, env_steps; K2/K3 identical):
 
-  Warm:   n=16 labels @ K2=12_000 env steps
-  Loop:   N=6, G=4, K2=12_000, min_labels_gate=16 (or MAE≤0.35), E2=20, AL=2/epoch
-  Stage III: R=1, K3=70_000, E3=30, no H-sweep; elites=kept∪best_s2∪best_fitness
+  highway_4h (~4h):  N=6, G=4, K2=12_000, K3=70_000
+  highway_7h (~6–7h): N=8, G=7, K2=12_000, K3=70_000
 
 From raise_env/:
 
@@ -18,12 +17,15 @@ From raise_env/:
   python scripts/collect_highway_stage1_dataset.py
 
   # ~4h RAISE — warm surrogate OFF by default; labels collected in closed-loop
-  python scripts/run_raise_highway_4h.py
   python scripts/run_raise_highway_4h.py --llm groq
+
+  # ~6–7h same K2/K3, deeper search
+  python scripts/run_raise_highway_7h.py --llm groq --skip-collect
+  # or: python scripts/run_raise_highway_4h.py --profile highway_7h --llm groq
 
   # After a finished run: plots/ + plots/viz/*.gif are written automatically.
   # Re-generate offline:
-  python scripts/visualize_highway_raise.py --run-dir results/highway_4h_...
+  python scripts/visualize_highway_raise.py --run-dir results/highway_7h_...
 
   # optional later: warm bootstrap
   python scripts/bootstrap_surrogate.py --domain highway --llm groq
@@ -62,8 +64,28 @@ CHECKPOINT_LOCATIONS = (
     "checkpoint.json",
 )
 
+_HIGHWAY_PROFILES = ("highway_4h", "highway_7h")
+_WALL_BASE_PROFILE = "highway_4h"  # measured ~4h @ N=6 G=4
+
+
+def _peek_profile(argv: list) -> str:
+    default = "highway_4h"
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a == "--profile" and i + 1 < len(argv):
+            return str(argv[i + 1]).strip().lower()
+        if isinstance(a, str) and a.startswith("--profile="):
+            return str(a.split("=", 1)[1]).strip().lower()
+        i += 1
+    return default
+
+
+PROFILE_NAME = _peek_profile(sys.argv[1:])
+if PROFILE_NAME not in _HIGHWAY_PROFILES:
+    PROFILE_NAME = "highway_4h"
 # Locked PROFILE — single source of truth in raise_core.presets.
-PROFILE = dict(CLOSED_LOOP_PROFILES["highway_4h"])
+PROFILE = dict(CLOSED_LOOP_PROFILES[PROFILE_NAME])
 
 
 def _dataset_ready(path: str) -> bool:
@@ -182,8 +204,13 @@ def _copy_warm_into_run(src_model: str, src_data: str, dst_model: str, dst_data:
         return sum(1 for _ in fh)
 
 
-def _print_profile(args, *, warm_n=None) -> None:
-    print("=== highway ~4h RAISE closed-loop PROFILE ===")
+def _print_profile(args, *, warm_n=None, population=None, generations=None) -> None:
+    print(f"=== highway RAISE closed-loop PROFILE ({PROFILE_NAME}) ===")
+    shown = dict(PROFILE)
+    if population is not None:
+        shown["population"] = int(population)
+    if generations is not None:
+        shown["generations"] = int(generations)
     for key in (
         "domain",
         "seed",
@@ -217,7 +244,7 @@ def _print_profile(args, *, warm_n=None) -> None:
         "highway_pareto_use_overtake",
         "highway_elite_archive",
     ):
-        print(f"  {key}: {PROFILE.get(key)}")
+        print(f"  {key}: {shown.get(key)}")
     print(f"  llm: {args.llm}")
     print(f"  device: {args.device}")
     print(f"  dataset: {PROFILE['stage1_dataset']}")
@@ -228,19 +255,31 @@ def _print_profile(args, *, warm_n=None) -> None:
     )
     if warm_n is not None:
         print(f"  warm labels copied: ≈{warm_n}")
-    print("  estimate: ~3.5–5 h wall (GPU + seed/groq LLM)")
+    # Rough wall from last measured ~4h @ highway_4h N=6 G=4; scale Stage-II labels.
+    base = CLOSED_LOOP_PROFILES[_WALL_BASE_PROFILE]
+    base_labels = float(base["population"]) * float(base["generations"])
+    cur_labels = float(shown["population"]) * float(shown["generations"])
+    scale = cur_labels / max(1.0, base_labels)
+    est_h = 4.0 * (0.55 + 0.45 * scale)  # Stage III ~fixed share + loop scales
+    print(f"  estimate: ~{est_h:.1f}–{est_h + 0.8:.1f} h wall (GPU + groq; K2/K3 unchanged)")
     print("============================================")
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--profile",
+        default=PROFILE_NAME,
+        choices=_HIGHWAY_PROFILES,
+        help="Closed-loop budget preset (default: highway_4h)",
+    )
     parser.add_argument("--llm", default=PROFILE["llm"], choices=("seed", "groq", "ollama", "vllm"))
     parser.add_argument("--device", default=PROFILE["device"])
     parser.add_argument("--llm-model", default=None)
     parser.add_argument(
         "--output-dir",
         default="",
-        help="Default: results/highway_4h_YYYYMMDD_HHMMSS",
+        help="Default: <profile output_dir_prefix>YYYYMMDD_HHMMSS",
     )
     parser.add_argument(
         "--warm-surrogate",
@@ -253,7 +292,7 @@ def main() -> int:
     parser.add_argument(
         "--resume",
         default="",
-        help="Resume a previous results/highway_4h_* directory",
+        help="Resume a previous results/highway_* directory",
     )
     parser.add_argument(
         "--skip-collect",
@@ -314,12 +353,33 @@ def main() -> int:
         help="Drop overtakes_per_km from the Pareto objectives",
     )
     parser.add_argument(
+        "--population",
+        type=int,
+        default=None,
+        help="Override PROFILE population (closed-loop pop size / Stage I N)",
+    )
+    parser.add_argument(
+        "--generations",
+        type=int,
+        default=None,
+        help="Override PROFILE generations (closed-loop epochs / Stage I G)",
+    )
+    parser.add_argument(
         "--highway-elite-archive",
         choices=("auto", "pareto", "fitness"),
         default=None,
         help="Override PROFILE highway_elite_archive (default: auto)",
     )
     args = parser.parse_args()
+
+    pop_n = int(args.population if args.population is not None else PROFILE["population"])
+    gen_n = int(
+        args.generations if args.generations is not None else PROFILE["generations"]
+    )
+    if pop_n < 2:
+        raise SystemExit("--population must be >= 2")
+    if gen_n < 1:
+        raise SystemExit("--generations must be >= 1")
 
     from _prereqs import check_groq_keys, report_problems
 
@@ -369,7 +429,7 @@ def main() -> int:
         out = str(args.output_dir).strip()
         if not out:
             stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            out = f"results/highway_4h_{stamp}"
+            out = f"{PROFILE['output_dir_prefix']}{stamp}"
         surr_model = os.path.join(out, "surrogate_model")
         surr_data = os.path.join(out, "surrogate_dataset")
         resuming = False
@@ -389,7 +449,7 @@ def main() -> int:
     for path in (out, surr_model, surr_data):
         os.makedirs(path, exist_ok=True)
 
-    _print_profile(args, warm_n=warm_n)
+    _print_profile(args, warm_n=warm_n, population=pop_n, generations=gen_n)
 
     cmd = [
         sys.executable,
@@ -406,9 +466,9 @@ def main() -> int:
         "--score1",
         "dataset",
         "--stage1-population",
-        str(PROFILE["population"]),
+        str(pop_n),
         "--stage1-generations",
-        str(PROFILE["generations"]),
+        str(gen_n),
         "--closed-loop-k2",
         str(PROFILE["k2"]),
         "--k2-unit",
@@ -522,7 +582,12 @@ def main() -> int:
     if bool(args.diagnostics_groundtruth_checkpoints):
         cmd.append("--diagnostics-groundtruth-checkpoints")
 
-    resume_cmd = f"python scripts/run_raise_highway_4h.py --resume {out}"
+    resume_script = (
+        "run_raise_highway_7h.py"
+        if PROFILE_NAME == "highway_7h"
+        else "run_raise_highway_4h.py"
+    )
+    resume_cmd = f"python scripts/{resume_script} --resume {out}"
     if bool(args.diagnostics_groundtruth_checkpoints):
         resume_cmd += " --diagnostics-groundtruth-checkpoints"
     if args.highway_action_mode:
@@ -537,10 +602,15 @@ def main() -> int:
         resume_cmd += " --no-highway-pareto-use-overtake"
     if args.highway_elite_archive:
         resume_cmd += f" --highway-elite-archive {args.highway_elite_archive}"
+    if args.population is not None:
+        resume_cmd += f" --population {pop_n}"
+    if args.generations is not None:
+        resume_cmd += f" --generations {gen_n}"
     print("cmd:", " ".join(cmd))
     print(f"mode:   {'RESUME' if resuming else 'NEW'}")
     print(f"action_mode: {action_mode}")
     print(f"calibration_mode: {calib_mode}  elite_archive: {elite_archive}")
+    print(f"population={pop_n}  generations={gen_n}  (K2={PROFILE['k2']} K3={PROFILE['stage3_k3']})")
     print(f"output: {out}")
     print(f"If interrupted: {resume_cmd}")
     code = int(subprocess.call(cmd))

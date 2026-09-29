@@ -751,25 +751,28 @@ class ClosedLoopRunner:
                 and domain_key == "highway"
                 and calib_mode == "population"
             ):
-                # One-shot IDM / IDLE reference for auto thresholds (cached).
+                # One-shot SLOWER/FASTER env reference (cached). IDLE is useless
+                # here (CR≈1); gear endpoints come from the action space itself.
                 if not hasattr(self, "_highway_pareto_ref"):
                     self._highway_pareto_ref = None
                     ref_path = os.path.join(
                         closed_loop_dir(cfg.output_dir), "pareto_reference.json"
                     )
-                    # Resume: reload thresholds so mid-run bar does not jump.
                     if os.path.isfile(ref_path):
                         try:
-                            import json as _json
-
                             from domains.highway.pareto_rank import ReferenceStats
 
                             with open(ref_path, "r", encoding="utf-8") as fh:
-                                payload = _json.load(fh) or {}
+                                payload = json.load(fh) or {}
                             self._highway_pareto_ref = ReferenceStats(
                                 v_floor=float(payload["v_floor"]),
                                 cr_ceiling=float(payload["cr_ceiling"]),
                                 tr_ceiling=float(payload["tr_ceiling"]),
+                                source=str(
+                                    payload.get("source")
+                                    or "gear_endpoints_slower_faster"
+                                ),
+                                se_margin=bool(payload.get("se_margin", True)),
                             )
                         except Exception as exc:  # noqa: BLE001
                             logger.warning(
@@ -779,38 +782,45 @@ class ClosedLoopRunner:
                     if self._highway_pareto_ref is None and not bool(cfg.use_stub):
                         try:
                             from domains.highway.pareto_rank import (
-                                calibrate_from_reference_rollout,
-                                collect_reference_rollout_stats,
+                                calibrate_from_gear_endpoints,
+                                collect_gear_endpoint_reference_stats,
                             )
 
-                            speeds, cr, tr = collect_reference_rollout_stats(
-                                n_episodes=6, seed=int(cfg.seed)
+                            (
+                                slow_s,
+                                slow_cr,
+                                slow_tr,
+                                fast_s,
+                                fast_cr,
+                                fast_tr,
+                            ) = collect_gear_endpoint_reference_stats(
+                                n_episodes=4, seed=int(cfg.seed)
                             )
-                            self._highway_pareto_ref = calibrate_from_reference_rollout(
-                                speeds, cr, tr
+                            self._highway_pareto_ref = calibrate_from_gear_endpoints(
+                                slow_s,
+                                slow_cr,
+                                slow_tr,
+                                fast_s,
+                                fast_cr,
+                                fast_tr,
                             )
-                            if self._highway_pareto_ref is None:
-                                logger.warning(
-                                    "Pareto IDM reference rejected "
-                                    "(reference_cr=%.3f too high); "
-                                    "using per-generation percentiles",
-                                    float(cr),
-                                )
-                            else:
-                                write_json(
-                                    ref_path,
-                                    {
-                                        "v_floor": self._highway_pareto_ref.v_floor,
-                                        "cr_ceiling": self._highway_pareto_ref.cr_ceiling,
-                                        "tr_ceiling": self._highway_pareto_ref.tr_ceiling,
-                                        "n_speed_samples": int(len(speeds)),
-                                        "reference_cr": float(cr),
-                                        "reference_tr": float(tr),
-                                    },
-                                )
+                            write_json(
+                                ref_path,
+                                {
+                                    "v_floor": self._highway_pareto_ref.v_floor,
+                                    "cr_ceiling": self._highway_pareto_ref.cr_ceiling,
+                                    "tr_ceiling": self._highway_pareto_ref.tr_ceiling,
+                                    "source": self._highway_pareto_ref.source,
+                                    "se_margin": self._highway_pareto_ref.se_margin,
+                                    "slower_cr": float(slow_cr),
+                                    "faster_cr": float(fast_cr),
+                                    "n_slower_samples": int(len(slow_s)),
+                                    "n_faster_samples": int(len(fast_s)),
+                                },
+                            )
                         except Exception as exc:  # noqa: BLE001
                             logger.warning(
-                                "Pareto IDM reference failed (%s); "
+                                "Pareto SLOWER/FASTER reference failed (%s); "
                                 "falling back to per-generation percentiles",
                                 exc,
                             )

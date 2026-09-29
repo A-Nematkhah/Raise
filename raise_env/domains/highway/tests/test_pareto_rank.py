@@ -14,7 +14,7 @@ from raise_core.raise_loop.evolve_rank import rank_population_for_evolution
 
 
 def test_demo_ranking_order_best_to_worst():
-    """balanced → fast_risky → crawler (no hand weights)."""
+    """Front-0: balanced ↔ fast_risky (trade-off); crawler last."""
     pop = [
         Metrics(
             "crawler",
@@ -45,11 +45,10 @@ def test_demo_ranking_order_best_to_worst():
         ),
     ]
     ordered = rank_population(pop)
-    assert [m.candidate_id for m in ordered] == [
-        "balanced",
-        "fast_risky",
-        "crawler",
-    ]
+    ids = [m.candidate_id for m in ordered]
+    # Without redundant SR, balanced and fast_risky trade off → both front-0.
+    assert set(ids[:2]) == {"balanced", "fast_risky"}
+    assert ids[-1] == "crawler"
 
 
 def test_speed_p10_preferred_over_mean_for_feasibility():
@@ -193,6 +192,7 @@ def test_evolve_rank_pareto_orders_candidates():
     pop[3].metadata = {}
     ranked = rank_population_for_evolution(pop, mode="pareto")
     ids = [c.candidate_id for c in ranked]
-    assert ids[:3] == ["balanced", "fast_risky", "crawler"]
+    assert set(ids[:2]) == {"balanced", "fast_risky"}
+    assert ids[2] == "crawler"
     assert ids[-1] == "unlab"
     assert ranked[0].metadata.get("pareto_rank") == 0

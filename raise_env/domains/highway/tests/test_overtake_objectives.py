@@ -40,10 +40,12 @@ def _m(
 def test_objectives_include_lane_and_overtake_when_enabled():
     m = _m("x", lane=0.02, ovt=1.5)
     bare = ParetoObjectives(progress=False, lane_change=False, overtake=False)
-    assert list(_objectives(m, bare)) == [1.0, -0.0, -0.0, 20.0]
+    # −CR, −TR, mean_speed (no SR, no progress)
+    assert list(_objectives(m, bare)) == [-0.0, -0.0, 20.0]
     full = ParetoObjectives(progress=True, lane_change=True, overtake=True)
-    assert list(_objectives(m, full)) == [1.0, -0.0, -0.0, 100.0, 20.0, 0.02, 1.5]
+    assert list(_objectives(m, full)) == [-0.0, -0.0, 100.0, 20.0, 0.02, 1.5]
     assert full.names()[-2:] == ("lane_change_rate", "overtakes_per_km")
+    assert "SR" not in full.names()
 
 
 def test_crawler_dominated_by_safer_overtaker_on_overtake_objective():
@@ -84,7 +86,6 @@ def test_evidence_lists_overtake_metrics_and_objectives():
             "pareto_require_survival": True,
             "pareto_calibration_source": "no_speed_floor",
             "pareto_objectives": [
-                "SR",
                 "-CR",
                 "-TR",
                 "progress",
@@ -98,6 +99,7 @@ def test_evidence_lists_overtake_metrics_and_objectives():
     assert "overtake_episode_frac=0.40" in text
     assert "lane_change_rate" in text
     assert "overtakes_per_km" in text.split("Pareto objectives:")[-1]
+    assert "SR" not in text.split("Pareto objectives:")[-1].split(".")[0]
 
 
 def test_overtake_tracker_counts_pass():

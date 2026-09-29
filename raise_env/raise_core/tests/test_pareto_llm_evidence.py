@@ -207,11 +207,11 @@ def test_d5_seed_has_no_fixed_speed_threshold():
         r"\d+(?:\.\d+)?\s*(?:<|>|<=|>=|==)\s*state\.speed"
     )
     assert pat.search(src) is None, src
-    # Five Pareto objectives (soft_success excluded).
+    # Four ranked Pareto objectives (SR dropped; soft_success excluded).
     from domains.highway.pareto_rank import Metrics, _objectives
 
     m = Metrics("t", 1.0, 0.0, 0.0, 100.0, 20.0, 0.0)
-    assert len(_objectives(m)) == 5
+    assert len(_objectives(m)) == 4
 
 
 def test_runner_builds_reflection_after_ranked_for_evo():

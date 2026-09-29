@@ -52,6 +52,14 @@ def main() -> int:
     assert parse_calibration_mode("") == "no_speed_floor"
     assert ClosedLoopConfig().highway_calibration_mode == "no_speed_floor"
     assert CLOSED_LOOP_PROFILES["highway_4h"]["highway_calibration_mode"] == "no_speed_floor"
+    assert CLOSED_LOOP_PROFILES["highway_7h"]["highway_calibration_mode"] == "no_speed_floor"
+    assert CLOSED_LOOP_PROFILES["highway_7h"]["population"] == 8
+    assert CLOSED_LOOP_PROFILES["highway_7h"]["generations"] == 7
+    assert CLOSED_LOOP_PROFILES["highway_7h"]["k2"] == CLOSED_LOOP_PROFILES["highway_4h"]["k2"]
+    assert (
+        CLOSED_LOOP_PROFILES["highway_7h"]["stage3_k3"]
+        == CLOSED_LOOP_PROFILES["highway_4h"]["stage3_k3"]
+    )
     assert "built-in traffic" not in _SELECTION_OBJECTIVE
 
     crawler = _cand("crawl", sr=1.0, cr=0.0, speed=5.0, progress=40.0)
