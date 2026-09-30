@@ -30,14 +30,34 @@ _DIAGNOSIS_BEFORE_CODE = (
     "assumption about what 'usually' goes wrong), diagnose what is currently "
     "limiting the holdout objectives / Pareto standing — e.g. an unexploited "
     "safety/speed trade-off, a degenerate strategy visible in the numbers, or "
-    "something else you notice.\n"
+    "something else you notice. When reward-component trends are present, use "
+    "them together with the task metrics.\n"
     "2) Then revise the reward function to address your own diagnosis.\n"
+    "Interpretation principles for reward-component trends (EUREKA):\n"
+    "- If the survival/success rate is always near zero, rewrite the entire "
+    "reward function.\n"
+    "- If a component's value is nearly identical across all checkpoints, "
+    "RL was not able to optimize it as written — consider changing its "
+    "scale/temperature, rewriting it, or discarding it.\n"
+    "- If one component's magnitude is significantly larger than the others, "
+    "rescale it to a comparable range.\n"
     "Output your diagnosis as plain text BEFORE the code fence. The code fence "
     "must contain ONLY the function, no diagnosis text inside it.\n"
     "A 'small precise change' can still mean removing or replacing a constant "
     "entirely if the evidence suggests it no longer reflects reality — don't "
     "assume an inherited number is correct just because it came from the "
     "parent."
+)
+
+_RETURN_CONTRACT = (
+    "Return exactly ``(total_reward, reward_components)`` where "
+    "``total_reward`` is a finite float used for RL, and "
+    "``reward_components`` is a flat dict[str, float] of named terms for "
+    "this step (e.g. {\"progress_term\": 0.5, \"speed_term\": 0.1, "
+    "\"collision_penalty\": 0.0}). At most 12 keys; string keys only; "
+    "finite float values only; no nested containers. The dict is "
+    "informational (diagnostics/reflection) and must not change what "
+    "``total_reward`` already encodes."
 )
 
 _BASE_MODEL_SPEED_PRIOR = (
@@ -54,6 +74,8 @@ D1_SYSTEM_PROMPT = (
     + _SELECTION_OBJECTIVE
     + " "
     + _BASE_MODEL_SPEED_PRIOR
+    + _RETURN_CONTRACT
+    + " "
     + "Return **only** valid Python code enclosed within a fenced code block "
     "for this initial generation (no commentary outside the block). "
     "The code must be fully executable."
@@ -61,7 +83,7 @@ D1_SYSTEM_PROMPT = (
 
 D1_USER_PROMPT = """Please write a Python function named {func_name} for highway driving (highway-fast-v0).
 Task Description:
-- Output a scalar reward from the ego vehicle's current state so a policy can learn safe forward driving under the selection objective above.
+- Output ``(total_reward, reward_components)`` from the ego vehicle's current state so a policy can learn safe forward driving under the selection objective above (total_reward trains RL; reward_components are for reflection only).
 Function Interface (EXACT FIELD STRUCTURE):
 - Inputs:
   - state: A HighwayRewardState snapshot with ONLY these fields:
@@ -76,10 +98,10 @@ Function Interface (EXACT FIELD STRUCTURE):
   - CRITICAL: There is NO state.robot, NO state.humans, NO state.gx/gy, NO state.history — only fields listed above.
   - Do NOT define classes. Persistent state must use the ``memory`` dict only.
 - Output:
-  - A single finite float reward for the current frame.
+  - Return ``(total_reward, reward_components)`` — total_reward is the finite float used for RL; reward_components is a flat dict[str, float] naming the terms that sum (or otherwise compose) into that total for this step.
 - Design Principles:
 - Prefer dense, finite shaping from documented state fields.
-- Interpretability: clear local variables; no extra signature args.
+- Interpretability: clear local variables; named components in the dict; no extra signature args.
 - Reason about multi-objective trade-offs yourself from the selection objective; do not assume a named failure mode.
 Episode memory example:
 ```python
@@ -87,15 +109,16 @@ def compute_reward(state, memory):
     prev = memory.get("prev_x")
     progress = 0.0 if prev is None else float(state.ego.x) - float(prev)
     memory["prev_x"] = float(state.ego.x)
-    return float(progress)
+    total = float(progress)
+    return total, {{"progress_term": total}}
 ```
 Math:
 - Prefer `** 0.5` for square roots. Do not write `import math`.
 - Do not use getattr, hasattr, or __import__.
 Constraints (CRITICAL):
 - Hyperparameters must be local variables inside the function body.
-- Signature: exactly one function def {func_name}(state, memory): returning a finite float.
-- Sandbox: no import/from, no classes, no while loops, no reflection builtins.
+- Signature: exactly one function def {func_name}(state, memory): returning (finite float, dict[str, float]).
+- Sandbox: no import/from, no classes, no while loops, no list/dict/set comprehensions or generator expressions, no reflection builtins.
 - Access fields only via dot notation. Iterate others with `for v in state.others:`.
 - AST allowlist: ONLY the fields listed above (+ memory.get / memory['k']). Any other
   attribute (lane_position, distance, robot, humans, gx, history, …) is REJECTED.
@@ -118,7 +141,8 @@ PROMPT_MEMORY_EXAMPLE = '''def compute_reward(state, memory):
     prev = memory.get("prev_x")
     progress = 0.0 if prev is None else float(state.ego.x) - float(prev)
     memory["prev_x"] = float(state.ego.x)
-    return float(progress)
+    total = float(progress)
+    return total, {"progress_term": total}
 '''
 
 _REWARD_STATE_ACCESS = """\
@@ -134,8 +158,12 @@ HighwayRewardState access (dot notation only — never getattr/hasattr/__import_
 
 _D2_SANDBOX_RULES = """
 Sandbox rules (CRITICAL — invalid code is discarded):
-- Define exactly ONE top-level function `{func_name}(state, memory)` returning a finite float.
-- Do NOT use import/from, classes, while loops, print, lambda, or reflection builtins.
+- Define exactly ONE top-level function `{func_name}(state, memory)` returning
+  ``(total_reward: float, reward_components: dict[str, float])``.
+- ``total_reward`` is the only value used for RL; ``reward_components`` is a flat
+  dict of named terms (≤12 str keys, finite float values, no nesting) for reflection.
+- Do NOT use import/from, classes, while loops, print, lambda, comprehensions,
+  generator expressions, or reflection builtins.
 - Forbidden: getattr, hasattr, __import__, eval, exec, type, setattr, delattr, globals, locals, vars, open.
 - Access HighwayRewardState only via dot notation (see below).
 - Use ``memory`` (dict) for cross-timestep shaping; never invent state.history.
@@ -154,7 +182,7 @@ Reflection / evidence:
 Synthesis Task:
 - Write an improved `{func_name}` that merges complementary terms from the parents.
 - Strip any getattr/hasattr patterns; use direct state.* / v.* access.
-- Define exactly one function: def {func_name}(state, memory): ... returning a finite float.
+- Define exactly one function: def {func_name}(state, memory): ... returning (float, dict[str, float]).
 {sandbox_rules}
 """ + _DIAGNOSIS_BEFORE_CODE + """
 """
@@ -168,7 +196,7 @@ Underperforming Parent Code to Mutate:
 Mutation Task:
 - Create a mutated `{func_name}` with a small precise change that addresses your diagnosis.
 - Keep direct dot access; no getattr/hasattr.
-- Define exactly one function: def {func_name}(state, memory): ... returning a finite float.
+- Define exactly one function: def {func_name}(state, memory): ... returning (float, dict[str, float]).
 {sandbox_rules}
 """ + _DIAGNOSIS_BEFORE_CODE + """
 """
@@ -184,7 +212,9 @@ D3_SYSTEM_PROMPT = (
     "state.collision / state.off_road / state.timeout (bool). "
     "state.progress and state.speed are available. "
     "NO state.robot, NO state.humans, NO state.gx, NO state.lane_position, NO state.distance. "
-    "SANDBOX: never getattr/hasattr/__import__/eval; use ** 0.5; always return a finite float. "
+    "SANDBOX: never getattr/hasattr/__import__/eval; use ** 0.5; "
+    "return (total_reward: float, reward_components: dict[str, float]) — "
+    "flat component dict ≤12 str keys, finite floats, no nesting. "
     "Write a short diagnosis as plain text, then a single Python fenced code block "
     "containing ONLY the revised function."
 )
@@ -195,7 +225,7 @@ Evidence / focus note:
 {extra_context_if_any}
 """ + _DIAGNOSIS_BEFORE_CODE + """
 Revise the function below.
-Maintain signature def compute_reward(state, memory): and return a finite float.
+Maintain signature def compute_reward(state, memory): and return (total_reward, reward_components).
 {current_code}
 """
 
@@ -219,10 +249,30 @@ D5_SEED_FUNCTION = '''def compute_reward(state, memory):
     speed_coef = 0.08
     progress_coef = 1.0
     if state.collision:
-        return float(collision_penalty)
+        total = float(collision_penalty)
+        return total, {
+            "collision_penalty": total,
+            "off_road_penalty": 0.0,
+            "progress_term": 0.0,
+            "speed_term": 0.0,
+        }
     if state.off_road:
-        return float(off_road_penalty)
-    return float(progress_coef * state.progress + speed_coef * state.speed)
+        total = float(off_road_penalty)
+        return total, {
+            "collision_penalty": 0.0,
+            "off_road_penalty": total,
+            "progress_term": 0.0,
+            "speed_term": 0.0,
+        }
+    progress_term = float(progress_coef * state.progress)
+    speed_term = float(speed_coef * state.speed)
+    total = float(progress_term + speed_term)
+    return total, {
+        "collision_penalty": 0.0,
+        "off_road_penalty": 0.0,
+        "progress_term": progress_term,
+        "speed_term": speed_term,
+    }
 '''
 
 
@@ -261,7 +311,7 @@ def format_d1_initial(
 
 
 D1_BATCH_USER_PROMPT = """Please write **{n} diverse** Python reward functions for highway-fast-v0 driving.
-Each function: def {func_name}_vK(state, memory) for K=1..{n}, returning a finite float.
+Each function: def {func_name}_vK(state, memory) for K=1..{n}, returning (finite float, dict[str, float]).
 Use HighwayRewardState fields only (state.ego.*, state.others, state.collision/off_road/timeout, state.progress, state.speed, memory).
 FORBIDDEN fields (will be rejected): lane_position, distance, robot, humans, gx, gy, history.
 No imports, classes, getattr/hasattr. Prefer ** 0.5 for roots.
@@ -415,6 +465,7 @@ def format_d3_repair(
         "state.global_time, state.time_limit\n"
         "  memory.get / memory['key']\n\n"
         "Keep signature def compute_reward(state, memory):. "
-        "No imports, getattr, hasattr. Always return a finite float. "
+        "No imports, getattr, hasattr, comprehensions. "
+        "Return (total_reward: float, reward_components: dict[str, float]). "
         "Output only the fixed function (no markdown)."
     )

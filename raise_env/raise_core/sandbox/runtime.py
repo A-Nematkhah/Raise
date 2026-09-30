@@ -15,7 +15,7 @@ from __future__ import annotations
 import ast
 import math
 import multiprocessing as mp
-from typing import Any, Callable, Dict, Optional, Sequence
+from typing import Any, Callable, Dict, Optional, Sequence, Tuple
 
 from raise_core.sandbox.config import SandboxConfig
 from raise_core.sandbox.errors import RewardSandboxError
@@ -26,7 +26,10 @@ from domains.crowdnav.state import (
     RobotRewardState,
 )
 
-ComputeFn = Callable[[RewardState, Dict[str, Any]], float]
+ComputeFn = Callable[[RewardState, Dict[str, Any]], Any]
+
+# Cap on reward-component dict size (highway EUREKA-style returns).
+MAX_REWARD_COMPONENT_KEYS = 12
 
 _SAFE_BUILTINS = {
     "abs": abs,
@@ -68,6 +71,81 @@ def require_finite_float(value: object) -> float:
     if not math.isfinite(number):
         raise RewardSandboxError(f"compute_reward returned a non-finite value: {number}")
     return number
+
+
+def require_reward_components(value: object) -> Dict[str, float]:
+    """
+    Validate a flat ``dict[str, float]`` of per-step reward components.
+
+    Rejects nested containers, non-str keys, non-finite values, and dicts
+    larger than ``MAX_REWARD_COMPONENT_KEYS``. Does not coerce — fails hard.
+    """
+    if not isinstance(value, dict):
+        raise RewardSandboxError(
+            "reward components must be a dict[str, float], "
+            f"got {type(value).__name__}"
+        )
+    if len(value) > MAX_REWARD_COMPONENT_KEYS:
+        raise RewardSandboxError(
+            f"reward components dict has {len(value)} keys; "
+            f"max allowed is {MAX_REWARD_COMPONENT_KEYS}"
+        )
+    out: Dict[str, float] = {}
+    for key, raw in value.items():
+        if not isinstance(key, str):
+            raise RewardSandboxError(
+                "reward component keys must be str, "
+                f"got {type(key).__name__}"
+            )
+        if isinstance(raw, (dict, list, tuple, set)):
+            raise RewardSandboxError(
+                f"reward component {key!r} must be a finite float, "
+                f"got nested {type(raw).__name__}"
+            )
+        if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+            raise RewardSandboxError(
+                f"reward component {key!r} must be a finite float, "
+                f"got {type(raw).__name__}"
+            )
+        number = float(raw)
+        if not math.isfinite(number):
+            raise RewardSandboxError(
+                f"reward component {key!r} is non-finite: {number}"
+            )
+        out[key] = number
+    return out
+
+
+def unpack_reward_return(
+    value: object,
+    *,
+    allow_components: bool = False,
+) -> Tuple[float, Dict[str, float]]:
+    """
+    Normalize a ``compute_reward`` return value to ``(total, components)``.
+
+    When ``allow_components`` is False (CrowdNav / default), only a bare
+    finite float is accepted. When True (highway), also accepts
+    ``(float, dict[str, float])`` and shims a bare float to ``(float, {})``.
+    """
+    if isinstance(value, bool):
+        raise RewardSandboxError(
+            f"compute_reward must return a finite int or float, got {type(value).__name__}"
+        )
+    if isinstance(value, (int, float)):
+        return require_finite_float(value), {}
+    if not allow_components:
+        raise RewardSandboxError(
+            f"compute_reward must return a finite int or float, got {type(value).__name__}"
+        )
+    if not isinstance(value, tuple) or len(value) != 2:
+        raise RewardSandboxError(
+            "compute_reward must return a finite float or "
+            "(total_reward: float, reward_components: dict[str, float])"
+        )
+    total = require_finite_float(value[0])
+    comps = require_reward_components(value[1])
+    return total, comps
 
 
 def _strip_import_nodes(tree: ast.AST) -> ast.AST:
@@ -171,6 +249,7 @@ def _smoke_worker(
     source_code: str,
     config: SandboxConfig,
     states: Sequence[RewardState],
+    allow_components: bool = False,
 ) -> None:
     """Child-process entry: recompile source and smoke-test states."""
     try:
@@ -185,7 +264,7 @@ def _smoke_worker(
                 raise RewardSandboxError(
                     f"runtime error during smoke test: {type(exc).__name__}: {exc}"
                 ) from exc
-            require_finite_float(value)
+            unpack_reward_return(value, allow_components=bool(allow_components))
         queue.put(("ok", None))
     except BaseException as exc:  # noqa: BLE001
         queue.put(("err", exc))
@@ -197,6 +276,7 @@ def smoke_test_compute(
     config: SandboxConfig,
     *,
     source_code: Optional[str] = None,
+    allow_components: bool = False,
 ) -> None:
     """
     Call compute_fn on each smoke state with a fresh memory dict.
@@ -204,6 +284,9 @@ def smoke_test_compute(
     When ``source_code`` is provided (preferred), runs in a killable child
     process. Without source, falls back to ``run_with_timeout`` on a local
     closure (must be picklable — prefer passing source_code from the validator).
+
+    ``allow_components`` (highway only): accept ``(float, dict[str, float])``
+    returns in addition to bare floats (compatibility shim).
     """
     if not states:
         raise RewardSandboxError("smoke test requires at least one RewardState")
@@ -215,7 +298,13 @@ def smoke_test_compute(
         queue: mp.Queue = ctx.Queue(maxsize=1)
         proc = ctx.Process(
             target=_smoke_worker,
-            args=(queue, str(source_code), config, tuple(states)),
+            args=(
+                queue,
+                str(source_code),
+                config,
+                tuple(states),
+                bool(allow_components),
+            ),
         )
         proc.start()
         proc.join(timeout=float(config.timeout_seconds))
@@ -252,7 +341,7 @@ def smoke_test_compute(
                 raise RewardSandboxError(
                     f"runtime error during smoke test: {type(exc).__name__}: {exc}"
                 ) from exc
-            require_finite_float(value)
+            unpack_reward_return(value, allow_components=bool(allow_components))
 
     run_with_timeout(_run, config.timeout_seconds)
 
@@ -333,6 +422,9 @@ class SandboxedReward(RewardFunction):
     Owns a per-episode ``memory`` dict: cleared on ``reset()``, passed as the
     second argument on every ``compute(state)`` call. Source code is retained
     so the object can be cloudpickled into ShmemVecEnv workers (Windows spawn).
+
+    ``allow_components`` must only be True for highway validators (domain pack
+    wiring). CrowdNav stays scalar-only: tuple returns are rejected.
     """
 
     def __init__(
@@ -341,14 +433,22 @@ class SandboxedReward(RewardFunction):
         config: SandboxConfig,
         *,
         source_code: Optional[str] = None,
+        allow_components: bool = False,
     ) -> None:
         self._compute_fn = compute_fn
         self._config = config
         self._source_code = source_code
+        self._allow_components = bool(allow_components)
         self._memory: Dict[str, Any] = {}
+        self._last_components: Dict[str, float] = {}
 
     def reset(self) -> None:
         self._memory.clear()
+        self._last_components = {}
+
+    def last_reward_components(self) -> Dict[str, float]:
+        """Most recent step's component dict (empty if none / CrowdNav)."""
+        return dict(self._last_components)
 
     def compute(self, state: RewardState) -> float:
         try:
@@ -359,7 +459,12 @@ class SandboxedReward(RewardFunction):
             raise RewardSandboxError(
                 f"runtime error in sandboxed compute(): {type(exc).__name__}: {exc}"
             ) from exc
-        return require_finite_float(value)
+        total, comps = unpack_reward_return(
+            value, allow_components=self._allow_components
+        )
+        # Stash last step only — never accumulate here (diagnostics callback owns trends).
+        self._last_components = comps
+        return total
 
     def __getstate__(self) -> Dict[str, Any]:
         if not self._source_code:
@@ -370,10 +475,13 @@ class SandboxedReward(RewardFunction):
         return {
             "config": self._config,
             "source_code": self._source_code,
+            "allow_components": self._allow_components,
         }
 
     def __setstate__(self, state: Dict[str, Any]) -> None:
         self._config = state["config"]
         self._source_code = state["source_code"]
+        self._allow_components = bool(state.get("allow_components", False))
         self._memory = {}
+        self._last_components = {}
         self._compute_fn = compile_compute_reward(self._source_code, self._config)

@@ -28,6 +28,8 @@ import os
 import time
 from typing import Any, List, Optional, Tuple
 
+import httpx
+
 logger = logging.getLogger(__name__)
 
 COOLDOWN_SECONDS = 60
@@ -42,6 +44,35 @@ _PLACEHOLDER_PREFIXES = ("gsk_REPLACE", "gsk_your_", "YOUR_KEY")
 # raise_core/key_manager.py → raise_env/ (where groq_keys.json lives)
 _RAISE_ENV_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 DEFAULT_GROQ_KEYS_PATH = os.path.join(_RAISE_ENV_ROOT, "groq_keys.json")
+
+
+def _proxy_url_from_env() -> Optional[str]:
+    """Return the first non-empty proxy URL from standard env vars, if any."""
+    for key in (
+        "HTTPS_PROXY",
+        "HTTP_PROXY",
+        "ALL_PROXY",
+        "https_proxy",
+        "http_proxy",
+        "all_proxy",
+    ):
+        value = (os.environ.get(key) or "").strip()
+        if value:
+            return value
+    return None
+
+
+def _groq_http_client() -> Optional[httpx.Client]:
+    """
+    Build an explicit httpx client when a proxy env var is set.
+
+    Env-only trust_env routing is flaky for POSTs through some local HTTP
+    proxies (connection resets); passing ``proxy=`` explicitly is reliable.
+    """
+    proxy = _proxy_url_from_env()
+    if not proxy:
+        return None
+    return httpx.Client(proxy=proxy, timeout=DEFAULT_REQUEST_TIMEOUT)
 
 
 def _is_rate_limit_error(exc: Exception) -> bool:
@@ -265,14 +296,15 @@ class GroqKeyManager:
 
         key = self._select_available_key()
         # max_retries=0: we own pacing / key rotation / transient backoff.
-        return (
-            Groq(
-                api_key=key,
-                max_retries=0,
-                timeout=DEFAULT_REQUEST_TIMEOUT,
-            ),
-            key,
-        )
+        kwargs: dict = {
+            "api_key": key,
+            "max_retries": 0,
+            "timeout": DEFAULT_REQUEST_TIMEOUT,
+        }
+        http_client = _groq_http_client()
+        if http_client is not None:
+            kwargs["http_client"] = http_client
+        return (Groq(**kwargs), key)
 
     def chat_completion(self, **kwargs: Any) -> Any:
         """

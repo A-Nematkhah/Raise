@@ -570,13 +570,14 @@ class HighwayPPOTrainer:
         )
 
         # Part 1: free PPO logger signals every rollout (always on; side-effect only).
+        rollout_diag = RolloutDiagnosticsCallback(
+            candidate_id=cid,
+            log_path=os.path.join(out_dir, "diagnostics_rollout.jsonl"),
+            continuous_actions=is_continuous_mode(),
+        )
         diag_cbs = [
             cb,
-            RolloutDiagnosticsCallback(
-                candidate_id=cid,
-                log_path=os.path.join(out_dir, "diagnostics_rollout.jsonl"),
-                continuous_actions=is_continuous_mode(),
-            ),
+            rollout_diag,
         ]
         # Part 2: cheap ground-truth evals — opt-in; never touches metadata/selection.
         if bool(getattr(config, "highway_diagnostics_groundtruth", False)):
@@ -605,6 +606,14 @@ class HighwayPPOTrainer:
             f"({sps:.0f} steps/s)",
             stage=stage_tag,
         )
+
+        # Attach EUREKA component trends from rollout-end snapshots only.
+        component_trends = rollout_diag.component_trend_summary()
+        if component_trends:
+            # Stash on candidate early so eval/metadata path can pick it up.
+            early_md = dict(candidate.metadata or {})
+            early_md["reward_component_trends"] = component_trends
+            candidate.metadata = early_md
 
         ckpt = os.path.join(out_dir, "model.zip")
         model.save(ckpt)

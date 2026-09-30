@@ -18,7 +18,24 @@ logger = logging.getLogger(__name__)
 
 
 class HighwayRewardValidator(RewardValidator):
-    """RewardValidator + reject unreachable target_speed literals for action_mode."""
+    """
+    Highway validator: speed-setpoint checks + EUREKA component returns.
+
+    Enables ``allow_components=True`` so ``compute_reward`` may return
+    ``(float, dict[str, float])`` (bare float still accepted via shim).
+    CrowdNav validators never set this flag.
+    """
+
+    def __init__(
+        self,
+        config: Optional[SandboxConfig] = None,
+        smoke_states: Optional[Sequence[object]] = None,
+    ) -> None:
+        super().__init__(
+            config=config,
+            smoke_states=smoke_states,
+            allow_components=True,
+        )
 
     def validate_code(self, code: str) -> SandboxedReward:
         from raise_core.llm import normalize_to_compute_reward

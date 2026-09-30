@@ -306,11 +306,20 @@ class RewardInjectedHighwayEnv(_gym_wrapper_base()):  # type: ignore[misc,valid-
             prev_ego_x=self._ego_x,
         )
         reward = float(self.reward_fn.compute(state))
+        # Last-step components only (no accumulation here — RolloutDiagnosticsCallback
+        # owns rollout-end aggregation for EUREKA reflection).
+        comps: Dict[str, float] = {}
+        getter = getattr(self.reward_fn, "last_reward_components", None)
+        if callable(getter):
+            raw = getter()
+            if isinstance(raw, dict):
+                comps = {str(k): float(v) for k, v in raw.items()}
         info["raise_collision"] = collision
         info["raise_off_road"] = off_road
         info["raise_timeout"] = timeout
         info["raise_progress"] = float(state.progress)
         info["raise_speed"] = float(state.speed)
         info["raise_ego_x"] = float(self._ego_x if self._ego_x is not None else 0.0)
+        info["raise_reward_components"] = comps
         self._last_info = info
         return obs, reward, bool(terminated), bool(truncated), info

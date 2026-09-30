@@ -122,7 +122,46 @@ def evidence_block(
             pass
     if score1 is not None and _finite(score1):
         lines.append(f"Score1={float(score1):.3f}")
+    trend_block = format_reward_component_trends(md)
+    if trend_block:
+        lines.append(trend_block)
     return "\n".join(lines)
+
+
+def format_reward_component_trends(metadata: Mapping[str, Any]) -> str:
+    """EUREKA component-reflection section from candidate.metadata trends."""
+    raw = metadata.get("reward_component_trends")
+    if not isinstance(raw, Mapping) or not raw:
+        return ""
+    lines: List[str] = []
+    for name, payload in sorted(raw.items(), key=lambda kv: str(kv[0])):
+        name_s = str(name)
+        if isinstance(payload, Mapping) and "values" in payload:
+            vals = payload.get("values")
+        elif isinstance(payload, (list, tuple)):
+            vals = payload
+        else:
+            continue
+        series: List[float] = []
+        for v in vals or []:
+            try:
+                series.append(float(v))
+            except (TypeError, ValueError):
+                continue
+        if not series:
+            continue
+        quoted = "[" + ",".join(f"'{v:.2f}'" for v in series) + "]"
+        lines.append(
+            f"{name_s}: {quoted}, "
+            f"Max: {max(series):.2f}, Mean: {sum(series) / len(series):.2f}, "
+            f"Min: {min(series):.2f}"
+        )
+    if not lines:
+        return ""
+    return (
+        "Reward component trends (this candidate's own reward function):\n"
+        + "\n".join(lines)
+    )
 
 
 def _feasibility_lines(md: Mapping[str, Any]) -> List[str]:

@@ -31,11 +31,16 @@ class RewardValidator:
         self,
         config: Optional[SandboxConfig] = None,
         smoke_states: Optional[Sequence[object]] = None,
+        *,
+        allow_components: bool = False,
     ) -> None:
         self.config = config if config is not None else SandboxConfig()
         self.smoke_states = (
             tuple(smoke_states) if smoke_states is not None else default_smoke_states()
         )
+        # Highway-only: set True exclusively via HighwayRewardValidator.
+        # CrowdNav / default stay False (scalar returns only).
+        self.allow_components = bool(allow_components)
 
     def validate_code(self, code: str) -> SandboxedReward:
         """
@@ -57,9 +62,18 @@ class RewardValidator:
         check_interface(tree, self.config)
         compute_fn = compile_compute_reward(code, self.config)
         smoke_test_compute(
-            compute_fn, self.smoke_states, self.config, source_code=code
+            compute_fn,
+            self.smoke_states,
+            self.config,
+            source_code=code,
+            allow_components=self.allow_components,
         )
-        return SandboxedReward(compute_fn, self.config, source_code=code)
+        return SandboxedReward(
+            compute_fn,
+            self.config,
+            source_code=code,
+            allow_components=self.allow_components,
+        )
 
     def try_validate(self, code: str) -> Tuple[Optional[SandboxedReward], Optional[str]]:
         """Return (reward, None) on success or (None, reason) on failure."""

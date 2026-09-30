@@ -55,6 +55,34 @@ class _PolicyVisitor(ast.NodeVisitor):
             self.reasons.append("while loops are forbidden")
         self.generic_visit(node)
 
+    def visit_ListComp(self, node: ast.ListComp) -> None:
+        self.reasons.append(
+            "list comprehensions are forbidden "
+            "(use an explicit for-loop; unbounded comps are a DoS risk)"
+        )
+        self.generic_visit(node)
+
+    def visit_SetComp(self, node: ast.SetComp) -> None:
+        self.reasons.append(
+            "set comprehensions are forbidden "
+            "(use an explicit for-loop; unbounded comps are a DoS risk)"
+        )
+        self.generic_visit(node)
+
+    def visit_DictComp(self, node: ast.DictComp) -> None:
+        self.reasons.append(
+            "dict comprehensions are forbidden "
+            "(use an explicit for-loop; unbounded comps are a DoS risk)"
+        )
+        self.generic_visit(node)
+
+    def visit_GeneratorExp(self, node: ast.GeneratorExp) -> None:
+        self.reasons.append(
+            "generator expressions are forbidden "
+            "(use an explicit for-loop; unbounded comps are a DoS risk)"
+        )
+        self.generic_visit(node)
+
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
         self.reasons.append(f"class definitions are forbidden ({node.name})")
         self.generic_visit(node)

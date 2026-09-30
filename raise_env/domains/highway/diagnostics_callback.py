@@ -4,6 +4,11 @@ Never alters training control flow: ``_on_step`` always returns True;
 file I/O failures are swallowed with a warning. Ground-truth checkpoint
 results are written *only* to the per-candidate JSONL — never into
 candidate.metadata or any selection/fitness path.
+
+Reward-component trends (EUREKA): per-step dicts arrive via
+``info['raise_reward_components']``. This callback is the *only* place that
+aggregates them — once per rollout at ``_on_rollout_end`` (and optionally
+later at GroundTruth fractions). Env / SandboxedReward keep last-step only.
 """
 
 from __future__ import annotations
@@ -11,7 +16,8 @@ from __future__ import annotations
 import json
 import logging
 import os
-from typing import Any, List, Optional, Sequence
+import warnings
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 import numpy as np
 from stable_baselines3.common.callbacks import BaseCallback, CallbackList
@@ -52,8 +58,33 @@ def _append_jsonl(path: str, record: dict) -> None:
         fh.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
+def format_component_trend_lines(
+    history: Mapping[str, Sequence[float]],
+) -> List[str]:
+    """
+    EUREKA-style lines:
+    ``name: ['0.03','0.31',...], Max: 0.36, Mean: 0.32, Min: 0.03``
+    """
+    lines: List[str] = []
+    for name in sorted(history.keys()):
+        vals = [float(v) for v in history[name] if v is not None]
+        if not vals:
+            continue
+        quoted = "[" + ",".join(f"'{v:.2f}'" for v in vals) + "]"
+        lines.append(
+            f"{name}: {quoted}, "
+            f"Max: {max(vals):.2f}, Mean: {sum(vals) / len(vals):.2f}, "
+            f"Min: {min(vals):.2f}"
+        )
+    return lines
+
+
 class RolloutDiagnosticsCallback(BaseCallback):
-    """Append one free-signal JSON line per PPO rollout (Part 1)."""
+    """Append one free-signal JSON line per PPO rollout (Part 1).
+
+    Also snapshots mean reward-component values once per rollout for EUREKA
+    reflection (``component_history``).
+    """
 
     def __init__(
         self,
@@ -69,30 +100,97 @@ class RolloutDiagnosticsCallback(BaseCallback):
         self.continuous_actions = bool(continuous_actions)
         self._throttle_buf: List[float] = []
         self._speed_buf: List[float] = []
+        # Per-rollout running sums/counts (keys may appear mid-rollout).
+        self._comp_sums: Dict[str, float] = {}
+        self._comp_counts: Dict[str, int] = {}
+        self._keys_seen_this_rollout: set[str] = set()
+        self._warned_new_keys: set[str] = set()
+        # Across rollouts: name -> list of per-rollout means.
+        self.component_history: Dict[str, List[float]] = {}
+
+    def _ingest_step_components(self, comps: Mapping[str, Any]) -> None:
+        """Accumulate one step's components; missing keys are skipped (not zeroed)."""
+        if not isinstance(comps, Mapping) or not comps:
+            return
+        step_keys = {str(k) for k in comps.keys()}
+        if self._keys_seen_this_rollout:
+            for name in step_keys - self._keys_seen_this_rollout:
+                if name not in self._warned_new_keys:
+                    self._warned_new_keys.add(name)
+                    warnings.warn(
+                        f"reward component key {name!r} appeared mid-rollout for "
+                        f"{self.candidate_id}; using union of keys (missing steps "
+                        "excluded from that key's mean)",
+                        stacklevel=2,
+                    )
+        self._keys_seen_this_rollout |= step_keys
+        for key, raw in comps.items():
+            name = str(key)
+            try:
+                val = float(raw)
+            except (TypeError, ValueError):
+                continue
+            if val != val:  # NaN
+                continue
+            self._comp_sums[name] = self._comp_sums.get(name, 0.0) + val
+            self._comp_counts[name] = self._comp_counts.get(name, 0) + 1
+
+    def _flush_rollout_component_means(self) -> Dict[str, float]:
+        """Compute per-component means for this rollout; append to history."""
+        means: Dict[str, float] = {}
+        for name, total in self._comp_sums.items():
+            n = int(self._comp_counts.get(name, 0))
+            if n <= 0:
+                continue
+            mean = float(total) / float(n)
+            means[name] = mean
+            self.component_history.setdefault(name, []).append(mean)
+        self._comp_sums.clear()
+        self._comp_counts.clear()
+        self._keys_seen_this_rollout.clear()
+        self._warned_new_keys.clear()
+        return means
+
+    def component_trend_summary(self) -> Dict[str, Any]:
+        """Serializable trends for candidate.metadata / evidence_block."""
+        out: Dict[str, Any] = {}
+        for name, vals in self.component_history.items():
+            series = [float(v) for v in vals]
+            if not series:
+                continue
+            out[name] = {
+                "values": series,
+                "max": float(max(series)),
+                "mean": float(sum(series) / len(series)),
+                "min": float(min(series)),
+            }
+        return out
 
     def _on_step(self) -> bool:
-        if not self.continuous_actions:
-            return True
         try:
-            actions = self.locals.get("actions")
-            if actions is not None:
-                arr = np.asarray(actions, dtype=np.float64).reshape(-1)
-                # ContinuousAction: first axis is normalized acceleration (throttle).
-                if arr.size >= 1:
-                    self._throttle_buf.append(float(arr[0]))
             infos = self.locals.get("infos")
             if infos:
                 for info in infos:
                     if not isinstance(info, dict):
                         continue
-                    if "raise_speed" in info:
+                    comps = info.get("raise_reward_components")
+                    if isinstance(comps, dict):
+                        self._ingest_step_components(comps)
+                    if self.continuous_actions and "raise_speed" in info:
                         self._speed_buf.append(float(info["raise_speed"]))
+            if self.continuous_actions:
+                actions = self.locals.get("actions")
+                if actions is not None:
+                    arr = np.asarray(actions, dtype=np.float64).reshape(-1)
+                    if arr.size >= 1:
+                        self._throttle_buf.append(float(arr[0]))
         except Exception:  # noqa: BLE001
             pass
         return True
 
     def _on_rollout_end(self) -> None:
         try:
+            rollout_means = self._flush_rollout_component_means()
             ntv = getattr(getattr(self.model, "logger", None), "name_to_value", None)
             record: dict = {
                 "candidate_id": self.candidate_id,
@@ -106,6 +204,8 @@ class RolloutDiagnosticsCallback(BaseCallback):
                 "clip_fraction": _logger_get(ntv, "clip_fraction"),
                 "fps": _logger_get(ntv, "fps"),
             }
+            if rollout_means:
+                record["reward_component_means"] = rollout_means
             if self.continuous_actions:
                 record.update(self._continuous_rollout_stats())
                 self._throttle_buf.clear()
@@ -144,6 +244,7 @@ class GroundTruthCheckpointCallback(BaseCallback):
     """Cheap holdout eval at fixed fractions of the train budget (Part 2).
 
     Results go only to ``diagnostics_groundtruth.jsonl`` — never metadata.
+    Component-trend snapshots at GT fractions are deferred (optional).
     """
 
     def __init__(
