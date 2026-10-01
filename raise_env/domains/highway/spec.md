@@ -100,7 +100,7 @@ Primary **selection** for the next generation is **`highway_fitness`**
 (= `V_TARGET`) **and** travel ≥400 m (eval diagnostic).
 
 Logged continuous fields: `mean_speed`, `mean_progress`, `lane_change_rate`,
-`high_speed_frac`, `speed_p10`/`speed_p90`. Surrogate labels remain SR/CR/TR.
+`speed_p10`/`speed_p90`. Surrogate labels remain SR/CR/TR.
 
 ## Env / policy
 

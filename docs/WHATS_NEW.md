@@ -326,7 +326,7 @@ collision-loving و lag پشت ترافیک (~۱۵ m/s) ضعیف پوشش داد
 CrowdNav: `evolve_rank` پیش‌فرض همچنان `score1`؛ رفتار baseline دست‌نخورده.
 
 ```powershell
-python scripts/run_raise_highway_4h.py
+python scripts/run_raise_highway.py
 # یا صریح:
 python scripts/run_raise.py --domain highway --closed-loop `
   --closed-loop-evolve-rank pareto ...
@@ -371,7 +371,7 @@ crash@۲۵ را ترجیح می‌داد؛ `final_rank`/`fitness` برنده‌�
 - لاگ epoch: `best_ever`, `frac_cruise_plateau`, `n_unique_fingerprints`
 
 ```powershell
-python scripts/run_raise_highway_4h.py
+python scripts/run_raise_highway.py
 # پیش‌فرض PROFILE: evolve_rank=scalar
 ```
 
