@@ -60,9 +60,6 @@ def _metrics_blob(c: RewardCandidate) -> Optional[dict]:
 def rank_population_pareto(
     population: Sequence[RewardCandidate],
     *,
-    reference_speed_samples: Any = None,
-    reference_cr: Optional[float] = None,
-    reference_tr: Optional[float] = None,
     ref: Any = None,
     calibration_mode: Optional[str] = None,
     objectives: Any = None,
@@ -77,7 +74,6 @@ def rank_population_pareto(
     """
     from domains.highway.pareto_rank import (
         calibrate_from_population,
-        calibrate_from_reference_rollout,
         metrics_from_mapping,
         parse_calibration_mode,
         rank_population,
@@ -111,15 +107,7 @@ def rank_population_pareto(
     elif ref is None:
         ref = reference_for_mode(mode_key, metrics_list, ambient=ambient)
     if ref is None:
-        # Explicit legacy IDLE samples (rarely usable) or percentile fallback.
-        if reference_speed_samples is not None:
-            ref = calibrate_from_reference_rollout(
-                reference_speed_samples,
-                float(reference_cr or 0.0),
-                float(reference_tr or 0.0),
-            )
-        if ref is None:
-            ref = calibrate_from_population(metrics_list)
+        ref = calibrate_from_population(metrics_list)
 
     ordered_m = rank_population(metrics_list, ref=ref, objectives=objectives)
     stamp_pareto_ranks(labeled, ordered_m, ref=ref, objectives=objectives)
@@ -195,9 +183,6 @@ def rank_population_for_evolution(
     *,
     mode: EvolveRankMode = "score1",
     hybrid_score1_weight: float = 0.4,
-    reference_speed_samples: Any = None,
-    reference_cr: Optional[float] = None,
-    reference_tr: Optional[float] = None,
     pareto_ref: Any = None,
     calibration_mode: Optional[str] = None,
     pareto_objectives: Any = None,
@@ -230,9 +215,6 @@ def rank_population_for_evolution(
     if mode_key == "pareto":
         return rank_population_pareto(
             pop,
-            reference_speed_samples=reference_speed_samples,
-            reference_cr=reference_cr,
-            reference_tr=reference_tr,
             ref=pareto_ref,
             calibration_mode=calibration_mode,
             objectives=pareto_objectives,

@@ -246,7 +246,6 @@ class RewardInjectedHighwayEnv(_gym_wrapper_base()):  # type: ignore[misc,valid-
             1.0 / float(merged.get("policy_frequency", DEFAULT_POLICY_FREQ))
         )
         self._time_limit = float(merged.get("duration", DEFAULT_DURATION))
-        self._last_info: Dict[str, Any] = {}
 
     def reset(self, *, seed: Optional[int] = None, options: Optional[dict] = None):
         if hasattr(self.reward_fn, "reset"):
@@ -271,7 +270,6 @@ class RewardInjectedHighwayEnv(_gym_wrapper_base()):  # type: ignore[misc,valid-
             self._ego_x = float(arr[0][1])
         else:
             self._ego_x = 0.0
-        self._last_info = dict(info or {})
         return obs, info
 
     def step(self, action):
@@ -321,5 +319,4 @@ class RewardInjectedHighwayEnv(_gym_wrapper_base()):  # type: ignore[misc,valid-
         info["raise_speed"] = float(state.speed)
         info["raise_ego_x"] = float(self._ego_x if self._ego_x is not None else 0.0)
         info["raise_reward_components"] = comps
-        self._last_info = info
         return obs, reward, bool(terminated), bool(truncated), info

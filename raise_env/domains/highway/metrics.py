@@ -30,10 +30,8 @@ __all__ = [
     "LAG_SPEED_MPS",
     "HACK_PENALTY",
     "highway_fitness",
-    "highway_navigation_scalar",
     "fitness_components",
     "attach_fitness",
-    "attach_selection_scalar",
     "format_highway_metrics_line",
 ]
 
@@ -241,10 +239,6 @@ def fitness_components(metrics: Optional[Mapping[str, Any]]) -> Dict[str, float]
     }
 
 
-# Backward-compatible alias (same function object).
-highway_navigation_scalar = highway_fitness
-
-
 def format_highway_metrics_line(metrics: Mapping[str, Any]) -> str:
     """One-line human summary for logs (fitness is the official objective)."""
     src: Mapping[str, Any] = metrics
@@ -294,8 +288,3 @@ def attach_fitness(metrics: Dict[str, Any]) -> Dict[str, Any]:
     out["fitness_v_eff"] = float(comps.get("v_eff", 0.0))
     out["fitness_disqualified"] = float(comps.get("disqualified", 0.0))
     return out
-
-
-def attach_selection_scalar(metrics: Dict[str, Any]) -> Dict[str, Any]:
-    """Deprecated name — use ``attach_fitness``."""
-    return attach_fitness(metrics)

@@ -67,12 +67,6 @@ class HighwayTrajectoryRecord:
             return float(last.global_time)
         return float(self.length) * float(last.time_step)
 
-    @property
-    def progress_proxy(self) -> float:
-        """Higher = better progress (used like inverse dist_to_goal)."""
-        last = self.states[-1]
-        return float(last.ego.x) + 0.1 * float(last.speed)
-
 
 def _ego_from_dict(d: Dict[str, Any]) -> EgoVehicle:
     return EgoVehicle(

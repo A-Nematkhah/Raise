@@ -648,21 +648,6 @@ def stamp_pareto_ranks(
         c.metadata = md
 
 
-def collect_reference_rollout_stats(
-    *,
-    n_episodes: int = 8,
-    seed: int = 425,
-) -> Tuple[np.ndarray, float, float]:
-    """
-    Legacy IDLE-ego rollout. Prefer ``collect_gear_endpoint_reference_stats``:
-    IDLE on highway-fast-v0 typically has CR≈1 and is rejected by
-    ``calibrate_from_reference_rollout``.
-    """
-    return _rollout_constant_action(
-        action=1, n_episodes=n_episodes, seed=seed, seed_offset=10_003
-    )
-
-
 def _rollout_constant_action(
     *,
     action: int,
@@ -766,38 +751,3 @@ def collect_ambient_traffic_stats(
         "n_episodes": float(n_eps),
         "vehicles_count": float(HOLDOUT_VEHICLES),
     }
-
-
-if __name__ == "__main__":
-    pop = [
-        Metrics(
-            "crawler",
-            sr=1.0,
-            cr=0.0,
-            tr=0.0,
-            progress=15.0,
-            mean_speed=1.5,
-            soft_success=1.0,
-        ),
-        Metrics(
-            "fast_risky",
-            sr=0.7,
-            cr=0.15,
-            tr=0.10,
-            progress=700.0,
-            mean_speed=23.0,
-            soft_success=0.8,
-        ),
-        Metrics(
-            "balanced",
-            sr=0.9,
-            cr=0.04,
-            tr=0.05,
-            progress=600.0,
-            mean_speed=20.0,
-            soft_success=0.85,
-        ),
-    ]
-    print("ranking (best -> worst):")
-    for i, m in enumerate(rank_population(pop), 1):
-        print(f"  {i}. {m.candidate_id}")

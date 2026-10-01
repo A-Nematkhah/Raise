@@ -11,7 +11,6 @@ from domains.highway.metrics import (
     attach_fitness,
     fitness_components,
     highway_fitness,
-    highway_navigation_scalar,
 )
 
 
@@ -26,7 +25,7 @@ def test_speed_thresholds_match_spec():
     assert abs(V_FLOOR - 0.15 * V_TARGET) < 1e-9
 
 
-def test_fitness_alias_matches_navigation_scalar():
+def test_attach_fitness_sets_selection_scalar_alias():
     m = {
         "SR": 0.8,
         "CR": 0.1,
@@ -39,7 +38,6 @@ def test_fitness_alias_matches_navigation_scalar():
         "speed_p90": 24.0,
         "outcome_unique": 2,
     }
-    assert highway_fitness(m) == highway_navigation_scalar(m)
     out = attach_fitness(dict(m))
     assert "fitness" in out and "selection_scalar" in out
     assert out["fitness"] == out["selection_scalar"] == highway_fitness(m)
