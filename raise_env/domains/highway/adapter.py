@@ -155,10 +155,8 @@ def _eval_metrics(
     soft_ok = 0
     lane_changes = 0
     total_steps = 0
-    high_speed_steps = 0
     outcomes: list[str] = []
     ep_overtakes: list[int] = []
-    ep_passed_by: list[int] = []
 
     # Soft-success: survive AND mean_speed ≥ V_TARGET AND progress ≥ threshold.
     #
@@ -188,7 +186,6 @@ def _eval_metrics(
         ep_steps = 0
         ep_lane_chg = 0
         ep_gap_sum = 0.0
-        ep_high = 0
         crashed = False
         off = False
         overtake_tracker = OvertakeTracker()
@@ -210,8 +207,6 @@ def _eval_metrics(
             ep_dist += prog
             ep_speed_sum += spd
             ep_steps += 1
-            if spd >= min_speed_for_soft:
-                ep_high += 1
 
             gap = _nearest_gap_from_obs(obs)
             if gap is not None:
@@ -226,7 +221,6 @@ def _eval_metrics(
             done = bool(terminated or truncated)
 
         ep_overtakes.append(overtake_tracker.passes)
-        ep_passed_by.append(overtake_tracker.passed_by)
         if crashed:
             cr += 1
             outcomes.append("collision")
@@ -252,12 +246,10 @@ def _eval_metrics(
         gaps.append(ep_gap_sum / float(max(1, ep_steps)))
         lane_changes += ep_lane_chg
         total_steps += ep_steps
-        high_speed_steps += ep_high
 
     n = float(n_eps)
     total_km = float(sum(dists)) / 1000.0
     total_overtakes = float(sum(ep_overtakes))
-    total_passed_by = float(sum(ep_passed_by))
     metrics = ProxyMetrics(
         sr=sr / n,
         cr=cr / n,
@@ -273,11 +265,9 @@ def _eval_metrics(
         "soft_success": soft_ok / n,
         "lane_change_rate": float(lane_changes) / float(max(1, total_steps)),
         "overtakes_per_km": total_overtakes / total_km if total_km > 0 else 0.0,
-        "passed_by_per_km": total_passed_by / total_km if total_km > 0 else 0.0,
         "overtake_episode_frac": (
             float(sum(1 for k in ep_overtakes if k > 0)) / n
         ),
-        "high_speed_frac": float(high_speed_steps) / float(max(1, total_steps)),
         "speed_p10": float(np.percentile(speeds, 10)) if speeds else 0.0,
         "speed_p90": float(np.percentile(speeds, 90)) if speeds else 0.0,
         "progress_std": float(np.std(dists)) if len(dists) > 1 else 0.0,

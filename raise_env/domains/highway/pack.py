@@ -55,7 +55,7 @@ def get_pack(*, with_adapter: bool = True) -> DomainPack:
             ),
             "metrics_note": (
                 "SR/CR/TR = survival rates; PL=progress_m; ITR=mean_speed_m/s; "
-                "also soft_success, lane_change_rate, high_speed_frac; "
+                "also soft_success, lane_change_rate, overtakes_per_km; "
                 "fitness is the sole selection objective"
             ),
         },
