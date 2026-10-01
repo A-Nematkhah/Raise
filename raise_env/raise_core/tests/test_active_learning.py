@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import math
 import os
 
 import pytest
@@ -14,7 +13,6 @@ from raise_core.active_learning.queue import (
     dequeue_batch,
     enqueue,
     mark_done,
-    pending_items,
 )
 from raise_core.explore import RewardCandidate
 from raise_core.sandbox.validator import RewardValidator
@@ -82,11 +80,9 @@ def test_queue_roundtrip(tmp_path):
         QueryItem(kind="stage1_scenario", priority=0.5, payload={"scenario_ids": ["s0"]}),
     ]
     enqueue(root, items)
-    assert len(pending_items(root)) == 3
     taken = dequeue_batch(root, limit=2)
     assert len(taken) == 2
     assert taken[0].payload["candidate_id"] == "y"
-    assert len(pending_items(root)) == 1
     mark_done(root, taken[0], result={"status": "ok"})
     assert os.path.isfile(os.path.join(root, "done.jsonl"))
 

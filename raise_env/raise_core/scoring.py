@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional, Protocol, Sequence, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 
@@ -46,13 +46,6 @@ DEFAULT_REJECT_DEGENERATE_AT = 0.5
 DEFAULT_HOLDOUT_FRACTION = 0.3
 # If train_score - holdout_score exceeds this, treat as exploit / memorize.
 DEFAULT_TRAIN_HOLDOUT_GAP = 0.4
-
-
-class Score1Fn(Protocol):
-    def __call__(
-        self, reward_fn: RewardFunction, *, candidate_id: str = ""
-    ) -> "Score1Result":
-        ...
 
 
 @dataclass(frozen=True)
@@ -431,17 +424,6 @@ def make_score1_fn(
             holdout_score=holdout_score,
             scenario_scores=train_res.scenario_scores,
         )
-
-    return _fn
-
-
-def make_constant_score_fn(scores: dict) -> Callable[..., Score1Result]:
-    """Test helper: map candidate_id -> score (missing ids get -inf)."""
-
-    def _fn(reward_fn: RewardFunction, *, candidate_id: str = "") -> Score1Result:
-        del reward_fn
-        value = float(scores.get(candidate_id, float("-inf")))
-        return Score1Result(score=value, degenerate_fraction=0.0)
 
     return _fn
 

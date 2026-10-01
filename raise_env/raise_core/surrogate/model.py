@@ -29,10 +29,6 @@ class SurrogatePrediction:
     model_id: str = ""
 
 
-def default_model_dir() -> str:
-    return "artifacts/surrogate"
-
-
 def _is_finite_number(value: Any) -> bool:
     try:
         number = float(value)

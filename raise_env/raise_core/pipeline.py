@@ -32,7 +32,6 @@ from raise_core.domains import (
 from raise_core.llm import LLMClient, make_llm_client
 from domains.crowdnav.regime import env_name_for_predict_method
 from domains.crowdnav.reporting import candidate_to_dict, write_json
-from raise_core.sandbox import RewardValidator
 from raise_core.selection import (
     candidate_nav_scalar,
     navigation_scalar_from_dict,
@@ -274,17 +273,6 @@ class RaisePipeline:
         )
         population[worst_index] = global_best
         return population
-
-    def _best(self, population: List[RewardCandidate]) -> RewardCandidate:
-        ranked = sorted(
-            population,
-            key=lambda c: (
-                float(c.score) if c.score is not None else float("-inf"),
-                float((c.metadata or {}).get("last_metrics", {}).get("SR", 0.0)),
-            ),
-            reverse=True,
-        )
-        return ranked[0]
 
     def _run_closed_loop_branch(
         self,

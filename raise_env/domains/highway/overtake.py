@@ -9,15 +9,13 @@ class OvertakeTracker:
     """
     Per-episode pass counter along the road's longitudinal axis.
 
-    ``passes``    — a vehicle that was ahead of the ego is now behind it.
-    ``passed_by`` — a vehicle that was behind the ego is now ahead of it.
+    ``passes`` — a vehicle that was ahead of the ego is now behind it.
 
     Call ``observe(env)`` after reset and after every non-terminal step.
     """
 
     def __init__(self) -> None:
         self.passes = 0
-        self.passed_by = 0
         self._side: Dict[int, int] = {}
 
     def observe(self, env: Any) -> None:
@@ -38,6 +36,4 @@ class OvertakeTracker:
             prev = self._side.get(key)
             if prev == 1 and side == -1:
                 self.passes += 1
-            elif prev == -1 and side == 1:
-                self.passed_by += 1
             self._side[key] = side

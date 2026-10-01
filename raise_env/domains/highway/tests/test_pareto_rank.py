@@ -99,30 +99,6 @@ def test_crowding_does_not_scramble_caller_front():
     assert [m.candidate_id for m in front] == before
 
 
-def test_reference_cr_near_one_rejected():
-    import numpy as np
-    from domains.highway.pareto_rank import calibrate_from_reference_rollout
-
-    # IDLE-like: high speeds + CR=1 must not produce v_floor=25 / cr_ceiling=1.
-    ref = calibrate_from_reference_rollout(
-        np.full(100, 25.0), reference_cr=1.0, reference_tr=0.0
-    )
-    assert ref is None
-
-
-def test_sane_reference_clamps_v_floor():
-    import numpy as np
-    from domains.highway.metrics import V_MIN, V_TARGET
-    from domains.highway.pareto_rank import calibrate_from_reference_rollout
-
-    ref = calibrate_from_reference_rollout(
-        np.full(100, 30.0), reference_cr=0.1, reference_tr=0.0
-    )
-    assert ref is not None
-    assert V_MIN <= ref.v_floor <= V_TARGET
-    assert ref.cr_ceiling <= 0.5
-
-
 def test_broken_run_thresholds_would_invert_feasibility():
     """Document the failure mode that scalar breeding replaces."""
     from domains.highway.pareto_rank import Metrics, ReferenceStats, is_feasible

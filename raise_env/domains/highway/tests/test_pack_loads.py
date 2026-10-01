@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 
-import pytest
 
 from raise_core.domains import available_domains, load_domain, make_validator_for_domain
 from domains.highway.prompts import D5_SEED_FUNCTION

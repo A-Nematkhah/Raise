@@ -19,10 +19,6 @@ _MANIFEST_NAME = "manifest.json"
 _APPEND_LOCK = threading.RLock()
 
 
-def default_dataset_root() -> str:
-    return "domains/crowdnav/data/surrogate_dataset"
-
-
 def _ensure_dir(root: str) -> None:
     os.makedirs(root, exist_ok=True)
 

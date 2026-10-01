@@ -26,11 +26,10 @@ from raise_core.surrogate.dataset_io import (
     write_manifest,
 )
 from raise_core.surrogate.features import (
-    code_sha256,
     example_id_for_features,
     extract_candidate_features,
 )
-from raise_core.surrogate.model import SurrogateModel, default_model_dir
+from raise_core.surrogate.model import SurrogateModel
 
 logger = logging.getLogger(__name__)
 

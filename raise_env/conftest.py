@@ -5,7 +5,6 @@ from __future__ import annotations
 import sys
 from unittest.mock import MagicMock
 
-import pytest
 
 import raise_paths  # noqa: F401 — arms domains/crowdnav/runtime on sys.path
 

@@ -27,10 +27,6 @@ def set_verbose(enabled: bool) -> None:
     _VERBOSE = bool(enabled)
 
 
-def is_verbose() -> bool:
-    return _VERBOSE
-
-
 def is_interactive() -> bool:
     """True when stderr looks like a live terminal (not a pipe / CI capture)."""
     if os.environ.get("RAISE_FORCE_TQDM", "").strip() in ("1", "true", "yes"):

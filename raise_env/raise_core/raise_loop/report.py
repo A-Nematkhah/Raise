@@ -212,16 +212,3 @@ def write_closed_loop_report(
         },
     )
     return path
-
-
-def log_closed_loop_report(output_dir: str, *, manifest: Optional[Dict[str, Any]] = None) -> str:
-    """Write REPORT.txt and print it via console status lines."""
-    from raise_core import console
-
-    path = write_closed_loop_report(output_dir, manifest=manifest)
-    text = build_closed_loop_report(output_dir, manifest=manifest)
-    console.banner("Closed-loop report")
-    for line in text.strip().splitlines():
-        console.status(line, stage="closed-loop")
-    console.status(f"Wrote {path}", stage="closed-loop")
-    return path

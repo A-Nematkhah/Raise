@@ -95,20 +95,6 @@ def filter_ok_examples(
     return feats_out, labs_out
 
 
-def normalize_labels(
-    labels: Sequence[Mapping[str, Any]],
-    *,
-    target_keys: Sequence[str],
-    drop_failed: bool = True,
-) -> list[Dict[str, Any]]:
-    out: list[Dict[str, Any]] = []
-    for row in labels:
-        if drop_failed and row.get("ok") is False:
-            continue
-        out.append(normalize_label_row(row, target_keys=target_keys))
-    return out
-
-
 def quality_from_y_hat(y_hat: Optional[Mapping[str, Any]]) -> float:
     """
     Predicted elite quality for gate / AL.

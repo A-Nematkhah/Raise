@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import os
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from raise_core.active_learning.query import QueryItem
 
@@ -17,10 +17,6 @@ _QUEUE = "queue.jsonl"
 _DONE = "done.jsonl"
 _STEPS = "steps.jsonl"
 _MANIFEST = "manifest.json"
-
-
-def default_queue_root() -> str:
-    return "domains/crowdnav/data/active_learning"
 
 
 def _ensure_dir(root: str) -> None:
@@ -98,10 +94,6 @@ def write_manifest(root: str, payload: Dict[str, Any]) -> None:
     with open(_manifest_path(root), "w", encoding="utf-8") as fh:
         json.dump(payload, fh, indent=2, ensure_ascii=False)
         fh.write("\n")
-
-
-def pending_items(root: str) -> List[QueryItem]:
-    return [QueryItem.from_dict(row) for row in _load_jsonl(_queue_path(root))]
 
 
 def enqueue(root: str, items: List[QueryItem]) -> None:

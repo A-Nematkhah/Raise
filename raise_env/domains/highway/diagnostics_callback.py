@@ -58,27 +58,6 @@ def _append_jsonl(path: str, record: dict) -> None:
         fh.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
-def format_component_trend_lines(
-    history: Mapping[str, Sequence[float]],
-) -> List[str]:
-    """
-    EUREKA-style lines:
-    ``name: ['0.03','0.31',...], Max: 0.36, Mean: 0.32, Min: 0.03``
-    """
-    lines: List[str] = []
-    for name in sorted(history.keys()):
-        vals = [float(v) for v in history[name] if v is not None]
-        if not vals:
-            continue
-        quoted = "[" + ",".join(f"'{v:.2f}'" for v in vals) + "]"
-        lines.append(
-            f"{name}: {quoted}, "
-            f"Max: {max(vals):.2f}, Mean: {sum(vals) / len(vals):.2f}, "
-            f"Min: {min(vals):.2f}"
-        )
-    return lines
-
-
 class RolloutDiagnosticsCallback(BaseCallback):
     """Append one free-signal JSON line per PPO rollout (Part 1).
 

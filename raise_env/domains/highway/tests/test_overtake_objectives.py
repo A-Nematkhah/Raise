@@ -129,4 +129,3 @@ def test_overtake_tracker_counts_pass():
     other.position = (10.0, 0.0)
     tr.observe(env)
     assert tr.passes == 1
-    assert tr.passed_by == 0

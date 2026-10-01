@@ -9,7 +9,7 @@ instead of letting Stage II raise deep in the stack.
 from __future__ import annotations
 
 import os
-from typing import List, Optional, Sequence
+from typing import List, Sequence
 
 
 def _default_baseline_stage1_hint() -> str:

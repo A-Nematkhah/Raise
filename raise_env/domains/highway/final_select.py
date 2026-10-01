@@ -5,7 +5,7 @@ from __future__ import annotations
 import glob
 import json
 import os
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Sequence, Tuple
 
 from raise_core.explore import RewardCandidate
 

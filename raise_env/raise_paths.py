@@ -18,17 +18,6 @@ import sys
 
 ROOT = os.path.abspath(os.path.dirname(__file__))
 CROWDNAV_RUNTIME = os.path.join(ROOT, "domains", "crowdnav", "runtime")
-CROWDNAV_DATA = os.path.join(ROOT, "domains", "crowdnav", "data")
-HIGHWAY_DATA = os.path.join(ROOT, "domains", "highway", "data")
-
-# Default relative paths (from raise_env cwd) for datasets / GST trees.
-CROWDNAV_STAGE1_DATASET = "domains/crowdnav/data/stage1_dataset"
-CROWDNAV_ACTIVE_LEARNING = "domains/crowdnav/data/active_learning"
-CROWDNAV_SURROGATE_DATASET = "domains/crowdnav/data/surrogate_dataset"
-HIGHWAY_STAGE1_DATASET = "domains/highway/data/stage1_dataset"
-HIGHWAY_ACTIVE_LEARNING = "domains/highway/data/active_learning"
-HIGHWAY_SURROGATE_DATASET = "domains/highway/data/surrogate_dataset"
-GST_RUNTIME_PREFIX = "domains/crowdnav/runtime/gst_updated"
 
 
 def ensure_raise_paths() -> str:

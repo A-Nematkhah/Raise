@@ -2,16 +2,10 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import pytest
 
-from domains.highway.diagnostics_callback import (
-    RolloutDiagnosticsCallback,
-    format_component_trend_lines,
-)
+from domains.highway.diagnostics_callback import RolloutDiagnosticsCallback
 from domains.highway.prompts import (
-    D2_MUTATION_PROMPT,
     D5_SEED_FUNCTION,
     _DIAGNOSIS_BEFORE_CODE,
     format_d2_mutation,
@@ -19,10 +13,7 @@ from domains.highway.prompts import (
 from domains.highway.reward_checks import make_highway_validator
 from domains.highway.state import default_smoke_states
 from raise_core.domains import load_domain, make_validator_for_domain
-from raise_core.raise_loop.proxy_feedback import (
-    evidence_block,
-    format_reward_component_trends,
-)
+from raise_core.raise_loop.proxy_feedback import evidence_block
 from raise_core.sandbox.errors import RewardSandboxError
 from raise_core.sandbox.runtime import (
     MAX_REWARD_COMPONENT_KEYS,
@@ -229,14 +220,6 @@ def test_evidence_block_and_mutation_include_component_trends():
     assert "Reward component trends" in mut
     assert "returning (float, dict[str, float])" in mut or "dict[str, float]" in mut
     assert "survival/success rate is always near zero" in mut
-
-
-def test_format_component_trend_lines_ordering():
-    lines = format_component_trend_lines(
-        {"z_term": [1.0, 2.0], "a_term": [0.5]}
-    )
-    assert lines[0].startswith("a_term:")
-    assert lines[1].startswith("z_term:")
 
 
 def test_default_validator_still_scalar_only():

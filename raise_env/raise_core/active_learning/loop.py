@@ -19,10 +19,6 @@ from raise_core.surrogate.model import SurrogateModel
 logger = logging.getLogger(__name__)
 
 
-class SurrogateModelRequired(RuntimeError):
-    """Raised / signaled when AL runs without a fitted surrogate on disk."""
-
-
 def _model_ready(surrogate_model_dir: str) -> bool:
     return os.path.isfile(os.path.join(surrogate_model_dir, "model.joblib"))
 

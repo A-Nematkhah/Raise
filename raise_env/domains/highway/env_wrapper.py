@@ -19,7 +19,6 @@ from domains.highway.state import (
 ENV_ID = "highway-fast-v0"
 DEFAULT_DURATION = 40  # seconds
 DEFAULT_POLICY_FREQ = 5
-DEFAULT_TIME_STEP = 1.0 / DEFAULT_POLICY_FREQ
 DEFAULT_VEHICLES = 20
 DEFAULT_LANES = 4
 MAX_OTHERS = 5

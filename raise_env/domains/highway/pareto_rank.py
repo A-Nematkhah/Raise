@@ -42,7 +42,6 @@ from domains.highway.env_wrapper import (
 
 CALIBRATION_MODES = ("population", "env_measured", "no_speed_floor")
 DEFAULT_CALIBRATION_MODE = "no_speed_floor"
-LEGACY_CALIBRATION_MODE = "population"
 
 
 def parse_calibration_mode(value: object) -> str:
@@ -147,62 +146,6 @@ def survival_only_reference(
         require_survival=True,
         source=str(source),
         ambient=dict(ambient) if ambient else None,
-    )
-
-
-def calibrate_from_reference_rollout(
-    reference_speed_samples: np.ndarray,
-    reference_cr: float = 0.0,
-    reference_tr: float = 0.0,
-    floor_percentile: float = 10.0,
-    safety_margin: float = 1.5,
-    *,
-    max_usable_cr: float = 0.5,
-    default_cr_ceiling: float = 0.25,
-    default_tr_ceiling: float = 0.05,
-) -> Optional[ReferenceStats]:
-    """
-    Derive thresholds from a short non-RL rollout.
-
-    Returns ``None`` when the reference ego is too crashy (e.g. IDLE with
-    CR≈1): that calibration made high-SR cruise *infeasible* while crashy
-    high-speed policies looked feasible. Callers should fall back to
-    ``calibrate_from_population``.
-
-    When usable, ``v_floor`` is clamped to ``[V_MIN, V_TARGET]`` so the
-    feasibility floor stays inside the fitness diagnostic speed band
-    (``V_TARGET`` here is *not* an LLM/selection target — only a clamp for
-    auto-calibrated feasibility).
-    """
-    cr = float(reference_cr)
-    if cr > float(max_usable_cr):
-        return None
-
-    samples = np.asarray(reference_speed_samples, dtype=np.float64).ravel()
-    if samples.size == 0:
-        samples = np.asarray([0.0], dtype=np.float64)
-    v_raw = float(np.percentile(samples, floor_percentile))
-    try:
-        from domains.highway.metrics import V_MIN as _VMIN
-        from domains.highway.metrics import V_TARGET as _VT
-
-        v_lo, v_hi = float(_VMIN), float(_VT)
-    except Exception:  # noqa: BLE001
-        v_lo, v_hi = 10.0, 25.0
-    # Keep auto-calibrated floor inside the diagnostic fitness speed band.
-    v_floor = float(min(v_hi, max(v_lo, v_raw)))
-    tr = float(reference_tr)
-    cr_ceiling = min(1.0, cr * float(safety_margin) + 0.05)
-    # Never open the CR gate fully from a weak reference.
-    cr_ceiling = min(cr_ceiling, float(default_cr_ceiling) * 2.0)
-    if cr_ceiling < 0.05:
-        cr_ceiling = float(default_cr_ceiling)
-    tr_ceiling = min(1.0, max(float(default_tr_ceiling), tr * float(safety_margin) + 0.05))
-    return ReferenceStats(
-        v_floor=v_floor,
-        cr_ceiling=float(cr_ceiling),
-        tr_ceiling=float(tr_ceiling),
-        source="idle_ego_reference_rollout",
     )
 
 
@@ -468,9 +411,6 @@ def crowding_distance(
 
 def rank_population(
     population: Sequence[Metrics],
-    reference_speed_samples: Optional[np.ndarray] = None,
-    reference_cr: Optional[float] = None,
-    reference_tr: Optional[float] = None,
     ref: Optional[ReferenceStats] = None,
     objectives: Optional[ParetoObjectives] = None,
 ) -> List[Metrics]:
@@ -485,14 +425,7 @@ def rank_population(
         return []
 
     if ref is None:
-        if reference_speed_samples is not None:
-            ref = calibrate_from_reference_rollout(
-                reference_speed_samples,
-                float(reference_cr or 0.0),
-                float(reference_tr or 0.0),
-            )
-        if ref is None:
-            ref = calibrate_from_population(pop)
+        ref = calibrate_from_population(pop)
 
     feasible = [m for m in pop if is_feasible(m, ref)]
     # Preserve input order for stable membership (avoid dataclass value traps).

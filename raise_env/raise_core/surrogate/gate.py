@@ -12,7 +12,7 @@ import os
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from raise_core.surrogate.features import extract_candidate_features
-from raise_core.surrogate.model import SurrogateModel, SurrogatePrediction
+from raise_core.surrogate.model import SurrogateModel
 from raise_core.surrogate.targets import quality_from_y_hat
 
 logger = logging.getLogger(__name__)

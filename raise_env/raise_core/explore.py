@@ -42,7 +42,7 @@ from domains.crowdnav.prompts import (
     format_d2_mutation,
 )
 from raise_core.rejection_log import categorize_validation_error
-from raise_core.sandbox import RewardSandboxError, RewardValidator
+from raise_core.sandbox import RewardValidator
 from raise_core.sandbox.runtime import SandboxedReward
 from domains.crowdnav.state import RewardFunction
 
@@ -307,12 +307,6 @@ class StageIEvolver:
             validation_error=err,
             metadata=dict(metadata or {}),
         )
-
-    def _llm_code(self, user_prompt: str, *, system: Optional[str] = None) -> str:
-        sys_txt = system if system is not None else self.system_prompt
-        full = f"{sys_txt}\n\n{user_prompt}"
-        raw = self.llm.complete(full)
-        return self._completion_to_code(raw)
 
     def _attempt_candidate(
         self,
@@ -1116,8 +1110,3 @@ class StageIEvolver:
             )
 
         return ranked
-
-
-def seed_reward_code() -> str:
-    """Appendix D.5 seed, already adapted to ``compute_reward(state)``."""
-    return D5_SEED_FUNCTION

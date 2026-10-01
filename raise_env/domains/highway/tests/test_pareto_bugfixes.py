@@ -14,7 +14,6 @@ from domains.highway.pareto_rank import (
     is_feasible,
     rank_population,
     reference_for_mode,
-    survival_only_reference,
     _objectives,
 )
 
@@ -58,8 +57,6 @@ def test_default_objectives_drop_redundant_sr():
 
 def test_noise_margin_blocks_tiny_sr_difference():
     # Same CR/TR/speed/progress; SR 0.50 vs 0.55 with n=20 → within 2×SE.
-    a = _m("a", sr=0.55, cr=0.45, speed=20.0, progress=100.0, n=20)
-    b = _m("b", sr=0.50, cr=0.50, speed=20.0, progress=100.0, n=20)
     objs = ParetoObjectives(include_sr=True, progress=True)
     # Without meaningful gap beyond SE, neither should dominate on SR alone
     # when CR also differs only slightly — use identical CR and only SR gap.

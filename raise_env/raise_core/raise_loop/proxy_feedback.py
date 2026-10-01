@@ -29,11 +29,6 @@ def _f(metrics: Mapping[str, Any], *keys: str, default: float = 0.0) -> float:
     return float(default)
 
 
-def _is_highway_metrics(metrics: Mapping[str, Any]) -> bool:
-    """Private alias — prefer ``raise_core.selection.is_highway_metrics``."""
-    return is_highway_metrics(metrics)
-
-
 def evidence_block(
     metrics: Mapping[str, Any],
     *,

@@ -38,11 +38,6 @@ def _utc_now() -> str:
     )
 
 
-def stage3_checkpoint_dir(output_dir: str) -> str:
-    """``{run}/stage3`` next to ``stage3_train``."""
-    return os.path.join(os.path.abspath(output_dir), "stage3")
-
-
 def stage3_dir_from_train_root(output_root: str) -> str:
     """If ``output_root`` is ``.../stage3_train``, return sibling ``.../stage3``."""
     root = os.path.abspath(output_root)

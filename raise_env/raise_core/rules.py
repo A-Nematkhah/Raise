@@ -16,7 +16,7 @@ Rule ranks prioritize Success > Other > Fail; tie-breaks use nav length
 from __future__ import annotations
 
 from enum import IntEnum
-from typing import Sequence, Tuple
+from typing import Sequence
 
 import numpy as np
 
@@ -114,14 +114,3 @@ def spearman_correlation(x: Sequence[float], y: Sequence[float]) -> float:
     if denom <= 0.0:
         return float("nan")
     return float(np.sum(ra * rb) / denom)
-
-
-def pairwise_rule_scores(
-    categories: Sequence[TrajectoryCategory],
-    nav_lengths: Sequence[float],
-    dist_goals: Sequence[float],
-) -> Tuple[float, ...]:
-    return tuple(
-        rule_preference_score(cat, nav_length=nav, dist_goal=dist)
-        for cat, nav, dist in zip(categories, nav_lengths, dist_goals)
-    )

@@ -197,13 +197,6 @@ class CheckpointStore:
         path = os.path.join(self.root, f"seed_{int(seed):04d}", f"{stage}_done.json")
         return os.path.isfile(path)
 
-    def load_stage_done(self, seed: int, stage: str) -> Optional[Dict[str, Any]]:
-        path = os.path.join(self.root, f"seed_{int(seed):04d}", f"{stage}_done.json")
-        if not os.path.isfile(path):
-            return None
-        with open(path, encoding="utf-8") as f:
-            return json.load(f)
-
     def seed_complete(self, seed: int) -> bool:
         return self.stage_done(seed, "stage3")
 

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Any, Dict, List, Mapping, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
 from raise_core.validate import STAGE3_PAPER_STEPS
 
@@ -30,7 +30,6 @@ PAPER_HUMAN_COUNTS = (5, 10, 15, 20)
 
 # Paper does not state how many seeds Table 1 mean±std used.
 # We default to 5 independent Algorithm-1 seeds and document that choice.
-PAPER_DEFAULT_N_SEEDS = 5
 PAPER_DEFAULT_SEEDS = (425, 426, 427, 428, 429)
 
 PAPER_SCALE_YAML = os.path.join("configs", "paper_scale.yaml")

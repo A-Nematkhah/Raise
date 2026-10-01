@@ -167,7 +167,6 @@ class ClosedLoopRunner:
 
     def run(self) -> ClosedLoopResult:
         from raise_core.domains import load_domain, make_stage2_trainer_for_domain
-        from raise_core.sandbox.validator import RewardValidator
         from raise_core.refine import Stage2Config
 
         cfg = self.cfg

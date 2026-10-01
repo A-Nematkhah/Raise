@@ -11,7 +11,7 @@ import logging
 import math
 import re
 from dataclasses import dataclass, field, replace
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 

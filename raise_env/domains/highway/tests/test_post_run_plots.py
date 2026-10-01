@@ -8,7 +8,6 @@ from pathlib import Path
 
 def test_plot_closed_loop_epochs(tmp_path: Path):
     import importlib.util
-    import os
 
     root = Path(__file__).resolve().parents[3]
     path = root / "scripts" / "plot_raise_run.py"
