@@ -1,20 +1,25 @@
 """
 Paper-scale multi-seed Algorithm 1 orchestration.
 
-Only invoked by ``scripts/run_raise_paper_scale.py`` (never by pytest).
-Aggregates final-policy metrics as mean±std **across seeds**, with explicit
-methodology text when the paper omits its seed count.
+Only invoked via ``scripts/run_raise.py --profile paper_scale`` (never by
+pytest at real budgets). Aggregates final-policy metrics as mean±std
+**across seeds**, with explicit methodology text when the paper omits its
+seed count.
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import logging
 import math
 import os
+import sys
+from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence
 
+from raise_core import console
 from raise_core.checkpointing import CheckpointStore, CostLogger, Timer
 from raise_core.pipeline import RaisePipeline, RaiseRunConfig
 from raise_core.presets import (
@@ -289,3 +294,140 @@ class PaperScaleRunner:
             )
         logger.info("Wrote paper-scale report → %s", report_path)
         return report
+
+
+def _parse_seeds_text(text: Optional[str]) -> Optional[List[int]]:
+    if text is None or not str(text).strip():
+        return None
+    return [int(x.strip()) for x in str(text).split(",") if x.strip()]
+
+
+def run_paper_scale_cli(argv: Sequence[str]) -> int:
+    """
+    Human-triggered paper-scale run (``run_raise.py --profile paper_scale``).
+
+    K2=8000, G2=16, K3=1e7, G3=3, E3=500, N=8, G1=10, M=100, N_traj=10;
+    full Stage I→II→III once per seed, mean±std across seeds, resume per
+    (seed, stage, round, candidate). Refuses to start under CI.
+    """
+    if os.environ.get("CI") or os.environ.get("GITHUB_ACTIONS"):
+        print(
+            "Refusing paper-scale run under CI. "
+            "This entry point is human-triggered only "
+            "(K3=1e7 × N × G3 × seeds is far too large for CI).",
+            file=sys.stderr,
+        )
+        return 2
+
+    parser = argparse.ArgumentParser(
+        prog="run_raise.py --profile paper_scale",
+        description="RAISE paper-scale multi-seed Algorithm 1 (Tables 3–6)",
+    )
+    parser.add_argument(
+        "--config",
+        type=str,
+        default="configs/paper_scale.yaml",
+        help="Paper-scale YAML (default: configs/paper_scale.yaml)",
+    )
+    parser.add_argument(
+        "--seeds",
+        type=str,
+        default=None,
+        help="Comma-separated seeds (default: 5 seeds from YAML / 425–429)",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        default=None,
+        help="Override output dir (default: results/paper_scale)",
+    )
+    parser.add_argument("--device", type=str, default=None, choices=["cpu", "cuda"])
+    parser.add_argument(
+        "--llm",
+        type=str,
+        default=None,
+        choices=["seed", "groq", "vllm", "ollama", "scripted"],
+    )
+    parser.add_argument(
+        "--allow-seed-llm",
+        action="store_true",
+        help="Permit llm_provider=seed (YAML default or --llm seed) without a real LLM",
+    )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Extra DEBUG-level terminal detail",
+    )
+    parser.add_argument(
+        "--dry-run-stubs",
+        action="store_true",
+        help="Use --fast stub budgets to exercise resume/report wiring only",
+    )
+    parser.add_argument(
+        "--regime",
+        type=str,
+        default=None,
+        choices=["without_random", "with_random", "both"],
+        help="Override EVOLUTION_RANDOMIZATION_REGIME from YAML (AUDIT.md §8.1)",
+    )
+    args = parser.parse_args(list(argv))
+    if args.regime == "both":
+        print(
+            "regime=both requires two separate paper-scale passes (doubled budget).",
+            file=sys.stderr,
+        )
+        return 2
+
+    # Isolate Config.get_args() from our CLI.
+    sys.argv = [
+        sys.argv[0],
+        "--no-cuda" if (args.device or "cuda") == "cpu" else "--seed",
+        "425",
+    ]
+
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.INFO,
+        format="%(asctime)s %(levelname)s %(message)s",
+        datefmt="%H:%M:%S",
+    )
+    console.set_verbose(bool(args.verbose))
+
+    spec = load_paper_scale_yaml(args.config)
+    if args.regime is not None:
+        spec = replace(spec, randomization_regime=args.regime)
+    resolved_llm = (args.llm or spec.llm_provider or "seed").strip().lower()
+    if resolved_llm == "seed" and not args.allow_seed_llm and not args.dry_run_stubs:
+        print(
+            "Refusing to run a non-fast pipeline with the seed (no real LLM) "
+            "provider — pass --llm groq|ollama|vllm explicitly, or pass "
+            "--allow-seed-llm if this is intentional (e.g. debugging Stage II/III "
+            "wiring without LLM cost).",
+            file=sys.stderr,
+        )
+        return 2
+    runner = PaperScaleRunner(
+        spec,
+        seeds=_parse_seeds_text(args.seeds),
+        output_dir=args.output_dir,
+        device=args.device,
+        llm_provider=args.llm,
+        dry_run_stubs=args.dry_run_stubs,
+    )
+    logging.info(
+        "Paper-scale start: seeds=%s K3=%d regime=%s predict_method=%s "
+        "output=%s dry_run_stubs=%s",
+        runner.seeds,
+        spec.K3,
+        spec.randomization_regime,
+        spec.predict_method,
+        runner.output_dir,
+        args.dry_run_stubs,
+    )
+    logging.info("Methodology: %s", spec.methodology_note())
+    report = runner.run()
+    logging.info(
+        "Done. Aggregate keys=%s cost_log=%s",
+        list((report.get("table1_style_aggregate") or {}).get("metrics") or {}),
+        runner.cost_log_path,
+    )
+    return 0

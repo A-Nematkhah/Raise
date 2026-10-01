@@ -16,7 +16,7 @@ Architecture map: **[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)**
 | Mode | Command |
 |------|---------|
 | Algorithm 1 (paper) | `cd raise_env && python scripts/run_raise.py` |
-| Closed loop | `python scripts/run_raise.py --closed-loop` or `run_raise_12h.py` |
+| Closed loop | `python scripts/run_raise.py --closed-loop` or `--profile 1h\|12h\|18h` |
 | Highway diagnostic | `python scripts/run_raise.py --domain highway --fast` |
 
 `raise_env` is a **derivative work** of

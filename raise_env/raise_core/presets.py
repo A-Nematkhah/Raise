@@ -229,12 +229,13 @@ def parse_seeds_arg(
 
 
 # ---------------------------------------------------------------------------
-# Closed-loop CLI profiles (single source of truth for run_raise_* wrappers)
+# Run profiles for ``scripts/run_raise.py --profile <name>``
 # ---------------------------------------------------------------------------
 
-# Exact field bags previously embedded in scripts/run_raise_*.py — do not
-# silently change values when editing; wrappers / --profile must stay byte-
-# compatible with historical runs.
+# Exact field bags of the former scripts/run_raise_{1h,12h,18h}.py wrappers —
+# do not silently change values when editing; --profile must stay compatible
+# with historical runs. ``output_dir_prefix`` → stamped --output-dir (plus
+# nested surrogate dirs for closed-loop profiles) unless the CLI overrides it.
 
 CLOSED_LOOP_PROFILES: Dict[str, Dict[str, Any]] = {
     "1h": {
@@ -295,7 +296,7 @@ CLOSED_LOOP_PROFILES: Dict[str, Dict[str, Any]] = {
         "seed": 425,
         "llm": "groq",
         "device": "cuda",
-        "num_processes": 2,
+        "num_processes": 1,
         "predict_method": "inferred",
         "regime": "with_random",
         "human_num": 5,
@@ -310,8 +311,31 @@ CLOSED_LOOP_PROFILES: Dict[str, Dict[str, Any]] = {
         "stage3_k3": 500_000,
         "stage3_eval": 50,
         "stage3_rounds": 1,
+        "no_h_sweep": True,
+        "final_rank": "llm",
         "closed_loop": True,
         "output_dir_prefix": "results/closed_loop_18h_",
+    },
+    "smoke": {
+        # Real A2C/PPO wiring check at tiny budgets (former run_stage{2,3}_smoke).
+        "seed": 425,
+        "llm": "seed",
+        "allow_seed_llm": True,
+        "score1": "smoke",
+        "device": "cpu",
+        "num_processes": 1,
+        "easy": True,
+        "population": 2,
+        "generations": 1,
+        "stage2_rounds": 1,
+        "stage2_train_steps": 200,
+        "k2_unit": "env_steps",
+        "eval_episodes_stage2": 2,
+        "stage3_rounds": 1,
+        "stage3_k3": 200,
+        "stage3_eval": 2,
+        "no_h_sweep": True,
+        "output_dir_prefix": "results/smoke_",
     },
     "highway": {
         "domain": "highway",
@@ -356,9 +380,10 @@ CLOSED_LOOP_PROFILES: Dict[str, Dict[str, Any]] = {
         "output_dir_prefix": "results/highway_",
     },
     "paper_scale": {
-        # Multi-seed Tables 3–6 — see PaperScaleSpec / load_paper_scale_yaml.
-        # Not expanded to flat CLI flags; wrappers redirect to paper_scale runner.
-        "redirect": "scripts/run_raise_paper_scale.py",
+        # Multi-seed Tables 3–6 (configs/paper_scale.yaml). Not expanded to
+        # flat CLI flags; run_raise.py hands the remaining argv to
+        # raise_core.paper_scale.run_paper_scale_cli.
+        "runner": "paper_scale",
     },
 }
 
@@ -380,9 +405,9 @@ def profile_to_run_raise_argv(name: str) -> List[str]:
     Caller should prepend these, then append user overrides so CLI wins.
     """
     p = get_closed_loop_profile(name)
-    if p.get("redirect"):
+    if p.get("runner"):
         raise ValueError(
-            f"Profile {name!r} redirects to {p['redirect']} — do not expand to argv"
+            f"Profile {name!r} uses the {p['runner']!r} runner — do not expand to argv"
         )
     argv: List[str] = []
 
@@ -403,6 +428,10 @@ def profile_to_run_raise_argv(name: str) -> List[str]:
         _flag("--seed", p["seed"])
     if p.get("llm"):
         _flag("--llm", p["llm"])
+    if p.get("allow_seed_llm"):
+        argv.append("--allow-seed-llm")
+    if p.get("score1"):
+        _flag("--score1", p["score1"])
     if p.get("device"):
         _flag("--device", p["device"])
     if p.get("num_processes") is not None:
@@ -419,6 +448,10 @@ def profile_to_run_raise_argv(name: str) -> List[str]:
         _flag("--stage1-generations", p["generations"])
     if p.get("k2") is not None:
         _flag("--closed-loop-k2", p["k2"])
+    if p.get("stage2_rounds") is not None:
+        _flag("--stage2-rounds", p["stage2_rounds"])
+    if p.get("stage2_train_steps") is not None:
+        _flag("--stage2-train-steps", p["stage2_train_steps"])
     if p.get("k2_unit"):
         _flag("--k2-unit", p["k2_unit"])
     if p.get("min_labels_gate") is not None:

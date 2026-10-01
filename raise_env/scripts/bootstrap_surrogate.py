@@ -9,7 +9,7 @@ Match the closed-loop Stage II env when warm-starting a RAISE run.
 CrowdNav (12h defaults)::
 
   python scripts/bootstrap_surrogate.py
-  python scripts/run_raise_12h.py --warm-surrogate artifacts/surr_warm
+  python scripts/run_raise.py --profile 12h --warm-surrogate artifacts/surr_warm
 
 Highway::
 

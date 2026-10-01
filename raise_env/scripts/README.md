@@ -7,12 +7,8 @@ All commands from `raise_env/`.
 | Script | Purpose |
 |--------|---------|
 | `run_raise.py` | Canonical CLI (Alg.1 or `--closed-loop`) |
+| `run_raise.py --profile <name>` | Named presets from `presets.CLOSED_LOOP_PROFILES`: `smoke` (real A2C/PPO, tiny budgets), `1h`, `12h` (+ `--warm-surrogate`), `18h`, `paper_scale` (multi-seed). Resume = same `--output-dir` |
 | `run_raise_highway.py` | Highway closed-loop run; budget in `presets.CLOSED_LOOP_PROFILES["highway"]` |
-| `run_raise_highway.py` | Highway closed-loop run; budget in `presets.CLOSED_LOOP_PROFILES["highway"]` |
-| `run_raise_1h.py` / `run_raise_1h.ps1` | Short closed-loop smoke |
-| `run_raise_12h.py` | Overnight closed-loop (+ `--warm-surrogate`) |
-| `run_raise_18h.py` | Longer closed-loop + Stage III |
-| `run_raise_paper_scale.py` | Multi-seed paper budgets |
 
 ## Data / models
 
@@ -27,7 +23,6 @@ All commands from `raise_env/`.
 
 | Script | Purpose |
 |--------|---------|
-| `run_stage2_smoke.py` / `run_stage3_smoke.py` | Real trainer smokes |
 | `print_raise_report.py` | Closed-loop REPORT.txt |
 | `plot_raise_run.py` / `visualize_raise.py` | Plots / viz |
 | `eval_raise_checkpoint.py` | Re-eval a checkpoint |
@@ -35,6 +30,5 @@ All commands from `raise_env/`.
 | `train_ds_rnn.py` | DS-RNN baseline |
 | `run_p0_*.py` | Thesis/audit helpers |
 | `label_reliability_highway.py` / `analyze_label_reliability.py` | Highway Stage II label noise across PPO seeds |
-| `label_reliability_highway.py` / `analyze_label_reliability.py` | Highway Stage II label noise across PPO seeds |
 
-Shared preflight: `_prereqs.py` (imported by overnight scripts).
+Shared preflight: `_prereqs.py` (imported by `run_raise_highway.py`).

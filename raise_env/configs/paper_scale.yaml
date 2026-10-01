@@ -1,7 +1,7 @@
 # RAISE paper-scale hyper-parameters (Tables 3–6).
 #
-# Loaded only by ``scripts/run_raise_paper_scale.py`` (or an explicit
-# ``--scale paper`` request). Never selected by pytest / ``--fast``.
+# Loaded only by ``scripts/run_raise.py --profile paper_scale``.
+# Never selected by pytest / ``--fast``.
 #
 # Notation (paper Tables 3–6):
 #   N, G1          Stage I population / generations
@@ -10,7 +10,7 @@
 #   M, N_traj      Stage I trajectory dataset size (collect once)
 #
 # llm_provider defaults to seed for offline YAML parsing, but
-# ``run_raise_paper_scale.py`` fail-closes unless you pass a real
+# ``--profile paper_scale`` fail-closes unless you pass a real
 # ``--llm`` or ``--allow-seed-llm``.
 
 scale: paper

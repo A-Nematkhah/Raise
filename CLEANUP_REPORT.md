@@ -207,6 +207,17 @@ Decisions applied: D1 commit first · D2 delete (but keep `AUDIT.md`: referenced
 - Skipped on purpose: `validate.py` `last_ckpt_path` (inside the frozen CrowdNav GST/SRNN trainer); `baselines.egg-info` (backs the editable `baselines` install).
 - Found, not fixed (pre-existing): `--help` crashes with `UnicodeEncodeError` when stdout is a cp1252 pipe (`≤` in `run_raise.py:313`, from `0094e6c`); `test_raise_loop.py::test_select_gen0_never_gates` failed once in a full run and passed on rerun (flaky).
 
+### Run wrappers → profiles (user-approved, CrowdNav scripts)
+
+Deleted `run_raise_1h.py`, `run_raise_1h.ps1`, `run_raise_12h.py`, `run_raise_18h.py`, `run_stage2_smoke.py`, `run_stage3_smoke.py`, `run_raise_paper_scale.py`. Their settings now live in `presets.CLOSED_LOOP_PROFILES` and run via `python scripts/run_raise.py --profile smoke|1h|12h|18h|paper_scale`:
+
+- Profiles with `output_dir_prefix` get a stamped `--output-dir` and nested `surrogate_model/` + `surrogate_dataset/` (as the wrappers did); resume = rerun with the same `--output-dir`.
+- `12h`: `--warm-surrogate DIR` moved into `run_raise.py`. `18h`: profile now matches what the wrapper actually ran (`num_processes=1`, `--final-rank llm`, `--no-h-sweep`).
+- `smoke`: one tiny real A2C/PPO pipeline run on CPU (seed LLM, Score1 smoke, K2=K3=200) replaces the two stage-level smokes (~20 s).
+- `paper_scale`: CLI (CI guard, seed gate, `PaperScaleRunner`) moved to `raise_core.paper_scale.run_paper_scale_cli`; tests now target `--profile paper_scale`.
+- Dropped: the 12h/18h preflight banners and `_prereqs` checks (failures still surface at run time) and the 18h legacy `artifacts/surrogate_closed_loop_18h_*` resume fallback.
+- Tests: **363 passed / 1 skipped** (+5 in `test_run_profiles.py`).
+
 ## Proposed Phase 2 plan (after approval, on branch `chore/deep-cleanup`)
 
 1. **Junk + .gitignore** — add the `stage1_dataset_*/` ignore, drop stale `surrogate_test_fix` whitelist; delete local `__pycache__`, `.pytest_cache`, `egg-info`, `artifacts/_hw_surr_smoke/` (untracked, so no diff besides `.gitignore`).

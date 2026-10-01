@@ -1,6 +1,6 @@
 """Unit tests for paper-scale presets, checkpointing, and cross-seed aggregation.
 
-Does **not** invoke ``scripts/run_raise_paper_scale.py`` or paper K3 training.
+Does **not** run paper-scale K3 training.
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ from raise_core.checkpointing import (
 from raise_core.paper_scale import (
     aggregate_across_seeds,
     build_paper_scale_report,
+    run_paper_scale_cli,
 )
 from raise_core.pipeline import RaiseRunConfig
 from raise_core.presets import (
@@ -131,18 +132,11 @@ def test_build_report_documents_seed_methodology(tmp_path):
     assert report["table1_style_aggregate"]["n_seeds"] == 5
 
 
-def test_ci_guard_in_paper_scale_script():
+def test_ci_guard_in_paper_scale_cli(monkeypatch, capsys):
     """The paper-scale entry point must refuse CI environments."""
-    root = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..", "..")
-    )
-    script = os.path.join(root, "scripts", "run_raise_paper_scale.py")
-    assert os.path.isfile(script)
-    text = open(script, encoding="utf-8").read()
-    assert "CI" in text
-    assert "Refusing paper-scale run under CI" in text
-    assert "Refusing to run a non-fast pipeline" in text
-    assert "--allow-seed-llm" in text
+    monkeypatch.setenv("CI", "1")
+    assert run_paper_scale_cli(["--dry-run-stubs"]) == 2
+    assert "Refusing paper-scale run under CI" in capsys.readouterr().err
 
 
 def test_paper_scale_yaml_documents_seed_fail_closed():

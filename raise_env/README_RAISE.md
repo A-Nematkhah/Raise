@@ -65,9 +65,10 @@ The server URL defaults to `http://localhost:11434/v1`; override it with
 | Wiring smoke | `python scripts/run_raise.py --fast` | CPU | seconds |
 | Stage I dataset (M=100) | `python scripts/collect_stage1_dataset.py --regime without_random` | CPU | ~tens of min |
 | Warm surrogate (match 12h env) | `python scripts/bootstrap_surrogate.py` | GPU + Groq | hours |
-| Closed-loop overnight | `python scripts/run_raise_12h.py --warm-surrogate artifacts/surr_warm` | GPU + Groq | ~12h |
+| Real-trainer smoke | `python scripts/run_raise.py --profile smoke` | CPU | minutes |
+| Closed-loop overnight | `python scripts/run_raise.py --profile 12h --warm-surrogate artifacts/surr_warm` | GPU + Groq | ~12h |
 | Local Alg.1 validation | `python scripts/run_raise.py --llm groq --device cuda --regime without_random --stage1-dataset data/stage1_dataset --stage3-train-steps 500000` | GPU + Groq | hours |
-| Paper scale | `python scripts/run_raise_paper_scale.py --device cuda --llm groq` | GPU + Groq | days (K3=1e7 × seeds) |
+| Paper scale | `python scripts/run_raise.py --profile paper_scale --device cuda --llm groq` | GPU + Groq | days (K3=1e7 × seeds) |
 
 Defaults (AUDIT.md §8): `without_random`, Stage II/III `predict_method=inferred`, GST `...-seed_1000/sj`.
 Innovation closed-loop writes under `output_dir/closed_loop/` (name kept for resume).

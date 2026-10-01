@@ -17,6 +17,17 @@ Examples (from ``raise_env/`` with system Python)::
     # Paper-faithful Stage III budget on a GPU cluster
     python scripts/run_raise.py --llm vllm --stage3-train-steps 10000000 \\
         --device cuda --output-dir results/raise_paper
+
+Named run profiles (``raise_core.presets.CLOSED_LOOP_PROFILES``)::
+
+    python scripts/run_raise.py --profile smoke   # real A2C/PPO, tiny budgets
+    python scripts/run_raise.py --profile 1h
+    python scripts/run_raise.py --profile 12h --warm-surrogate artifacts/surr_warm
+    python scripts/run_raise.py --profile 18h
+    python scripts/run_raise.py --profile paper_scale --seeds 425,426 --llm groq
+
+    # Resume: rerun with the same --output-dir (resume is on by default)
+    python scripts/run_raise.py --profile 12h --output-dir results/raise_12h_YYYYMMDD_HHMMSS
 """
 
 from __future__ import annotations
@@ -29,7 +40,9 @@ import raise_paths  # noqa: E402,F401 — arms domains/crowdnav/runtime on sys.p
 import argparse
 import logging
 import os
+import shutil
 import sys
+from datetime import datetime
 
 _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if _ROOT not in sys.path:
@@ -40,8 +53,25 @@ if _BASELINES_ROOT not in sys.path:
 os.chdir(_ROOT)
 
 
+def _flag_value(argv: list, flag: str):
+    """Last value given for ``flag`` (``--x V`` or ``--x=V``), else None."""
+    val = None
+    for i, a in enumerate(argv):
+        if a == flag and i + 1 < len(argv):
+            val = argv[i + 1]
+        elif isinstance(a, str) and a.startswith(flag + "="):
+            val = a.split("=", 1)[1]
+    return val
+
+
 def _inject_profile_argv(argv: list) -> tuple:
-    """Strip ``--profile``; prepend profile flags so later CLI args override."""
+    """
+    Strip ``--profile``; prepend profile flags so later CLI args override.
+
+    Profiles with ``output_dir_prefix`` get a stamped ``--output-dir`` and,
+    when closed-loop, nested ``surrogate_model`` / ``surrogate_dataset`` dirs
+    unless the CLI passes them. Returns ``(argv, profile_spec or {})``.
+    """
     profile = None
     out = []
     i = 0
@@ -57,20 +87,104 @@ def _inject_profile_argv(argv: list) -> tuple:
             continue
         out.append(a)
         i += 1
-    if profile:
-        from raise_core.presets import get_closed_loop_profile, profile_to_run_raise_argv
+    if not profile:
+        return out, {}
+    from raise_core.presets import get_closed_loop_profile, profile_to_run_raise_argv
 
-        spec = get_closed_loop_profile(profile)
-        if spec.get("redirect"):
-            raise SystemExit(
-                f"Profile {profile!r} must be run via {spec['redirect']}"
-            )
-        out = profile_to_run_raise_argv(profile) + out
-    return out, profile
+    spec = get_closed_loop_profile(profile)
+    if spec.get("runner"):
+        return out, spec
+    paths = []
+    out_dir = _flag_value(out, "--output-dir")
+    if out_dir is None and spec.get("output_dir_prefix"):
+        out_dir = spec["output_dir_prefix"] + datetime.now().strftime("%Y%m%d_%H%M%S")
+        paths += ["--output-dir", out_dir]
+    if out_dir is not None and spec.get("closed_loop"):
+        if _flag_value(out, "--surrogate") is None:
+            paths += ["--surrogate", os.path.join(out_dir, "surrogate_model")]
+        if _flag_value(out, "--surrogate-dataset") is None:
+            paths += ["--surrogate-dataset", os.path.join(out_dir, "surrogate_dataset")]
+    return profile_to_run_raise_argv(profile) + paths + out, spec
+
+
+def _resolve_warm_surrogate(warm_root: str) -> tuple:
+    """``warm_root/{model,dataset}`` or one dir holding model.joblib + features.jsonl."""
+    root = os.path.abspath(warm_root)
+    if not os.path.isdir(root):
+        raise FileNotFoundError(f"Warm surrogate dir not found: {root}")
+    model_dir = os.path.join(root, "model")
+    data_dir = os.path.join(root, "dataset")
+    if not (os.path.isdir(model_dir) and os.path.isdir(data_dir)):
+        model_dir, data_dir = root, root
+    if not os.path.isfile(os.path.join(model_dir, "model.joblib")):
+        raise FileNotFoundError(
+            f"No model.joblib under {model_dir!r} "
+            f"(expected {root}/model/model.joblib or {root}/model.joblib)"
+        )
+    if not os.path.isfile(os.path.join(data_dir, "features.jsonl")):
+        raise FileNotFoundError(
+            f"No features.jsonl under {data_dir!r} "
+            f"(expected {root}/dataset/features.jsonl or {root}/features.jsonl)"
+        )
+    return model_dir, data_dir
+
+
+def _copy_warm_surrogate(args) -> int:
+    """Copy a bootstrapped surrogate into this run's surrogate dirs (fresh runs only)."""
+    if not args.closed_loop or not args.surrogate:
+        print(
+            "--warm-surrogate requires --closed-loop with --surrogate "
+            "(e.g. --profile 12h).",
+            file=sys.stderr,
+        )
+        return 2
+    ckpt = os.path.join(args.output_dir, "closed_loop", "checkpoint.json")
+    if args.resume and os.path.isfile(ckpt):
+        print(
+            f"{ckpt} exists — drop --warm-surrogate to resume, "
+            "or pick a new --output-dir.",
+            file=sys.stderr,
+        )
+        return 2
+    try:
+        src_model, src_data = _resolve_warm_surrogate(args.warm_surrogate)
+    except FileNotFoundError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    os.makedirs(args.surrogate, exist_ok=True)
+    os.makedirs(args.surrogate_dataset, exist_ok=True)
+    for name in os.listdir(src_model):
+        if name.startswith("_stage2"):
+            continue  # bulky Stage II train trees from bootstrap
+        s = os.path.join(src_model, name)
+        d = os.path.join(args.surrogate, name)
+        if os.path.isdir(s):
+            if os.path.isdir(d):
+                shutil.rmtree(d)
+            shutil.copytree(s, d)
+        else:
+            shutil.copy2(s, d)
+    for name in os.listdir(src_data):
+        s = os.path.join(src_data, name)
+        if os.path.isfile(s):
+            shutil.copy2(s, os.path.join(args.surrogate_dataset, name))
+    with open(
+        os.path.join(args.surrogate_dataset, "features.jsonl"), encoding="utf-8"
+    ) as fh:
+        n = sum(1 for line in fh if line.strip())
+    print(
+        f"Warm surrogate copied → {args.surrogate} , {args.surrogate_dataset} "
+        f"(n_features≈{n})"
+    )
+    return 0
 
 
 def main() -> int:
-    rest, _profile_name = _inject_profile_argv(sys.argv[1:])
+    rest, profile_spec = _inject_profile_argv(sys.argv[1:])
+    if profile_spec.get("runner") == "paper_scale":
+        from raise_core.paper_scale import run_paper_scale_cli
+
+        return run_paper_scale_cli(rest)
     sys.argv = [sys.argv[0]] + rest
 
     from raise_core.pipeline import RaisePipeline, RaiseRunConfig
@@ -85,7 +199,20 @@ def main() -> int:
     parser.add_argument(
         "--profile",
         default=None,
-        help="Named preset (1h/12h/18h/highway); applied before other flags",
+        help=(
+            "Named preset (smoke/1h/12h/18h/highway/paper_scale); applied "
+            "before other flags"
+        ),
+    )
+    parser.add_argument(
+        "--warm-surrogate",
+        type=str,
+        default=None,
+        help=(
+            "Closed-loop: copy a bootstrapped surrogate (DIR/model + DIR/dataset, "
+            "see scripts/bootstrap_surrogate.py) into --surrogate / "
+            "--surrogate-dataset before a fresh run"
+        ),
     )
     parser.add_argument("--output-dir", type=str, default="results/raise_run")
     parser.add_argument("--seed", type=int, default=425)
@@ -157,7 +284,7 @@ def main() -> int:
         default=None,
         choices=["paper"],
         help=(
-            "Named budget preset. 'paper' redirects to scripts/run_raise_paper_scale.py "
+            "Named budget preset. 'paper' points to --profile paper_scale "
             "(Tables 3–6, multi-seed); not used by pytest."
         ),
     )
@@ -498,10 +625,9 @@ def main() -> int:
         return 0
 
     if args.scale == "paper":
-        # Multi-seed paper budgets live in a dedicated human-triggered script.
         print(
             "Paper-scale (Tables 3–6, multi-seed) is only available via:\n"
-            "  python scripts/run_raise_paper_scale.py\n"
+            "  python scripts/run_raise.py --profile paper_scale\n"
             "Pass --seeds / --device there. This keeps pytest/--fast unchanged "
             "and avoids accidental CI runs of K3=1e7.",
             file=sys.stderr,
@@ -522,6 +648,11 @@ def main() -> int:
             file=sys.stderr,
         )
         return 2
+
+    if args.warm_surrogate:
+        code = _copy_warm_surrogate(args)
+        if code:
+            return code
 
     # Protect Config.get_args() class-body from our CLI flags.
     sys.argv = [sys.argv[0], "--no-cuda" if args.device == "cpu" else "--seed", str(args.seed)]
@@ -659,6 +790,10 @@ def main() -> int:
     artifacts = RaisePipeline(cfg).run()
     logging.info("Done. Final candidate: %s", artifacts.best_stage3.candidate_id)
     logging.info("Artifacts: %s", artifacts.output_dir)
+    report = os.path.join(cfg.output_dir, "closed_loop", "REPORT.txt")
+    if profile_spec and cfg.closed_loop and os.path.isfile(report):
+        with open(report, encoding="utf-8") as fh:
+            print("\n--- closed_loop/REPORT.txt ---\n" + fh.read())
     return 0
 
 

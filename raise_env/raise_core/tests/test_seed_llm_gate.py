@@ -57,8 +57,8 @@ def test_run_raise_fast_still_allows_seed(monkeypatch):
 
 def test_paper_scale_refuses_seed_yaml_default(monkeypatch, capsys):
     code = _run_script(
-        "run_raise_paper_scale.py",
-        ["--output-dir", "results/_paper_seed_refuse"],
+        "run_raise.py",
+        ["--profile", "paper_scale", "--output-dir", "results/_paper_seed_refuse"],
         monkeypatch,
     )
     assert code == 2
@@ -69,8 +69,10 @@ def test_paper_scale_refuses_seed_yaml_default(monkeypatch, capsys):
 def test_paper_scale_dry_run_stubs_bypass_seed_gate(monkeypatch):
     """--dry-run-stubs is the paper-scale equivalent of --fast for the seed gate."""
     code = _run_script(
-        "run_raise_paper_scale.py",
+        "run_raise.py",
         [
+            "--profile",
+            "paper_scale",
             "--dry-run-stubs",
             "--seeds",
             "425",
