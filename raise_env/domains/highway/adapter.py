@@ -634,6 +634,8 @@ class HighwayPPOTrainer:
             eval_env = RewardInjectedHighwayEnv(
                 candidate.reward_fn, seed=seed, config=env_cfg
             )
+            if not eval_deterministic:
+                model.set_random_seed(int(seed) + 10_003)
             try:
                 train_metrics = _eval_metrics(
                     eval_env,
@@ -652,6 +654,9 @@ class HighwayPPOTrainer:
             seed=seed + 7,
             config=holdout_env_config(),
         )
+        if not eval_deterministic:
+            # Action sampling must not depend on RNG consumed during training.
+            model.set_random_seed(int(seed) + int(HOLDOUT_SEED_OFFSET))
         try:
             holdout_metrics = _eval_metrics(
                 holdout_env,
@@ -717,6 +722,8 @@ class HighwayPPOTrainer:
         md["train_seed"] = int(seed)
         md["eval_seed_base"] = int(seed) + int(HOLDOUT_SEED_OFFSET)
         md["eval_episodes"] = int(eval_episodes)
+        md["ppo_n_steps"] = int(n_steps)
+        md["eval_deterministic"] = bool(eval_deterministic)
         md["train_wall_seconds"] = float(train_wall)
         md["eval_wall_seconds"] = float(eval_wall)
         candidate.metadata = md

@@ -102,10 +102,12 @@ class Stage2Config:
     highway_meta_fine_high: float = 35.0
     highway_meta_fine_n: int = 21
     # PPO entropy bonus (SB3 default 0.0) and holdout eval policy mode.
+    # Stochastic eval: deterministic argmax labels flip with the training seed.
     highway_ent_coef: float = 0.0
-    highway_eval_deterministic: bool = True
+    highway_eval_deterministic: bool = False
     # PPO rollout length cap per env and optimisation epochs per rollout.
-    highway_n_steps: int = 256
+    # 64 → ~4× more PPO updates inside the same K2 than the former 256.
+    highway_n_steps: int = 64
     highway_n_epochs: int = 10
 
 

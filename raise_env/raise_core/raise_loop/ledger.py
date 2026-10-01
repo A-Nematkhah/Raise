@@ -116,6 +116,8 @@ def candidate_row(
         "train_seed": md.get("train_seed"),
         "eval_seed_base": md.get("eval_seed_base"),
         "eval_episodes": md.get("eval_episodes"),
+        "ppo_n_steps": md.get("ppo_n_steps"),
+        "eval_deterministic": md.get("eval_deterministic"),
         "SR": _finite_or_none(metrics.get("SR")),
         "CR": _finite_or_none(metrics.get("CR")),
         "TR": _finite_or_none(metrics.get("TR")),

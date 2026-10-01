@@ -172,6 +172,8 @@ def test_pipeline_highway_stage3_receives_highway_config(tmp_path, monkeypatch):
     assert s3.highway_warm_start is False
     assert s3.highway_n_envs == 2
     assert s3.skip_final_refine is True
+    assert s3.highway_n_steps == 64
+    assert s3.highway_eval_deterministic is False
 
 
 def test_pipeline_fast_with_surrogate(tmp_path):

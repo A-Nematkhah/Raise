@@ -115,6 +115,9 @@ class Stage3Config:
     highway_eval_mode: str = "both"
     highway_warm_start: Optional[bool] = None
     highway_n_envs: Optional[int] = None
+    # Same PPO rollout / eval policy mode as Stage II so R2 and R3 are comparable.
+    highway_n_steps: int = 64
+    highway_eval_deterministic: bool = False
     # The last round's D.3 rewrite is never trained; skip the LLM call.
     skip_final_refine: bool = False
 
