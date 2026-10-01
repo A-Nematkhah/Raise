@@ -139,6 +139,41 @@ def test_pipeline_fast_highway_stage3_keeps_stage2_metadata(tmp_path, monkeypatc
         assert (cand.metadata or {}).get("fitness") == s2_disk[cand.candidate_id]
 
 
+class _ConfigCapturingStage3(_MetadataReassigningStage3):
+    def __init__(self, inner, seen):
+        super().__init__(inner)
+        self.seen = seen
+
+    def train_and_eval(self, candidate, *, round_index, config, **kwargs):
+        self.seen.append(config)
+        return self.inner.train_and_eval(
+            candidate, round_index=round_index, config=config, **kwargs
+        )
+
+
+def test_pipeline_highway_stage3_receives_highway_config(tmp_path, monkeypatch):
+    seen = []
+    monkeypatch.setattr(
+        pipeline_mod,
+        "make_stage3_trainer_for_domain",
+        lambda pack, use_stub=False: _ConfigCapturingStage3(
+            make_stage3_trainer_for_domain(pack, use_stub=use_stub), seen
+        ),
+    )
+    cfg = RaiseRunConfig(output_dir=str(tmp_path / "run_hw_cfg"), domain="highway")
+    cfg.apply_fast_profile()
+    cfg.highway_eval_mode = "holdout_only"
+    cfg.highway_warm_start = False
+    cfg.highway_n_envs = 2
+    RaisePipeline(cfg).run()
+    assert seen
+    s3 = seen[0]
+    assert s3.highway_eval_mode == "holdout_only"
+    assert s3.highway_warm_start is False
+    assert s3.highway_n_envs == 2
+    assert s3.skip_final_refine is True
+
+
 def test_pipeline_fast_with_surrogate(tmp_path):
     from raise_core.surrogate.gate import surrogate_model_ready
 

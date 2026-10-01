@@ -156,6 +156,55 @@ def test_failed_refinement_keeps_previous(caplog):
     assert len(runner.sweep_reports) == 1
 
 
+def test_skip_final_refine_makes_no_llm_call_in_last_round():
+    pop = _make_population(2)
+    client = ScriptedLLMClient([_valid_code(10.0), _valid_code(11.0)])
+    runner = Stage3Runner(
+        client,
+        StubPolicyTrainer(),
+        config=Stage3Config(
+            population_size=2,
+            rounds=2,
+            train_env_steps=100,
+            eval_episodes=2,
+            human_counts=(5,),
+            protect_elite_refine=False,
+            skip_final_refine=True,
+            resume=False,
+        ),
+    )
+    out = runner.run(pop, run_h_sweep=False)
+    assert client.remaining == 0
+    assert len(runner.history) == 4
+    last_round = [r for r in runner.history if r.round_index == 1]
+    assert len(last_round) == 2
+    assert all(r.kept_previous for r in last_round)
+    assert all(
+        (c.metadata or {}).get("refine_skipped_reason") == "final_round"
+        for c in out
+    )
+
+
+def test_final_round_refines_by_default():
+    pop = _make_population(1)
+    client = ScriptedLLMClient([_valid_code(10.0), _valid_code(11.0)])
+    runner = Stage3Runner(
+        client,
+        StubPolicyTrainer(),
+        config=Stage3Config(
+            population_size=1,
+            rounds=2,
+            train_env_steps=100,
+            eval_episodes=2,
+            human_counts=(5,),
+            protect_elite_refine=False,
+            resume=False,
+        ),
+    )
+    runner.run(pop, run_h_sweep=False)
+    assert client.remaining == 0
+
+
 def test_v3_id_helper():
     assert _v3_candidate_id("c3") == "c3_v3"
     assert _v3_candidate_id("c3_v2") == "c3_v3"

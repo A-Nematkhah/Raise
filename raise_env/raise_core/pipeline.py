@@ -977,6 +977,22 @@ class RaisePipeline:
             highway_meta_fine_n=int(
                 getattr(cfg, "highway_meta_fine_n", 21) or 21
             ),
+            **(
+                {
+                    "highway_eval_mode": str(
+                        getattr(cfg, "highway_eval_mode", None) or "both"
+                    ),
+                    "highway_warm_start": bool(
+                        getattr(cfg, "highway_warm_start", True)
+                    ),
+                    "highway_n_envs": max(
+                        1, int(getattr(cfg, "highway_n_envs", None) or 1)
+                    ),
+                    "skip_final_refine": True,
+                }
+                if str(pack.name) == "highway"
+                else {}
+            ),
         )
         if cfg.stage3_use_stub:
             console.status(

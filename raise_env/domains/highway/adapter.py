@@ -355,8 +355,9 @@ def _highway_eval_mode(config: Any) -> str:
 
 
 def _highway_warm_start_enabled(config: Any) -> bool:
-    if hasattr(config, "highway_warm_start"):
-        return bool(getattr(config, "highway_warm_start"))
+    raw = getattr(config, "highway_warm_start", None)
+    if raw is not None:
+        return bool(raw)
     return os.environ.get("RAISE_HIGHWAY_WARM_START", "1").strip().lower() not in (
         "0",
         "false",

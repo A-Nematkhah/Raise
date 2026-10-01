@@ -111,6 +111,12 @@ class Stage3Config:
     highway_meta_fine_low: float = 15.0
     highway_meta_fine_high: float = 35.0
     highway_meta_fine_n: int = 21
+    # None → adapter falls back to its own default / env var.
+    highway_eval_mode: str = "both"
+    highway_warm_start: Optional[bool] = None
+    highway_n_envs: Optional[int] = None
+    # The last round's D.3 rewrite is never trained; skip the LLM call.
+    skip_final_refine: bool = False
 
 
 @dataclass
@@ -1311,6 +1317,7 @@ class Stage3Runner:
             progress_callback=progress_callback,
         )
         self._record_trained_snapshot(cand, bundle, round_index=round_index)
+        final_round = int(round_index) + 1 >= int(self.config.rounds)
         if self._skip_refine_for_elite(cand):
             logger.info(
                 "Skipping D.3 refine for elite genome %s (protect best-ever)",
@@ -1322,6 +1329,22 @@ class Stage3Runner:
                     **(cand.metadata or {}),
                     "refine_kept_previous": True,
                     "refine_skipped_elite": True,
+                    "checkpoint_path": bundle.checkpoint_path,
+                    "last_metrics": bundle.metrics.as_dict(),
+                },
+            )
+            kept = True
+        elif bool(getattr(self.config, "skip_final_refine", False)) and final_round:
+            logger.info(
+                "Skipping D.3 refine for %s (final Stage III round)",
+                cand.candidate_id,
+            )
+            refined = replace(
+                cand,
+                metadata={
+                    **(cand.metadata or {}),
+                    "refine_kept_previous": True,
+                    "refine_skipped_reason": "final_round",
                     "checkpoint_path": bundle.checkpoint_path,
                     "last_metrics": bundle.metrics.as_dict(),
                 },

@@ -26,6 +26,13 @@ def test_eval_mode_and_warm_start():
     assert _highway_warm_start_enabled(SimpleNamespace(highway_warm_start=True)) is True
 
 
+def test_warm_start_none_falls_back_to_env(monkeypatch):
+    monkeypatch.setenv("RAISE_HIGHWAY_WARM_START", "0")
+    assert _highway_warm_start_enabled(SimpleNamespace(highway_warm_start=None)) is False
+    monkeypatch.setenv("RAISE_HIGHWAY_WARM_START", "1")
+    assert _highway_warm_start_enabled(SimpleNamespace(highway_warm_start=None)) is True
+
+
 def test_train_vec_env_wraps_monitor():
     """SB3 needs Monitor so rollout/ep_rew_mean is logged (diagnostics Part 1)."""
     from stable_baselines3.common.monitor import Monitor
