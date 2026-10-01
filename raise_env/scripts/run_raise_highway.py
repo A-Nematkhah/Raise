@@ -1,35 +1,27 @@
 #!/usr/bin/env python
 """RAISE full closed-loop on highway-fast-v0.
 
-This is the thesis RAISE path (not Stage I→II→III without surrogate):
+  closed-loop (Score1 ↔ Stage II short ↔ Surrogate gate + AL + proxy
+  feedback) → Stage III validate
 
-  warm surrogate bootstrap → closed-loop (Score1 ↔ Stage II short ↔
-  Surrogate gate + AL + proxy feedback) → Stage III validate
-
-Profiles (SB3 PPO, env_steps; K2/K3 identical):
-
-  highway_4h (~4h):  N=6, G=4, K2=12_000, K3=70_000
-  highway_7h (~6–7h): N=8, G=7, K2=12_000, K3=70_000
+Budget (N, G, K2, K3, …) lives in ``raise_core.presets.CLOSED_LOOP_PROFILES
+["highway"]``; edit it there (or pass --population / --generations) to change
+run length.
 
 From raise_env/:
 
   # once (auto-run if Stage I dataset missing)
   python scripts/collect_highway_stage1_dataset.py
 
-  # ~4h RAISE — warm surrogate OFF by default; labels collected in closed-loop
-  python scripts/run_raise_highway_4h.py --llm groq
+  python scripts/run_raise_highway.py --llm groq
+  python scripts/run_raise_highway.py --llm groq --resume results/highway_YYYYMMDD_HHMMSS
 
-  # ~6–7h same K2/K3, deeper search
-  python scripts/run_raise_highway_7h.py --llm groq --skip-collect
-  # or: python scripts/run_raise_highway_4h.py --profile highway_7h --llm groq
+  # Re-generate plots offline:
+  python scripts/plot_raise_run.py --run-dir results/highway_YYYYMMDD_HHMMSS
 
-  # After a finished run: plots/ + plots/viz/*.gif are written automatically.
-  # Re-generate offline:
-  python scripts/visualize_highway_raise.py --run-dir results/highway_7h_...
-
-  # optional later: warm bootstrap
+  # optional warm surrogate
   python scripts/bootstrap_surrogate.py --domain highway --llm groq
-  python scripts/run_raise_highway_4h.py --llm groq --warm-surrogate artifacts/highway_surr_warm
+  python scripts/run_raise_highway.py --llm groq --warm-surrogate artifacts/highway_surr_warm
 """
 
 from __future__ import annotations
@@ -64,27 +56,7 @@ CHECKPOINT_LOCATIONS = (
     "checkpoint.json",
 )
 
-_HIGHWAY_PROFILES = ("highway_4h", "highway_7h")
-_WALL_BASE_PROFILE = "highway_4h"  # measured ~4h @ N=6 G=4
-
-
-def _peek_profile(argv: list) -> str:
-    default = "highway_4h"
-    i = 0
-    while i < len(argv):
-        a = argv[i]
-        if a == "--profile" and i + 1 < len(argv):
-            return str(argv[i + 1]).strip().lower()
-        if isinstance(a, str) and a.startswith("--profile="):
-            return str(a.split("=", 1)[1]).strip().lower()
-        i += 1
-    return default
-
-
-PROFILE_NAME = _peek_profile(sys.argv[1:])
-if PROFILE_NAME not in _HIGHWAY_PROFILES:
-    PROFILE_NAME = "highway_4h"
-# Locked PROFILE — single source of truth in raise_core.presets.
+PROFILE_NAME = "highway"
 PROFILE = dict(CLOSED_LOOP_PROFILES[PROFILE_NAME])
 
 
@@ -255,24 +227,11 @@ def _print_profile(args, *, warm_n=None, population=None, generations=None) -> N
     )
     if warm_n is not None:
         print(f"  warm labels copied: ≈{warm_n}")
-    # Rough wall from last measured ~4h @ highway_4h N=6 G=4; scale Stage-II labels.
-    base = CLOSED_LOOP_PROFILES[_WALL_BASE_PROFILE]
-    base_labels = float(base["population"]) * float(base["generations"])
-    cur_labels = float(shown["population"]) * float(shown["generations"])
-    scale = cur_labels / max(1.0, base_labels)
-    est_h = 4.0 * (0.55 + 0.45 * scale)  # Stage III ~fixed share + loop scales
-    print(f"  estimate: ~{est_h:.1f}–{est_h + 0.8:.1f} h wall (GPU + groq; K2/K3 unchanged)")
     print("============================================")
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--profile",
-        default=PROFILE_NAME,
-        choices=_HIGHWAY_PROFILES,
-        help="Closed-loop budget preset (default: highway_4h)",
-    )
     parser.add_argument("--llm", default=PROFILE["llm"], choices=("seed", "groq", "ollama", "vllm"))
     parser.add_argument("--device", default=PROFILE["device"])
     parser.add_argument("--llm-model", default=None)
@@ -388,7 +347,7 @@ def main() -> int:
         if not report_problems(problems, stream=sys.stderr):
             print(
                 "\nFix credentials, or run without Groq:\n"
-                "  python scripts/run_raise_highway_4h.py --llm seed\n"
+                "  python scripts/run_raise_highway.py --llm seed\n"
                 "Or copy raise_env/groq_keys.json.example → groq_keys.json",
                 file=sys.stderr,
             )
@@ -582,12 +541,7 @@ def main() -> int:
     if bool(args.diagnostics_groundtruth_checkpoints):
         cmd.append("--diagnostics-groundtruth-checkpoints")
 
-    resume_script = (
-        "run_raise_highway_7h.py"
-        if PROFILE_NAME == "highway_7h"
-        else "run_raise_highway_4h.py"
-    )
-    resume_cmd = f"python scripts/{resume_script} --resume {out}"
+    resume_cmd = f"python scripts/run_raise_highway.py --resume {out}"
     if bool(args.diagnostics_groundtruth_checkpoints):
         resume_cmd += " --diagnostics-groundtruth-checkpoints"
     if args.highway_action_mode:

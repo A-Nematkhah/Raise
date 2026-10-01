@@ -26,7 +26,7 @@ Manifest lists labels; each traj stores `metadata.mean_speed` / `mean_progress`.
 
 ```bash
 python scripts/bootstrap_surrogate.py --domain highway --llm groq
-python scripts/run_raise_highway_4h.py --llm groq --warm-surrogate artifacts/highway_surr_warm
+python scripts/run_raise_highway.py --llm groq --warm-surrogate artifacts/highway_surr_warm
 ```
 
 Highway surrogate fits **SR/CR/TR + mean_speed + mean_progress + soft_success**.

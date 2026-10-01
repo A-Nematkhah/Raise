@@ -85,7 +85,7 @@ def main() -> int:
     parser.add_argument(
         "--profile",
         default=None,
-        help="Named preset (1h/12h/18h/highway_4h/highway_7h); applied before other flags",
+        help="Named preset (1h/12h/18h/highway); applied before other flags",
     )
     parser.add_argument("--output-dir", type=str, default="results/raise_run")
     parser.add_argument("--seed", type=int, default=425)

@@ -27,12 +27,12 @@ Examples::
 
     # Highway: list Pareto front 0 (no silent winner)
     python scripts/eval_raise_checkpoint.py \\
-        --run-dir results/highway_4h_YYYYMMDD_HHMMSS \\
+        --run-dir results/highway_YYYYMMDD_HHMMSS \\
         --pareto-front
 
     # Highway: deliberate pick after inspecting the table
     python scripts/eval_raise_checkpoint.py \\
-        --run-dir results/highway_4h_YYYYMMDD_HHMMSS \\
+        --run-dir results/highway_YYYYMMDD_HHMMSS \\
         --pareto-front \\
         --candidate-id mut_0012
 """

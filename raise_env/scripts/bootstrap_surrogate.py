@@ -14,7 +14,7 @@ CrowdNav (12h defaults)::
 Highway::
 
   python scripts/bootstrap_surrogate.py --domain highway --llm seed
-  python scripts/run_raise_highway_4h.py --warm-surrogate artifacts/highway_surr_warm
+  python scripts/run_raise_highway.py --warm-surrogate artifacts/highway_surr_warm
 """
 
 from __future__ import annotations

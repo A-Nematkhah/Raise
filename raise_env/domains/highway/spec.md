@@ -109,7 +109,7 @@ Logged continuous fields: `mean_speed`, `mean_progress`, `lane_change_rate`,
 - Stage II: short PPO proxy; Stage III: longer PPO; **no human H-sweep**
 - Full RAISE path: warm surrogate bootstrap + closed-loop (Score1 ↔ Stage II
   short ↔ Surrogate gate / AL / proxy feedback) then Stage III
-  (`scripts/run_raise_highway_4h.py`)
+  (`scripts/run_raise_highway.py`)
 
 ## Pack layout
 

@@ -5,7 +5,7 @@
 **مسیر فعال پایان‌نامه:** `--domain highway` (closed-loop)  
 **مسیر قفل‌شده:** CrowdNav / Algorithm 1 baseline — فقط برای parity؛ در این سند به‌عنوان پس‌زمینه ذکر می‌شود، نه مسیر کار جاری.
 
-تاریخ نگاشت: هم‌تراز با پروفایل‌های `highway_4h` / `highway_7h` و کالیبراسیون پیش‌فرض `no_speed_floor`.
+تاریخ نگاشت: هم‌تراز با پروفایل `highway` و کالیبراسیون پیش‌فرض `no_speed_floor`.
 
 ---
 
@@ -67,22 +67,21 @@ Stage III: PPO بلندتر (K3) روی نخبه‌ها → بهترین پاد�
 | اسکریپت | نقش |
 |---------|-----|
 | `scripts/run_raise.py` | CLI عمومی → `RaisePipeline`. با `--profile` فلگ‌ها از `presets` تزریق می‌شوند. |
-| `scripts/run_raise_highway_4h.py` | اورکستراسیون thesis: اطمینان از دیتاست Stage I، warm اختیاری، ساخت `output_dir`، فراخوانی `run_raise.py`، راهنمای resume. |
-| `scripts/run_raise_highway_7h.py` | همان ۴h با `--profile highway_7h` (N=8, G=7). |
+| `scripts/run_raise_highway.py` | اورکستراسیون thesis: اطمینان از دیتاست Stage I، warm اختیاری، ساخت `output_dir`، فراخوانی `run_raise.py`، راهنمای resume. بودجه از پروفایل `highway`. |
 | `scripts/collect_highway_stage1_dataset.py` | ساخت دیتاست Score1. |
-| `scripts/bootstrap_surrogate.py` | برچسب‌زنی اولیه برای surrogate گرم (اختیاری؛ پروفایل ۴h/۷h پیش‌فرض warm خالی است). |
+| `scripts/bootstrap_surrogate.py` | برچسب‌زنی اولیه برای surrogate گرم (اختیاری؛ پیش‌فرض پروفایل warm خالی است). |
 
 دستور نوعی:
 
 ```powershell
 cd raise_env
-python scripts/run_raise_highway_7h.py --llm groq --skip-collect
+python scripts/run_raise_highway.py --llm groq --skip-collect
 ```
 
 Resume:
 
 ```powershell
-python scripts/run_raise_highway_7h.py --llm groq --skip-collect --resume results/highway_7h_YYYYMMDD_HHMMSS
+python scripts/run_raise_highway.py --llm groq --skip-collect --resume results/highway_YYYYMMDD_HHMMSS
 ```
 
 ---
@@ -91,28 +90,28 @@ python scripts/run_raise_highway_7h.py --llm groq --skip-collect --resume result
 
 منبع حقیقت: `raise_core/presets.py` → `CLOSED_LOOP_PROFILES`.
 
-| پارامتر | `highway_4h` | `highway_7h` |
-|---------|--------------|--------------|
-| جمعیت N | 6 | **8** |
-| نسل / epoch G | 4 | **7** |
-| K2 (Stage II) | 12 000 **env_steps** | همان |
-| K3 (Stage III) | 70 000 env_steps | همان |
-| Stage2 eval | 20 اپیزود holdout | همان |
-| Stage3 eval | 30 | همان |
-| min_labels_gate | 16 | همان |
-| AL max / epoch | 2 | همان |
-| min_stage2 | 3 | همان |
-| refit_every | 6 برچسب جدید | همان |
-| evolve_rank | `pareto` | همان |
-| elitism | True | همان |
-| calibration | `no_speed_floor` | همان |
-| eval_mode | `holdout_only` | همان |
-| action_mode | `meta_default` (۱۱ دنده) | همان |
-| warm_start PPO | True | همان |
-| Pareto: progress / lane / overtake | همه True | همان |
-| خروجی | `results/highway_4h_*` | `results/highway_7h_*` |
+| پارامتر | `highway` |
+|---------|-----------|
+| جمعیت N | 6 |
+| نسل / epoch G | 4 |
+| K2 (Stage II) | 12 000 **env_steps** |
+| K3 (Stage III) | 70 000 env_steps |
+| Stage2 eval | 20 اپیزود holdout |
+| Stage3 eval | 30 |
+| min_labels_gate | 16 |
+| AL max / epoch | 2 |
+| min_stage2 | 3 |
+| refit_every | 6 برچسب جدید |
+| evolve_rank | `pareto` |
+| elitism | True |
+| calibration | `no_speed_floor` |
+| eval_mode | `holdout_only` |
+| action_mode | `meta_default` (۱۱ دنده) |
+| warm_start PPO | True |
+| Pareto: progress / lane / overtake | همه True |
+| خروجی | `results/highway_*` |
 
-**منطق مقیاس زمان:** با ثابت ماندن K2/K3، دیوار ساعت تقریباً با `N×G` (تعداد برچسب‌های Stage II در حلقه) مقیاس می‌شود. ۷h عمداً فقط عمق جستجو را زیاد می‌کند، نه بودجهٔ هر PPO.
+**منطق مقیاس زمان:** با ثابت ماندن K2/K3، دیوار ساعت تقریباً با `N×G` (تعداد برچسب‌های Stage II در حلقه) مقیاس می‌شود. برای اجرای بلندتر یا کوتاه‌تر `population` / `generations` را در همین پروفایل (یا با `--population` / `--generations`) عوض کنید.
 
 ---
 
@@ -406,7 +405,7 @@ Highway اضافه می‌کند:
 
 ## 16. آرتیفکت‌های خروجی
 
-مثال: `results/highway_7h_YYYYMMDD_HHMMSS/`
+مثال: `results/highway_YYYYMMDD_HHMMSS/`
 
 ```text
 config.json                 # فلگ‌های مؤثر
@@ -473,7 +472,7 @@ Gen0 معمولاً همه را برچسب می‌زند (گیت نرم) تا su
 | مسیر | مسئولیت |
 |------|-----------|
 | `scripts/run_raise.py` | CLI عمومی |
-| `scripts/run_raise_highway_4h.py` / `_7h.py` | اورکستراسیون thesis |
+| `scripts/run_raise_highway.py` | اورکستراسیون thesis |
 | `raise_core/pipeline.py` | `RaisePipeline` |
 | `raise_core/presets.py` | پروفایل‌های قفل‌شده |
 | `raise_core/explore.py` | Evolver Stage I |
@@ -499,4 +498,4 @@ Gen0 معمولاً همه را برچسب می‌زند (گیت نرم) تا su
 
 ## خلاصهٔ یک‌خطی برای خوانندهٔ عجول
 
-**RAISE highway** یک حلقهٔ بسته است که با LLM تابع پاداش می‌سازد، با Score1 فیلتر می‌کند، با PPO کوتاه روی ترافیک شلوغ holdout برچسب واقعی می‌زند، با surrogate/AL هزینه را کم می‌کند، با Pareto چندهدفه والدین نسل بعد را انتخاب می‌کند، و در پایان با PPO بلندتر (K3) اعتبارسنجی می‌کند. پروفایل‌های `highway_4h` و `highway_7h` فقط عمق جستجو (N×G) را عوض می‌کنند؛ K2/K3 و منطق انتخاب یکسان‌اند.
+**RAISE highway** یک حلقهٔ بسته است که با LLM تابع پاداش می‌سازد، با Score1 فیلتر می‌کند، با PPO کوتاه روی ترافیک شلوغ holdout برچسب واقعی می‌زند، با surrogate/AL هزینه را کم می‌کند، با Pareto چندهدفه والدین نسل بعد را انتخاب می‌کند، و در پایان با PPO بلندتر (K3) اعتبارسنجی می‌کند. بودجهٔ اجرا (N×G، K2، K3) فقط در پروفایل `highway` تعریف می‌شود.

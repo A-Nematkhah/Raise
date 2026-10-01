@@ -23,5 +23,8 @@ algorithm work — see
 
 ```bash
 python scripts/run_raise.py --domain highway --closed-loop
-python scripts/run_raise_highway_4h.py
+python scripts/run_raise_highway.py --llm groq
 ```
+
+Highway run budget (N, G, K2, K3, …): `raise_core/presets.py` →
+`CLOSED_LOOP_PROFILES["highway"]`.
