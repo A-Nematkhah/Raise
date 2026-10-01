@@ -722,6 +722,10 @@ class HighwayPPOTrainer:
         ):
             md.pop(key, None)
         md["checkpoint_path"] = ckpt
+        md["train_steps"] = int(train_steps)
+        md["train_seed"] = int(seed)
+        md["eval_seed_base"] = int(seed) + int(HOLDOUT_SEED_OFFSET)
+        md["eval_episodes"] = int(eval_episodes)
         md["train_wall_seconds"] = float(train_wall)
         md["eval_wall_seconds"] = float(eval_wall)
         candidate.metadata = md

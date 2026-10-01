@@ -473,12 +473,17 @@ def apply_in_loop_d3(
     llm: Any,
     validator: Any,
     prompts: Any = None,
+    diag: Optional[Dict[str, Any]] = None,
 ) -> RewardCandidate:
     """
     One D.3 rewrite using proxy metrics on the candidate.
 
-    On failure, returns the original candidate unchanged.
+    On failure, returns the original candidate unchanged. When ``diag`` is
+    given it receives ``status`` (``accepted`` | ``no_metrics`` |
+    ``llm_error`` | ``invalid``) and ``reason``.
     """
+    if diag is None:
+        diag = {}
     from dataclasses import replace
 
     from raise_core.explore import extract_llm_diagnosis
@@ -502,6 +507,7 @@ def apply_in_loop_d3(
     md = dict(candidate.metadata or {})
     metrics = md.get("last_metrics") or {}
     if not isinstance(metrics, dict) or not metrics:
+        diag.update(status="no_metrics", reason=None)
         return candidate
     feedback = md.get("proxy_feedback") or format_proxy_feedback_block(
         metrics,
@@ -520,11 +526,14 @@ def apply_in_loop_d3(
         raw = llm.complete(full_prompt)
         new_code = normalize_to_compute_reward(extract_python_code(raw))
         diagnosis = extract_llm_diagnosis(raw)
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
+        diag.update(status="llm_error", reason=f"{type(exc).__name__}: {exc}"[:300])
         return candidate
     reward_fn, err = validator.try_validate(new_code)
     if reward_fn is None:
+        diag.update(status="invalid", reason=str(err or "")[:300])
         return candidate
+    diag.update(status="accepted", reason=None)
     new_md = dict(md)
     new_md["in_loop_d3"] = True
     new_md["in_loop_d3_parent"] = candidate.candidate_id

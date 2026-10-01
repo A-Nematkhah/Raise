@@ -121,6 +121,7 @@ def select_to_label(
             "enabled": False,
             "soft": True,
             "reason": reason,
+            "ready_reason": ready_reason,
             "n_kept": len(pop),
             "n_dropped": 0,
         }
@@ -135,6 +136,7 @@ def select_to_label(
     )
     gate_report["soft"] = False
     gate_report["enabled"] = True
+    gate_report["ready_reason"] = ready_reason
     to_label = unique_by_code(survivors)
 
     if al_enabled:
@@ -165,12 +167,15 @@ def select_to_label(
                 )
                 if res.get("status") == "ok":
                     n_s1 += 1
+        n_before_al = len(to_label)
         to_label = unique_by_code(list(to_label) + al_picks)
         al_report = {
             "enabled": True,
             "n_al_stage2": len(unique_by_code(al_picks)),
             "n_stage1_requests": n_s1,
             "n_queries": len(queries),
+            "pick_ids": [str(c.candidate_id) for c in al_picks],
+            "n_added_by_al": len(to_label) - n_before_al,
         }
 
     if len(to_label) < int(min_stage2_per_gen):

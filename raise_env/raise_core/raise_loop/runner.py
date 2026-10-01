@@ -16,12 +16,14 @@ from raise_core.raise_loop.checkpoint import (
 )
 from raise_core.raise_loop.config import ClosedLoopConfig
 from raise_core.raise_loop.epoch import select_to_label
+from raise_core.raise_loop.ledger import write_generation_ledger
 from raise_core.raise_loop.logging_io import (
     append_al_step,
     append_epoch_record,
     closed_loop_dir,
     write_json,
 )
+from raise_core import console
 from raise_core.explore import RewardCandidate, StageIConfig, StageIEvolver
 from raise_core.llm import LLMClient, make_llm_client
 from domains.crowdnav.reporting import load_candidate_dict
@@ -216,10 +218,35 @@ class ClosedLoopRunner:
         n_crossover = int(cfg.n_crossover)
         n_mutation = int(cfg.n_mutation)
         n_random = int(cfg.n_random)
-        if n_crossover + n_mutation + n_random != n:
+        configured_buckets = [n_crossover, n_mutation, n_random]
+        bucket_fallback = n_crossover + n_mutation + n_random != n
+        if bucket_fallback:
             n_crossover = min(2, n)
             n_mutation = min(4, max(0, n - n_crossover))
             n_random = n - n_crossover - n_mutation
+            console.warn(
+                f"closed-loop buckets {configured_buckets} do not sum to population "
+                f"{n}; using crossover={n_crossover} mutation={n_mutation} "
+                f"random={n_random}",
+                stage="closed-loop",
+            )
+        keep_elite = bool(cfg.keep_runtime_elite)
+        eff_cross, eff_mut, eff_rand = n_crossover, n_mutation, n_random
+        if keep_elite:
+            if eff_rand > 0:
+                eff_rand -= 1
+            elif eff_mut > 0:
+                eff_mut -= 1
+            elif eff_cross > 0:
+                eff_cross -= 1
+        buckets = {
+            "configured": configured_buckets,
+            "fallback_applied": bucket_fallback,
+            "elite": int(keep_elite),
+            "crossover": eff_cross,
+            "mutation": eff_mut,
+            "random": eff_rand,
+        }
 
         s1_cfg = StageIConfig(
             population_size=n,
@@ -503,6 +530,9 @@ class ClosedLoopRunner:
             n_ok = 0
             n_fail = 0
             n_proxy_fb = 0
+            label_statuses: Dict[str, str] = {
+                str(cid): "resumed" for cid in labeled_this_epoch
+            }
             # Score1 / scalar pools for mismatch detection (include prior labels on pop).
             pop_s1 = [
                 float(c.score)
@@ -522,6 +552,11 @@ class ClosedLoopRunner:
             ) -> None:
                 nonlocal n_ok, n_fail, labels_since_refit, n_labeled, n_proxy_fb
                 status = str(result.get("status") or "")
+                label_statuses[str(cand.candidate_id)] = (
+                    f"{status}:{result.get('reason')}"
+                    if status == "skipped" and result.get("reason")
+                    else status
+                )
                 if status == "ok" and result.get("example_id"):
                     n_ok += 1
                     labels_since_refit += 1
@@ -616,6 +651,7 @@ class ClosedLoopRunner:
                             (cand.validation_error or "invalid")[:120],
                         )
                         n_fail += 1
+                        label_statuses[str(cand.candidate_id)] = "failed:no_reward_fn"
                         labeled_this_epoch.add(str(cand.candidate_id))
                         continue
                     result = label_and_append_candidate(
@@ -639,6 +675,7 @@ class ClosedLoopRunner:
             if bool(getattr(cfg, "enable_refine", False)) and d3_n <= 0:
                 d3_n = 1
             n_d3 = 0
+            d3_attempts: List[Dict[str, Any]] = []
             if (
                 bool(getattr(cfg, "proxy_feedback", False))
                 and d3_n > 0
@@ -652,11 +689,16 @@ class ClosedLoopRunner:
 
                 targets = select_for_in_loop_d3(to_label, max_n=d3_n)
                 for old in targets:
+                    d3_diag: Dict[str, Any] = {}
                     new_c = apply_in_loop_d3(
                         old,
                         llm=self.llm,
                         validator=self.validator,
                         prompts=pack.prompts,
+                        diag=d3_diag,
+                    )
+                    d3_attempts.append(
+                        {"target_id": str(old.candidate_id), **d3_diag}
                     )
                     if new_c is old or new_c.candidate_id == old.candidate_id:
                         continue
@@ -837,6 +879,7 @@ class ClosedLoopRunner:
                 ambient=ambient,
             )
             # Highway: demote identical Stage-II metric clones before breeding.
+            elite_id: Optional[str] = None
             if domain_key == "highway":
                 from raise_core.raise_loop.diversity import diversify_ranking
                 from raise_core.raise_loop.evolve_rank import (
@@ -884,6 +927,7 @@ class ClosedLoopRunner:
                         elite,
                     )
                     ranked_for_evo = [live] + rest
+                    elite_id = eid
 
             # Refresh LLM evidence with stamped pareto_* (label-time attach
             # runs before stamp_pareto_ranks) and build reflection from the
@@ -961,9 +1005,30 @@ class ClosedLoopRunner:
                 "n_label_failed": n_fail,
                 "n_proxy_feedback": n_proxy_fb,
                 "n_in_loop_d3": n_d3,
+                "d3_attempts": d3_attempts,
             }
             if pareto_summary is not None:
                 epoch_rec["pareto"] = pareto_summary
+            if domain_key == "highway":
+                try:
+                    epoch_rec["generation_summary"] = write_generation_ledger(
+                        cfg.output_dir,
+                        ranked_for_evo,
+                        generation=g,
+                        selected_ids=[str(c.candidate_id) for c in to_label],
+                        label_statuses=label_statuses,
+                        gate_report=gate_report,
+                        al_report=al_report,
+                        d3_report={
+                            "n_attempts": len(d3_attempts),
+                            "n_accepted": n_d3,
+                            "attempts": d3_attempts,
+                        },
+                        buckets=buckets,
+                        elite_id=elite_id,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("ledger write failed: %s", exc)
             try:
                 from raise_core.raise_loop.gate_policy import epoch_population_stats
 
@@ -973,7 +1038,6 @@ class ClosedLoopRunner:
             if epoch_resumed:
                 # Counts cover only the labels this process produced.
                 epoch_rec["resumed"] = True
-            from raise_core import console
             from raise_core.raise_loop.report import format_epoch_summary
 
             append_epoch_record(cfg.output_dir, epoch_rec)
