@@ -13,6 +13,7 @@ domains/crowdnav/data/surrogate_dataset/*.jsonl
 domains/crowdnav/data/surrogate_dataset/manifest.json
 
 domains/highway/data/stage1_dataset/
+domains/highway/data/stage1_dataset_*/
 domains/highway/data/active_learning/queue.jsonl
 domains/highway/data/active_learning/done.jsonl
 domains/highway/data/active_learning/steps.jsonl
@@ -34,8 +35,6 @@ data/active_learning/
 # All generated surrogate / experiment artifacts except tiny tracked fixtures
 artifacts/**
 !artifacts/surrogate/.gitkeep
-!artifacts/surrogate_test_fix/
-!artifacts/surrogate_test_fix/**
 
 # Simulator / GST weight trees
 gst_datasets/
