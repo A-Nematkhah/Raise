@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import os
 
+import pytest
+
 from raise_core import pipeline as pipeline_mod
 from raise_core.domains import make_stage3_trainer_for_domain
 from raise_core.pipeline import RaisePipeline, RaiseRunConfig
@@ -174,6 +176,20 @@ def test_pipeline_highway_stage3_receives_highway_config(tmp_path, monkeypatch):
     assert s3.skip_final_refine is True
     assert s3.highway_n_steps == 64
     assert s3.highway_eval_deterministic is False
+
+
+def test_pipeline_highway_closed_loop_final_stage2_rounds(tmp_path):
+    pytest.importorskip("sklearn")
+    cfg = RaiseRunConfig(output_dir=str(tmp_path / "run_cl"), domain="highway")
+    cfg.apply_fast_profile()
+    cfg.closed_loop = True
+    cfg.closed_loop_final_stage2_rounds = 1
+    cfg.surrogate_dataset = str(tmp_path / "surr_data")
+    cfg.surrogate_model_dir = str(tmp_path / "surr_model")
+    cfg.active_learning_queue = str(tmp_path / "al")
+    arts = RaisePipeline(cfg).run()
+    assert arts.best_stage2 is not None
+    assert arts.best_stage3 is not None
 
 
 def test_pipeline_fast_with_surrogate(tmp_path):

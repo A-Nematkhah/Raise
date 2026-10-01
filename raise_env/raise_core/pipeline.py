@@ -30,6 +30,7 @@ from raise_core.domains import (
     make_validator_for_domain,
 )
 from raise_core.llm import LLMClient, make_llm_client
+from domains.crowdnav.regime import env_name_for_predict_method
 from domains.crowdnav.reporting import candidate_to_dict, write_json
 from raise_core.sandbox import RewardValidator
 from raise_core.selection import (
