@@ -1,4 +1,4 @@
-"""Closed-loop multi-fidelity evolution (innovation path). See PLAN.md.
+"""Closed-loop multi-fidelity evolution (innovation path).
 
 Canonical package name: ``raise_loop``.
 On-disk run subdirectory remains ``closed_loop/`` for resume compatibility.
@@ -23,7 +23,4 @@ __all__ = [
     "RaiseLoopConfig",
     "RaiseLoopResult",
     "RaiseLoopRunner",
-    "PLAN_PATH",
 ]
-
-PLAN_PATH = __file__.replace("__init__.py", "PLAN.md")

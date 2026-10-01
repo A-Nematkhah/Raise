@@ -1,7 +1,7 @@
 """
 Active learning package (targeted data / label acquisition).
 
-See ``PLAN.md`` (locked v1). Depends on Surrogate v1 uncertainty + SR/CR/TR API.
+Depends on Surrogate v1 uncertainty + SR/CR/TR API.
 Do not enable in the main pipeline until deliberately wired.
 """
 

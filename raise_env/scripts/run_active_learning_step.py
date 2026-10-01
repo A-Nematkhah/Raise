@@ -2,7 +2,6 @@
 """
 One active-learning step.
 
-Design: ``raise_core/active_learning/PLAN.md`` (locked v1).
 Requires a fitted surrogate under ``--surrogate``.
 """
 

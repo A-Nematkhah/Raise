@@ -10,7 +10,7 @@ from __future__ import annotations
 import math
 from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
 
-# Locked CrowdNav / default contract (PLAN.md).
+# Locked CrowdNav / default contract.
 DEFAULT_TARGET_KEYS: Tuple[str, ...] = ("SR", "CR", "TR")
 
 # Highway multi-target: survival + throughput (Phase 2).

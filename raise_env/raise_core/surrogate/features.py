@@ -1,7 +1,5 @@
 """
-Feature extraction for the Stage-II surrogate.
-
-See ``PLAN.md`` §3 (schema v1, locked 2026-09-20).
+Feature extraction for the Stage-II surrogate (schema v1).
 """
 
 from __future__ import annotations
@@ -167,7 +165,7 @@ def extract_candidate_features(
 
 
 def example_id_for_features(features: Dict[str, Any]) -> str:
-    """``{code_hash[:12]}_{label_budget}`` as in PLAN.md §5 Resume."""
+    """``{code_hash[:12]}_{label_budget}``; stable across resume."""
     digest = str(features.get("code_hash") or "")
     budget = str(features.get("label_budget") or "stage2_short")
     if len(digest) < 12:

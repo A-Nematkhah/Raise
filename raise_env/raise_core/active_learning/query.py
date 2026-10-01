@@ -195,7 +195,7 @@ def score_queries(
     """
     Rank acquisition targets by disagreement / uncertainty.
 
-    See PLAN.md §3–4. Prefer ``stage2_label``; optionally emit ``stage1_scenario``.
+    Prefer ``stage2_label``; optionally emit ``stage1_scenario``.
     """
     if len(candidates) != len(surrogate_preds):
         raise ValueError("candidates and surrogate_preds length mismatch")

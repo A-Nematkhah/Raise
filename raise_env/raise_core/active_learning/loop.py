@@ -118,7 +118,7 @@ def run_active_learning_step(
     domain: str = "crowdnav",
 ) -> Dict[str, Any]:
     """
-    One AL iteration. See PLAN.md §5.
+    One AL iteration.
 
     Returns summary counts for logging / manifest.
     """

@@ -1,7 +1,6 @@
 """
 Surrogate model package (cheap predictor of Stage II short metrics).
 
-See ``PLAN.md`` — contract locked 2026-09-20.
 Default targets: SR, CR, TR (CrowdNav). Highway adds mean_speed /
 mean_progress / soft_success via ``target_keys_for_domain``.
 """

@@ -1,4 +1,4 @@
-"""Surrogate v1 unit tests (PLAN.md §9)."""
+"""Surrogate v1 unit tests."""
 
 from __future__ import annotations
 

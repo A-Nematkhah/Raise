@@ -1,4 +1,4 @@
-"""Closed-loop multi-fidelity runner (innovation path). See PLAN.md."""
+"""Closed-loop multi-fidelity runner (innovation path)."""
 
 from __future__ import annotations
 
