@@ -363,8 +363,6 @@ Unit test: `test_constant_component_flat_in_trend_summary PASSED`.
 **Completed** 2026-09-30 (not `--llm seed`). Artifacts: `results/_reward_components_live_verify/`; extract: `results/_reward_components_verification/section6_live_extract.txt`; log: `live_run.log`.
 
 ```text
-# Required: HTTP(S)_PROXY=http://127.0.0.1:10809  (direct chat/completions → 403 Forbidden from this egress IP)
-# key_manager/_groq_http_client() passes an explicit httpx Client(proxy=...) when those env vars are set.
 python scripts/run_raise.py --domain highway --llm groq --device cuda --closed-loop \
   --stage1-population 4 --stage1-generations 3 --closed-loop-k2 3000 \
   --closed-loop-proxy-feedback --closed-loop-proxy-d3 1 \
@@ -372,7 +370,7 @@ python scripts/run_raise.py --domain highway --llm groq --device cuda --closed-l
   --output-dir results/_reward_components_live_verify --no-resume
 ```
 
-**403 diagnosis (why the first attempt failed):** curl GET `/models` sometimes returned 200 even direct, but **POST** `/chat/completions` returned `{"error":{"message":"Forbidden"}}` without proxy. Through `127.0.0.1:10809` the same POSTs returned 200. Env-only proxy trust was flaky under parallel retries; an explicit `httpx.Client(proxy=...)` in `raise_core/key_manager.py` made Gen0-sized calls reliable. Keys themselves were valid (tiny proxied completions returned `OK`).
+**403 diagnosis (why the first attempt failed):** from this egress IP, direct `POST /chat/completions` sometimes returned `{"error":{"message":"Forbidden"}}` while keys themselves were valid. The successful §6 live run used an external network path (local VPN/proxy outside the repo). No in-repo HTTP_PROXY / explicit httpx proxy client is required or retained for normal runs — turn on VPN if Groq 403 / connection errors reappear.
 
 **Run outcome:** closed-loop finished successfully (~33 min wall). Epochs 0–2 labeled; final pick Stage II/III `mut_0019` (SR=1.0). Gen0 had many `getattr`/truncation rejects and some seed fallbacks (`see_*`); later epochs produced real LLM crossover/mutation/D3 (`cro_*`, `mut_*`, `cro_0017_d3`).
 
@@ -385,7 +383,7 @@ From trained rollouts + returned component dicts (extract file):
 | `cro_0017` | mut_0016, mut_0015 | `collision_penalty`, `off_road_penalty`, `progress_term`, `speed_term`, `survival_bonus` |
 | `cro_0018` | mut_0016, mut_0015 | same five |
 | `mut_0019` | cro_0013 | above + `lane_change_term`, `overtake_term`, `proximity_penalty` |
-| `mut_0020` | cro_0014 | same seven as mut_0019 |
+| `mut_0020` | cro_0014 (**verified** `parent_ids`) | `collision_penalty`, `off_road_penalty`, `progress_term`, `speed_term`, `proximity_penalty`, `lane_change_term`, `overtake_term` |
 
 Diagnostics show non-constant trends for several keys (e.g. `mut_0019` `progress_term` 4.28→4.92 across rollouts; `collision_penalty` −1.64→−0.23).
 
@@ -399,7 +397,9 @@ Also `mut_0019` names collision/proximity penalties and says keep other terms un
 
 ### 6.3 Before/after mutation editing a named component
 
-D3 refine `cro_0017` → `cro_0017_d3` (diagnosis called out tiny collision vs large progress; mutation raised the collision term):
+**Lineage note:** §6.2’s diagnosis belongs to `mut_0020` with **`parent_ids=['cro_0014']`**. The D3 example below is a **different** lineage (`cro_0017` → `cro_0017_d3`) and must not be mixed with that diagnosis for faithfulness scoring (see §7.2 item 10 correction).
+
+D3 refine `cro_0017` → `cro_0017_d3` (this pair’s own diagnosis called out tiny collision vs large progress; mutation raised the collision term):
 
 ```diff
 -    collision_penalty = -30.0
@@ -457,7 +457,7 @@ Adversarial + key eureka tests also recorded in `section1_pytest_key_tests.txt` 
 
 ### 7.2 Not fully verified / residual risks
 
-1. **Live Groq closed-loop (§6)** completed via local HTTP proxy (`127.0.0.1:10809`); direct chat POSTs remain **403 Forbidden** from this egress. Diagnoses name components mostly in prose (“collision penalty”), not always as exact dict keys. Gen0 still wasted attempts on `getattr`/truncation; some early slots fell back to seed variants.
+1. **Live Groq closed-loop (§6)** completed after egress to Groq was available (VPN/network outside the repo). Direct chat POSTs from a blocked egress can still return **403 Forbidden** — turn on VPN if that happens. Diagnoses name components mostly in prose (“collision penalty”), not always as exact dict keys. Gen0 still wasted attempts on `getattr`/truncation; some early slots fell back to seed variants.
 2. **`MAX_REWARD_COMPONENT_KEYS = 12`** was chosen as a bound from the task brief, **not** empirically tuned against LLM outputs.
 3. **Bare-float shim has no expiry plan** — it persists indefinitely for highway resume/checkpoints; prompts push the tuple contract, but old genomes still validate.
 4. **Phase 0 float call-site table:** Score1 / surrogate / `env_wrapper` remain safe because `SandboxedReward.compute` still returns a **float**. CrowdNav never sets `allow_components`. Residual risk: any third-party code that calls the raw `compute_fn` (bypass wrapper) would see a tuple on highway — not observed in-repo.
@@ -466,9 +466,15 @@ Adversarial + key eureka tests also recorded in `section1_pytest_key_tests.txt` 
 7. **Throughput ON vs OFF** was a single paired 3k-step CPU run; not a multi-seed statistical comparison. Absolute SPS is low (~24) due to highway-env cost, not components.
 8. **CrowdNav isolation** verified by empty `git diff --stat domains/crowdnav/` **and** CrowdNav suite green + `test_crowdnav_rejects_tuple_return` / comprehension-ban CrowdNav cases — not merely assumed.
 9. Prompt fix applied during verification: D1 example braces escaped (`{{`/`}}`) so `.format()` works; also wired `_RETURN_CONTRACT` into `D1_SYSTEM_PROMPT` and clarified the D1 task description for the tuple return.
-10. **Diagnosis faithfulness is not proven by §6 (measured limitation, not a bug to fix here).** The `mut_0020` diagnosis quoted in §6.2 references a component (“proximity penalty”) that does **not** exist anywhere in `cro_0017`’s actual reward code / component dict, and its stated directional claims (“slightly stronger weight to speed”, “without changing the overall structure”) directly contradict the actual §6.3 diff `cro_0017` → `cro_0017_d3` (`speed_coef` decreased `0.1 → 0.05`; `progress_term` structure changed from cumulative `state.progress` to incremental-with-memory). *(Logged parent of `mut_0020` was `cro_0014`, whose code was not retained in the final checkpoint; the comparison above is against the only fully retained before/after bodies in §6 — still sufficient to show the gap.)* This shows the **mechanical** pipeline (recording, displaying, and feeding component trends) works correctly, but does **not** by itself prove the LLM’s stated reasoning is faithfully grounded in the specific numeric values shown to it — the diagnosis text may partly reflect generic RL vocabulary rather than precise reading of the displayed trends.
-11. **Recommended follow-on metric (do not implement now):** across a larger sample of `(diagnosis, before/after diff)` pairs, measure automatically (1) what fraction of diagnosis text mentions a component name that actually exists in the **parent’s** `reward_components` dict, and (2) what fraction of directional claims in the diagnosis (increase / decrease / rescale a named term) match the actual sign of change in the diff. Report these as a **faithfulness rate** — a more rigorous test of whether component-level reflection is actually being used correctly than the single qualitative example in §6 provides.
+10. **Diagnosis↔diff lineage hygiene (correction of a prior mispaired claim).** An earlier draft of this item compared §6.2’s `mut_0020` diagnosis to the §6.3 `cro_0017` → `cro_0017_d3` diff. That comparison is **invalid**: verified `mut_0020.parent_ids == ['cro_0014']` (`origin="mutation"`), not `cro_0017`. **Withdrawn:** the claim that “proximity penalty” was absent from the parent, and that speed/structure claims contradicted the mutation, when those contradictions came from the wrong lineage (`cro_0017` has no `proximity_penalty` and the D3 diff shrinks `speed_coef` / rewrites progress). **Corrected check against `cro_0014` → `mut_0020`:**
+    - **Parent source:** full `cro_0014` reward **code was not retained** in any checkpoint/snapshot/population JSON (snapshotter started after that candidate left the live population). Recoverable evidence: `surrogate_dataset/features.jsonl` (`code_len=2455`, `code_hash=b7860151…`) and Stage-II `diagnostics_rollout.jsonl` for `r1002_cro_0014`.
+    - **Parent components (from diagnostics):** `collision_penalty`, `off_road_penalty`, `progress_term`, `speed_term`, **`proximity_penalty`**, `lane_change_term`, `overtake_term`. So naming “proximity penalty” in the diagnosis is **in-vocabulary for the true parent**, not a hallucination relative to `cro_0014`.
+    - **Child `mut_0020`:** full source retained; same seven component keys; `speed_coef = 0.1`; collision/off-road constants `-80` / `-40`; docstring says same shaping terms as parent with stronger safety and slightly higher speed incentive.
+    - **Directional claims:** same component key set parent↔child supports “overall structure” at the component-dict level. Stronger collision magnitude is **consistent** with more-negative `collision_penalty` rollout means (parent ≈ −0.12…−0.82 vs child ≈ −1.25…−1.56). “Slightly stronger weight to speed” is **not coef-verified** without parent source (child `speed_term` means are higher, but policy-confounded). `proximity_penalty` means were ~0 for both during logged rollouts — magnitude increase of that term is **not** numerically confirmed from diagnostics alone.
+    - **Net:** the previous “diagnosis was unfaithful” conclusion does **not** stand for the correct pair; available evidence is compatible with a partially faithful component-aware edit, with coef-level proof incomplete because the parent body is missing. Full before/after unified diff for this pair cannot be pasted.
+11. **Data-hygiene rule for future reports:** whenever a diagnosis-vs-diff (or diagnosis-vs-code) comparison is presented, **explicitly state and verify** `child.parent_ids` (and `origin`) **before** presenting the comparison. Do not juxtapose a diagnosis from one candidate with a diff from another lineage.
+12. **Recommended follow-on metric (do not implement now):** across a larger sample of **verified** `(parent, child)` pairs (linked by `parent_ids`), measure automatically (1) what fraction of diagnosis mentions name a component that exists in the **parent’s** recorded `reward_components` / trend keys, and (2) what fraction of directional claims match the sign of change in a retained before/after diff (or, if only diagnostics exist, in comparable component means — with policy confounding noted). Also **retain parent source code** (or hash-addressable archive) across generations so coef-level checks are possible. Report a **faithfulness rate**; this remains the right rigorous test, but only on correctly paired lineages.
 
 ---
 
-*Artifacts directory: `raise_env/results/_reward_components_verification/`.*
+*Artifacts directory: `raise_env/results/_reward_components_verification/` (see also `sec6_corrected_pair_report.txt`).*

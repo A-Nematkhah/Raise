@@ -58,7 +58,45 @@ def _toy_dataset():
                 states=tuple(frames),
                 label="success",
                 behavior="safe_fast",
-                metadata={"mean_speed": 22.0, "mean_progress": 45.0},
+                metadata={"mean_speed": 22.0, "mean_progress": 45.0, "overtakes": 0},
+            )
+        )
+    # Safe cruise (~20–21) successes — distinct from crawl and from overtake
+    for i in range(3):
+        frames = _frames(speed=20.5, progress=3.8, n=10)
+        trajs.append(
+            HighwayTrajectoryRecord(
+                trajectory_id=f"cruise_{i}",
+                scenario_id="safe_cruise",
+                seed=50 + i,
+                states=tuple(frames),
+                label="success",
+                behavior="safe_cruise",
+                metadata={
+                    "mean_speed": 20.5,
+                    "mean_progress": 38.0,
+                    "overtakes": 0,
+                    "safe_cruise_band": True,
+                },
+            )
+        )
+    # Genuine overtake successes
+    for i in range(3):
+        frames = _frames(speed=22.5, progress=5.0, n=10)
+        trajs.append(
+            HighwayTrajectoryRecord(
+                trajectory_id=f"ovt_{i}",
+                scenario_id="overtake",
+                seed=80 + i,
+                states=tuple(frames),
+                label="success",
+                behavior="overtake",
+                metadata={
+                    "mean_speed": 22.5,
+                    "mean_progress": 50.0,
+                    "overtakes": float(1 + i),
+                    "genuine_overtake": True,
+                },
             )
         )
     # Crawl successes
@@ -72,7 +110,7 @@ def _toy_dataset():
                 states=tuple(frames),
                 label="success",
                 behavior="crawl",
-                metadata={"mean_speed": 6.0, "mean_progress": 10.0},
+                metadata={"mean_speed": 6.0, "mean_progress": 10.0, "overtakes": 0},
             )
         )
     # Collisions
@@ -86,7 +124,7 @@ def _toy_dataset():
                 states=tuple(frames),
                 label="collision",
                 behavior="aggressive",
-                metadata={"mean_speed": 25.0, "mean_progress": 12.0},
+                metadata={"mean_speed": 25.0, "mean_progress": 12.0, "overtakes": 0},
             )
         )
     # Timeouts
@@ -101,7 +139,7 @@ def _toy_dataset():
                 states=tuple(frames),
                 label="timeout",
                 behavior="synth_timeout",
-                metadata={"mean_speed": 10.0, "mean_progress": 16.0},
+                metadata={"mean_speed": 10.0, "mean_progress": 16.0, "overtakes": 0},
             )
         )
     return trajs
@@ -129,6 +167,58 @@ def compute_reward(state, memory):
     assert s_seed.scenario_scores is not None
     assert "preference_auc" in s_seed.scenario_scores
     assert "collision_decoy_penalty" in s_seed.scenario_scores
+    assert "overtake_alignment" in s_seed.scenario_scores
+
+
+def test_overtake_aware_beats_passive_crawl_on_toy():
+    """Acceptance: overtake-aware reward ranks above passive safe crawl."""
+    pack = load_domain("highway")
+    validator = make_validator_for_domain(pack)
+    trajs = _toy_dataset()
+    passive = validator.validate_code(
+        """
+def compute_reward(state, memory):
+    if state.collision:
+        return -50.0
+    if state.off_road:
+        return -20.0
+    # Survival + modest speed around 20; no credit for passing.
+    return float(1.0 - 0.2 * abs(state.speed - 20.0) + 0.01 * state.progress)
+"""
+    )
+    aware = validator.validate_code(
+        """
+def compute_reward(state, memory):
+    if state.collision:
+        return -50.0
+    if state.off_road:
+        return -20.0
+    r = 0.08 * state.progress + 0.02 * min(state.speed, 24.0)
+    prev = memory.get("prev_others")
+    cur = list(state.others or ())
+    if prev is not None:
+        for o in cur:
+            for px, py in prev:
+                if abs(float(o.y) - float(py)) < 2.0 and float(px) > 2.0 and float(o.x) <= 0.0:
+                    r += 5.0
+                    break
+    stored = []
+    for o in cur:
+        stored.append((float(o.x), float(o.y)))
+    memory["prev_others"] = stored
+    for o in cur:
+        # Closing gap on a lead vehicle (ego-relative vx < 0 while still ahead).
+        if abs(float(o.y)) < 2.5 and float(o.x) > 0.0 and float(o.vx) < -0.5:
+            r += 0.2
+    return float(r)
+"""
+    )
+    s_passive = score_highway_dataset(passive, trajs)
+    s_aware = score_highway_dataset(aware, trajs)
+    assert float(s_aware.score) > float(s_passive.score)
+    assert float(s_aware.scenario_scores["overtake_alignment"]) > float(
+        s_passive.scenario_scores["overtake_alignment"]
+    )
 
 
 def test_hybrid_penalizes_collision_loving_reward():

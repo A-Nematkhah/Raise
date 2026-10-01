@@ -202,7 +202,6 @@ class GroqLLMClient(LLMClient):
 
         from raise_core.key_manager import (
             DEFAULT_REQUEST_TIMEOUT,
-            _groq_http_client,
             _is_rate_limit_error,
             _is_transient_error,
             get_groq_pacer,
@@ -210,15 +209,11 @@ class GroqLLMClient(LLMClient):
 
         pacer = get_groq_pacer()
         # Disable SDK auto-retry; we pace explicitly to avoid 429 storms.
-        groq_kwargs: dict = {
-            "api_key": self.api_key,
-            "max_retries": 0,
-            "timeout": DEFAULT_REQUEST_TIMEOUT,
-        }
-        http_client = _groq_http_client()
-        if http_client is not None:
-            groq_kwargs["http_client"] = http_client
-        client = Groq(**groq_kwargs)
+        client = Groq(
+            api_key=self.api_key,
+            max_retries=0,
+            timeout=DEFAULT_REQUEST_TIMEOUT,
+        )
         last_error: Optional[Exception] = None
         for attempt in range(1, self.max_attempts + 1):
             pacer.wait_turn()

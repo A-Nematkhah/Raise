@@ -97,6 +97,21 @@ def test_highway_rejects_bad_component_dicts(code: str, needle: str):
     assert needle in str(ei.value).lower()
 
 
+def test_highway_validator_normalizes_unicode_punctuation():
+    # Stage III refine in highway_4h_20260930 died on U+2011 / "25\u202fm"-style tokens.
+    code = (
+        "def compute_reward(state, memory):\n"
+        "    # off\u2011road guard, safe speed ~25\u202fm/s\n"
+        "    safe = 25.0\u202f\n"
+        "    excess = state.speed \u2212 safe\n"
+        "    return float(excess), {\u201cexcess\u201d: float(excess)}\n"
+    )
+    v = make_highway_validator(smoke_states=default_smoke_states())
+    rw = v.validate_code(code)
+    assert rw.compute(default_smoke_states()[0]) == pytest.approx(0.0)
+    assert "excess" in rw.last_reward_components()
+
+
 def test_unpack_shim_and_strict_crowdnav():
     total, comps = unpack_reward_return(3.0, allow_components=True)
     assert total == 3.0 and comps == {}

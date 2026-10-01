@@ -6,10 +6,11 @@ seed → Stage I → Stage II → Stage III. No AMFRS mechanisms.
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import os
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -995,6 +996,13 @@ class RaisePipeline:
         if self.checkpoint_store is not None:
             s3_runner.checkpoint_store = self.checkpoint_store
             s3_runner.checkpoint_seed = int(cfg.seed)
+        if str(pack.name) == "highway":
+            # Highway trainers reassign candidate.metadata with Stage III metrics;
+            # detach so stage2_pop / best_s2 keep Stage II labels for R2 and ρ.
+            stage3_input_pop = [
+                replace(c, metadata=copy.deepcopy(c.metadata or {}))
+                for c in stage3_input_pop
+            ]
         stage3_pop = s3_runner.run(stage3_input_pop, run_h_sweep=run_h_sweep)
         rank_pool_s3 = list(s3_runner.trained_snapshots) or list(stage3_pop)
         r3_rank = produce_final_ranking(

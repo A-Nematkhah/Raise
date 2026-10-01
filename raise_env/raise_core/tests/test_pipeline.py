@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import os
 
+from raise_core import pipeline as pipeline_mod
+from raise_core.domains import make_stage3_trainer_for_domain
 from raise_core.pipeline import RaisePipeline, RaiseRunConfig
 from domains.crowdnav.reporting import (
     EpisodeRecord,
@@ -86,6 +88,55 @@ def test_pipeline_fast(tmp_path):
     assert final["valid"] is True
     man = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
     assert man.get("surrogate", {}).get("enabled") is False
+
+
+class _MetadataReassigningStage3:
+    """Stub Stage III that reassigns candidate.metadata like HighwayPPOTrainer."""
+
+    def __init__(self, inner):
+        self.inner = inner
+
+    def train_and_eval(self, candidate, *, round_index, config, **kwargs):
+        out = self.inner.train_and_eval(
+            candidate, round_index=round_index, config=config, **kwargs
+        )
+        md = dict(candidate.metadata or {})
+        md["fitness"] = -123.0
+        md["last_metrics"] = {"SR": 0.0, "CR": 1.0, "TR": 0.0, "fitness": -123.0}
+        candidate.metadata = md
+        return out
+
+    def evaluate_at_human_counts(self, candidate, bundle, *, config, human_counts=None):
+        return self.inner.evaluate_at_human_counts(
+            candidate, bundle, config=config, human_counts=human_counts
+        )
+
+
+def test_pipeline_fast_highway_stage3_keeps_stage2_metadata(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        pipeline_mod,
+        "make_stage3_trainer_for_domain",
+        lambda pack, use_stub=False: _MetadataReassigningStage3(
+            make_stage3_trainer_for_domain(pack, use_stub=use_stub)
+        ),
+    )
+    out = tmp_path / "run_hw"
+    cfg = RaiseRunConfig(output_dir=str(out), domain="highway")
+    cfg.apply_fast_profile()
+    arts = RaisePipeline(cfg).run()
+    on_disk = json.loads((out / "best_stage2.json").read_text(encoding="utf-8"))
+    mem_md = arts.best_stage2.metadata or {}
+    disk_md = on_disk.get("metadata") or {}
+    assert mem_md.get("fitness") == disk_md.get("fitness")
+    assert mem_md.get("last_metrics") == disk_md.get("last_metrics")
+    s2_disk = {
+        c["candidate_id"]: (c.get("metadata") or {}).get("fitness")
+        for c in json.loads(
+            (out / "stage2_population.json").read_text(encoding="utf-8")
+        )["population"]
+    }
+    for cand in arts.stage2_population:
+        assert (cand.metadata or {}).get("fitness") == s2_disk[cand.candidate_id]
 
 
 def test_pipeline_fast_with_surrogate(tmp_path):

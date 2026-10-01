@@ -24,7 +24,13 @@ def mean_val_mae(
     *,
     keys: Optional[Sequence[str]] = None,
 ) -> Optional[float]:
-    """Mean per-target validation MAE from SurrogateModel.fit metrics."""
+    """
+    Mean per-target validation MAE from SurrogateModel.fit metrics.
+
+    Uses ``mae_normalized`` when present. Targets whose validation ``spearman``
+    is reported as ``None`` (constant on the val split, e.g. TR≡0) are skipped:
+    their MAE≈0 is trivial and would pull the mean under the gate threshold.
+    """
     if not fit_metrics:
         return None
     per = fit_metrics.get("per_target") or {}
@@ -37,7 +43,10 @@ def mean_val_mae(
             continue
         if not isinstance(row, dict):
             continue
-        mae = _finite(row.get("mae"), float("nan"))
+        if "spearman" in row and row["spearman"] is None:
+            continue
+        raw = row.get("mae_normalized", row.get("mae"))
+        mae = _finite(raw, float("nan"))
         if math.isfinite(mae):
             vals.append(mae)
     if not vals:
@@ -47,6 +56,8 @@ def mean_val_mae(
 
 # Rate-like targets for gate MAE (avoid mixing m/s and meters into the mean).
 _GATE_MAE_KEYS: Tuple[str, ...] = ("SR", "CR", "TR", "soft_success")
+# Early MAE gate needs a validation split big enough to mean anything.
+_MIN_VAL_FOR_MAE_GATE = 5
 
 
 def surrogate_hard_gate_ready(
@@ -69,6 +80,15 @@ def surrogate_hard_gate_ready(
     need = int(min_labels)
     if n >= need:
         return True, f"n_labeled={n}>={need}"
+    n_val = (fit_metrics or {}).get("n_val")
+    if (
+        max_val_mae is not None
+        and n_val is not None
+        and int(n_val) < _MIN_VAL_FOR_MAE_GATE
+    ):
+        return False, (
+            f"n_labeled={n}<{need} and n_val={int(n_val)}<{_MIN_VAL_FOR_MAE_GATE}"
+        )
     if max_val_mae is not None:
         mae = mean_val_mae(fit_metrics, keys=_GATE_MAE_KEYS)
         if mae is None:

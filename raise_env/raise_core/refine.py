@@ -101,6 +101,12 @@ class Stage2Config:
     highway_meta_fine_low: float = 15.0
     highway_meta_fine_high: float = 35.0
     highway_meta_fine_n: int = 21
+    # PPO entropy bonus (SB3 default 0.0) and holdout eval policy mode.
+    highway_ent_coef: float = 0.0
+    highway_eval_deterministic: bool = True
+    # PPO rollout length cap per env and optimisation epochs per rollout.
+    highway_n_steps: int = 256
+    highway_n_epochs: int = 10
 
 
 @dataclass

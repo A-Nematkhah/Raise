@@ -325,6 +325,51 @@ def _throughput_alignment(
     return float(rho)
 
 
+def _traj_overtake_count(traj: HighwayTrajectoryRecord) -> float:
+    meta = traj.metadata or {}
+    try:
+        return float(meta.get("overtakes", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _overtake_alignment(
+    returns: Dict[str, float],
+    trajectories: Sequence[HighwayTrajectoryRecord],
+) -> float:
+    """
+    Among success trajs, Spearman(episode_return, overtake_count).
+
+    Rewards that value skillful passing over passive crawl / reckless speed
+    score higher when genuine overtake trajs exist in the dataset. Returns
+    0 when fewer than 3 successes or when overtake counts are constant.
+    """
+    succ = [t for t in trajectories if t.label == "success"]
+    if len(succ) < 3:
+        return 0.0
+    rets = [float(returns[t.trajectory_id]) for t in succ]
+    overtakes = [_traj_overtake_count(t) for t in succ]
+    if max(overtakes) - min(overtakes) < 1e-9:
+        return 0.0
+    rho = spearman_correlation(rets, overtakes)
+    if rho is None or (isinstance(rho, float) and rho != rho):
+        return 0.0
+    return float(rho)
+
+
+def _is_positive_success(traj: HighwayTrajectoryRecord) -> bool:
+    """Cruise / overtake / mid-gear successes (not crawl/lag decoys)."""
+    if traj.label != "success":
+        return False
+    beh = str(traj.behavior or "").lower()
+    spd = _traj_mean_speed(traj)
+    if any(tag in beh for tag in ("crawl", "lag", "decoy_lag")):
+        return False
+    if any(tag in beh for tag in ("safe", "fast", "overtake", "cruise")):
+        return True
+    return spd >= 20.0
+
+
 def _crawl_penalty(
     returns: Dict[str, float],
     trajectories: Sequence[HighwayTrajectoryRecord],
@@ -333,7 +378,7 @@ def _crawl_penalty(
     Positive penalty if mean return on lag/crawl successes ≥ fast ones.
 
     Crawl/lag trajs: behavior contains crawl|lag|decoy_lag, or mean_speed < 18.
-    Fast trajs: safe/fast tag or mean_speed ≥ 22 (mid-gear cruise).
+    Positive trajs: safe/fast/cruise/overtake tag or mean_speed ≥ 20.
     """
     crawl_rets: List[float] = []
     fast_rets: List[float] = []
@@ -345,7 +390,7 @@ def _crawl_penalty(
         beh = str(t.behavior or "").lower()
         if any(tag in beh for tag in ("crawl", "lag", "decoy_lag")) or spd < 18.0:
             crawl_rets.append(r)
-        elif "safe" in beh or "fast" in beh or spd >= 22.0:
+        elif _is_positive_success(t):
             fast_rets.append(r)
     if not crawl_rets or not fast_rets:
         return 0.0
@@ -370,14 +415,23 @@ def _collision_decoy_penalty(
         beh = str(t.behavior or "").lower()
         if t.label == "collision" or "decoy_crash" in beh or "decoy_collision" in beh:
             crash_rets.append(r)
-        elif t.label == "success" and (
-            "safe" in beh or "fast" in beh or _traj_mean_speed(t) >= 22.0
-        ):
+        elif _is_positive_success(t):
             fast_rets.append(r)
     if not crash_rets or not fast_rets:
         return 0.0
     gap = float(np.mean(crash_rets) - np.mean(fast_rets))
     return float(max(0.0, gap) / (abs(float(np.mean(fast_rets))) + 1.0))
+
+
+# Score1 positive-component weights (sum to 1.0 before decoy penalties).
+# Overtake taken modestly (0.15) from former throughput (0.35→0.20) so
+# preference/Spearman stay dominant while skillful passing is visible.
+_W_SPEARMAN = 0.25
+_W_PREFERENCE = 0.40
+_W_THROUGHPUT = 0.20
+_W_OVERTAKE = 0.15
+_W_CRAWL_PEN = 0.50
+_W_CRASH_PEN = 0.35
 
 
 def score_highway_dataset(
@@ -393,7 +447,8 @@ def score_highway_dataset(
 
         0.25 · within-traj Spearman(highway_rule, cum_reward)
         0.40 · preference AUC (success ≻ timeout ≻ collision)
-        0.35 · throughput alignment on success trajs
+        0.20 · throughput alignment on success trajs
+        0.15 · overtake alignment on success trajs
         − 0.50 · crawl/lag_penalty
         − 0.35 · collision_decoy_penalty
     """
@@ -405,15 +460,17 @@ def score_highway_dataset(
     returns = {t.trajectory_id: _episode_return(reward_fn, t) for t in trajectories}
     pref = _preference_auc(returns, trajectories)
     thr = _throughput_alignment(returns, trajectories)
+    ovt = _overtake_alignment(returns, trajectories)
     crawl = _crawl_penalty(returns, trajectories)
     crash_decoy = _collision_decoy_penalty(returns, trajectories)
 
     raw = (
-        0.25 * float(spearman_mean)
-        + 0.40 * float(pref)
-        + 0.35 * float(thr)
-        - 0.50 * float(crawl)
-        - 0.35 * float(crash_decoy)
+        _W_SPEARMAN * float(spearman_mean)
+        + _W_PREFERENCE * float(pref)
+        + _W_THROUGHPUT * float(thr)
+        + _W_OVERTAKE * float(ovt)
+        - _W_CRAWL_PEN * float(crawl)
+        - _W_CRASH_PEN * float(crash_decoy)
     )
     # Keep a bit of headroom; clamp for stability in evolution logs.
     score = float(np.clip(raw, -1.5, 1.5))
@@ -422,7 +479,12 @@ def score_highway_dataset(
     # degeneracy when preference/throughput still provide signal.
     rejected = False
     reject_reason = None
-    if deg_frac >= 0.95 and abs(pref) < 1e-9 and abs(thr) < 1e-9:
+    if (
+        deg_frac >= 0.95
+        and abs(pref) < 1e-9
+        and abs(thr) < 1e-9
+        and abs(ovt) < 1e-9
+    ):
         rejected = True
         reject_reason = "no_signal"
         score = -1.0
@@ -431,6 +493,7 @@ def score_highway_dataset(
         "spearman": float(spearman_mean),
         "preference_auc": float(pref),
         "throughput": float(thr),
+        "overtake_alignment": float(ovt),
         "crawl_penalty": float(crawl),
         "collision_decoy_penalty": float(crash_decoy),
     }

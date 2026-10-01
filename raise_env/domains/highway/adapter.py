@@ -128,6 +128,7 @@ def _eval_metrics(
     seed_offset: int = 10_003,
     soft_speed_mps: float | None = None,
     soft_progress_m: float = 400.0,
+    deterministic: bool = True,
 ) -> ProxyMetrics:
     """
     Evaluate a highway policy.
@@ -193,7 +194,7 @@ def _eval_metrics(
         overtake_tracker = OvertakeTracker()
         overtake_tracker.observe(env)
         while not done:
-            action, _ = model.predict(obs, deterministic=True)
+            action, _ = model.predict(obs, deterministic=deterministic)
             prev_lane = _lane_index_from_obs(obs)
             obs, reward, terminated, truncated, info = env.step(action)
             # Lane-change from lane index Δ (works for Discrete + Continuous).
@@ -521,8 +522,10 @@ class HighwayPPOTrainer:
             candidate.reward_fn, seed=seed, n_envs=n_envs, env_config=env_cfg
         )
         # Per-env rollout length; keep ~256 total steps/env as before when n_envs=1.
-        n_steps = min(256, max(16, train_steps // max(1, n_envs)))
+        n_steps_cap = max(16, int(getattr(config, "highway_n_steps", 256) or 256))
+        n_steps = min(n_steps_cap, max(16, train_steps // max(1, n_envs)))
         batch_size = min(64 * n_envs, max(8, n_steps * n_envs))
+        n_epochs = max(1, int(getattr(config, "highway_n_epochs", 10) or 10))
         # Always build a fresh PPO so n_steps/batch_size match this VecEnv.
         # PPO.load + mutating n_steps leaves a stale RolloutBuffer (IndexError).
         # Warm-start copies policy weights only (new model → _last_obs is None,
@@ -536,7 +539,9 @@ class HighwayPPOTrainer:
             device=device,
             n_steps=n_steps,
             batch_size=batch_size,
+            n_epochs=n_epochs,
             learning_rate=3e-4,
+            ent_coef=float(getattr(config, "highway_ent_coef", 0.0) or 0.0),
         )
         if warm_path:
             try:
@@ -632,6 +637,7 @@ class HighwayPPOTrainer:
             holdout_env_config,
         )
 
+        eval_deterministic = bool(getattr(config, "highway_eval_deterministic", True))
         train_dict: Dict[str, float] = {}
         if eval_mode == "both":
             eval_env = RewardInjectedHighwayEnv(
@@ -644,6 +650,7 @@ class HighwayPPOTrainer:
                     n_episodes=eval_episodes,
                     seed=seed,
                     seed_offset=10_003,
+                    deterministic=eval_deterministic,
                 )
                 train_dict = metrics_to_highway_dict(train_metrics)
             finally:
@@ -661,6 +668,7 @@ class HighwayPPOTrainer:
                 n_episodes=eval_episodes,
                 seed=seed,
                 seed_offset=HOLDOUT_SEED_OFFSET,
+                deterministic=eval_deterministic,
             )
         finally:
             holdout_env.close()

@@ -33,7 +33,10 @@ Hybrid Score1 (not Spearman-only):
 ```
 0.25 · within-traj Spearman(highway_rule, cum_reward)
 0.40 · preference AUC (success ≻ timeout ≻ collision)
-0.35 · throughput alignment on success (speed/progress)
+0.20 · throughput alignment on success (speed/progress)
+0.15 · overtake alignment on success (episode_return vs overtake_count)
+−0.50 · crawl/lag penalty
+−0.35 · collision-decoy penalty
 − 0.50 · crawl_penalty
 ```
 

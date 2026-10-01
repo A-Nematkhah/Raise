@@ -74,6 +74,37 @@ def test_hard_gate_soft_when_mae_high():
     assert "n_labeled" in reason or "val_mae" in reason
 
 
+def test_mae_gate_ignores_constant_targets_and_uses_normalized():
+    # highway_4h_20260930 shape: SR/CR normalized MAE≈0.78, TR/soft constant on val.
+    fit = {
+        "n_val": 5,
+        "per_target": {
+            "SR": {"mae": 0.32, "mae_normalized": 0.785, "spearman": 0.87},
+            "CR": {"mae": 0.32, "mae_normalized": 0.782, "spearman": 0.87},
+            "TR": {"mae": 0.0, "mae_normalized": 0.0, "spearman": None},
+            "soft_success": {"mae": 0.018, "mae_normalized": 0.36, "spearman": None},
+        },
+    }
+    ok, reason = surrogate_hard_gate_ready(
+        n_labeled=6, min_labels=16, fit_metrics=fit, max_val_mae=0.35
+    )
+    assert not ok
+    assert "val_mae" in reason
+
+
+def test_mae_gate_requires_min_val_split():
+    fit = {"n_val": 3, "per_target": {"SR": {"mae": 0.01}, "CR": {"mae": 0.01}}}
+    ok, reason = surrogate_hard_gate_ready(
+        n_labeled=6, min_labels=16, fit_metrics=fit, max_val_mae=0.35
+    )
+    assert not ok
+    assert "n_val=3" in reason
+    ok_labels, _ = surrogate_hard_gate_ready(
+        n_labeled=16, min_labels=16, fit_metrics=fit, max_val_mae=0.35
+    )
+    assert ok_labels
+
+
 def test_assemble_forces_elites_and_filters_weak_score1():
     weak_s1 = _cand("s1", score=0.9, soft=0.0, scalar=-0.2)
     strong_s2 = _cand("s2", score=0.4, soft=0.8, scalar=0.9)
