@@ -196,6 +196,24 @@ def test_crash_prone_slow_policy_scores_non_positive():
     assert highway_fitness(slower) <= 0.0
 
 
+def test_soft_success_is_diagnostic_only():
+    m = {
+        "SR": 0.9,
+        "CR": 0.1,
+        "TR": 0.0,
+        "mean_speed": 25.5,
+        "PL": 900.0,
+        "lane_change_rate": 0.05,
+        "speed_p10": 23.0,
+        "speed_p90": 27.0,
+        "progress_std": 40.0,
+        "outcome_unique": 2,
+    }
+    assert highway_fitness({**m, "soft_success": 0.0}) == highway_fitness(
+        {**m, "soft_success": 1.0}
+    )
+
+
 def test_crash_costs_more_than_survival_earns():
     base = {
         "TR": 0.0,

@@ -180,11 +180,12 @@ def highway_fitness(metrics: Optional[Mapping[str, Any]]) -> float:
 
         F = gate · survival
           + max(0, survival) · quality
-          + 0.15 · soft_success · gate
           − lag_penalty − degeneracy_penalty − low_speed_penalty
 
     Progress and speed only count in proportion to positive survival, so a
     crash-prone policy cannot bank distance driven before crashing.
+    ``soft_success`` is a logged diagnostic only; its fixed thresholds would
+    add a step in fitness at an arbitrary speed/progress bar.
     """
     if not metrics:
         return float("-inf")
@@ -201,15 +202,11 @@ def highway_fitness(metrics: Optional[Mapping[str, Any]]) -> float:
     speed = _finite(
         src.get("mean_speed", src.get("ITR", src.get("avg_speed", 0.0)))
     )
-    soft = _finite(src.get("soft_success", 0.0))
-
     gate = _speed_gate(v_eff)
     survival = _survival(sr, cr, tr)
     quality = 0.35 * _tanh01(pl / _REF_PROGRESS_M) + 0.25 * _tanh01(
         speed / _REF_SPEED_MPS
     )
-    soft_term = 0.15 * soft * gate
-
     lag = _lag_penalty(sr, speed)
     degen = _degeneracy_penalty(src)
     low = _low_speed_penalty(v_eff)
@@ -217,7 +214,6 @@ def highway_fitness(metrics: Optional[Mapping[str, Any]]) -> float:
     return float(
         gate * survival
         + max(0.0, survival) * quality
-        + soft_term
         - lag
         - degen
         - low

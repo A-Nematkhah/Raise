@@ -227,8 +227,6 @@ D4_EXTERNAL_KNOWLEDGE = f"""# External Knowledge — Highway Fast
 - SR: fraction of episodes survived without collision/off-road
 - CR: collision rate; TR: off-road rate
 - mean_speed / mean_progress / lane_change_rate / overtakes_per_km as logged on holdout
-- soft_success: small fitness bonus only (not a primary objective —
-  do not design the reward specifically to hit this indicator)
 """
 
 D5_SEED_FUNCTION = '''def compute_reward(state, memory):
