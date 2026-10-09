@@ -49,6 +49,7 @@ for _path in (_ROOT, _SCRIPTS):
     if _path not in sys.path:
         sys.path.insert(0, _path)
 
+from raise_core.console import ensure_utf8_stdio  # noqa: E402
 from raise_core.presets import CLOSED_LOOP_PROFILES  # noqa: E402
 from raise_core.surrogate import feature_schema_version_for_domain  # noqa: E402
 from raise_core.surrogate.dataset_io import read_manifest  # noqa: E402
@@ -130,9 +131,6 @@ def _ensure_warm(warm_root: str, *, llm: str, device: str) -> int:
         "--eval-episodes",
         str(int(PROFILE["stage2_eval"])),
     ]
-    if str(llm) == "seed":
-        # bootstrap itself does not need allow-seed; seed provider is local
-        pass
     return int(subprocess.call(cmd))
 
 
@@ -243,6 +241,7 @@ def _print_profile(args, *, warm_n=None, population=None, generations=None) -> N
 
 
 def main() -> int:
+    ensure_utf8_stdio()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--llm", default=PROFILE["llm"], choices=("seed", "groq", "ollama", "vllm"))
     parser.add_argument("--device", default=PROFILE["device"])
@@ -364,10 +363,6 @@ def main() -> int:
                 file=sys.stderr,
             )
             return 2
-
-    if str(args.resume).strip() and str(args.warm_surrogate).strip():
-        # Resume owns its surrogate paths; warm copy is skipped below.
-        pass
 
     if not args.skip_collect:
         code = _ensure_dataset(PROFILE["stage1_dataset"])
@@ -553,7 +548,12 @@ def main() -> int:
     if bool(args.diagnostics_groundtruth_checkpoints):
         cmd.append("--diagnostics-groundtruth-checkpoints")
 
-    resume_cmd = f"python scripts/run_raise_highway.py --resume {out}"
+    resume_cmd = (
+        f"python scripts/run_raise_highway.py --resume {out} "
+        f"--llm {args.llm} --device {args.device}"
+    )
+    if args.llm_model:
+        resume_cmd += f" --llm-model {args.llm_model}"
     if bool(args.diagnostics_groundtruth_checkpoints):
         resume_cmd += " --diagnostics-groundtruth-checkpoints"
     if args.highway_action_mode:

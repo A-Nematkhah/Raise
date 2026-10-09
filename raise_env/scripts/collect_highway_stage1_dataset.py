@@ -30,6 +30,7 @@ _ROOT = _os.path.abspath(_os.path.join(_os.path.dirname(__file__), ".."))
 if _ROOT not in _sys.path:
     _sys.path.insert(0, _ROOT)
 import raise_paths  # noqa: E402,F401
+from raise_core.console import ensure_utf8_stdio  # noqa: E402
 import argparse
 import os
 import sys
@@ -320,6 +321,7 @@ def _run_episode(
 
 
 def main() -> int:
+    ensure_utf8_stdio()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", default="domains/highway/data/stage1_dataset")
     parser.add_argument("--episodes-per-behavior", type=int, default=10)

@@ -19,8 +19,11 @@ import argparse
 import os
 import sys
 
+from raise_core.console import ensure_utf8_stdio
+
 
 def main() -> int:
+    ensure_utf8_stdio()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "output_dir",

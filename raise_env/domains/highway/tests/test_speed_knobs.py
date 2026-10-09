@@ -4,12 +4,16 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+from stable_baselines3.common.monitor import Monitor
+from stable_baselines3.common.vec_env import DummyVecEnv
+
 from domains.highway.adapter import (
     _highway_eval_mode,
     _highway_n_envs,
     _highway_warm_start_enabled,
     _make_train_vec_env,
 )
+from domains.highway.env_wrapper import RewardInjectedHighwayEnv
 from domains.highway.prompts import D5_SEED_FUNCTION
 from raise_core.domains import (
     load_domain,
@@ -77,13 +81,6 @@ def test_stochastic_eval_label_reproducible(tmp_path):
 
 def test_train_vec_env_wraps_monitor():
     """SB3 needs Monitor so rollout/ep_rew_mean is logged (diagnostics Part 1)."""
-    from stable_baselines3.common.monitor import Monitor
-    from stable_baselines3.common.vec_env import DummyVecEnv
-
-    from domains.highway.env_wrapper import RewardInjectedHighwayEnv
-    from domains.highway.prompts import D5_SEED_FUNCTION
-    from raise_core.domains import load_domain, make_validator_for_domain
-
     pack = load_domain("highway")
     fn = make_validator_for_domain(pack).validate_code(D5_SEED_FUNCTION)
     venv = _make_train_vec_env(fn, seed=0, n_envs=1)

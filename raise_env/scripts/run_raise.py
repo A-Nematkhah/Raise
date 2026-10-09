@@ -11,8 +11,8 @@ Examples (from ``raise_env/`` with system Python)::
     # Seconds-scale dry run (stub trainers + seed LLM)
     python scripts/run_raise.py --fast --output-dir results/raise_fast
 
-    # Practical local run (real trainers, reduced Stage III K3)
-    python scripts/run_raise.py --llm seed --output-dir results/raise_local
+    # Practical local run (real trainers, reduced Stage III K3, no LLM cost)
+    python scripts/run_raise.py --llm seed --allow-seed-llm --output-dir results/raise_local
 
     # Paper-faithful Stage III budget on a GPU cluster
     python scripts/run_raise.py --llm vllm --stage3-train-steps 10000000 \\
@@ -44,9 +44,8 @@ import shutil
 import sys
 from datetime import datetime
 
-_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-if _ROOT not in sys.path:
-    sys.path.insert(0, _ROOT)
+from raise_core.console import ensure_utf8_stdio
+
 _BASELINES_ROOT = os.path.abspath(os.path.join(_ROOT, "..", "baselines_openai"))
 if _BASELINES_ROOT not in sys.path:
     sys.path.insert(0, _BASELINES_ROOT)
@@ -180,6 +179,7 @@ def _copy_warm_surrogate(args) -> int:
 
 
 def main() -> int:
+    ensure_utf8_stdio()
     rest, profile_spec = _inject_profile_argv(sys.argv[1:])
     if profile_spec.get("runner") == "paper_scale":
         from raise_core.paper_scale import run_paper_scale_cli
@@ -661,7 +661,8 @@ def main() -> int:
 
     _console.configure_run_logging(verbose=bool(args.verbose))
 
-    import crowd_sim  # noqa: F401
+    if str(args.domain).strip().lower() == "crowdnav":
+        import crowd_sim  # noqa: F401 — registers the CrowdNav gym envs
 
     cfg = RaiseRunConfig(
         output_dir=args.output_dir,

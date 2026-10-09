@@ -341,6 +341,8 @@ CLOSED_LOOP_PROFILES: Dict[str, Dict[str, Any]] = {
         "domain": "highway",
         "seed": 425,
         "llm": "seed",
+        # Same as run_raise_highway.py; pass --llm groq|ollama|vllm for real runs.
+        "allow_seed_llm": True,
         "device": "cuda",
         "stage1_dataset": "domains/highway/data/stage1_dataset",
         "warm_root": "",

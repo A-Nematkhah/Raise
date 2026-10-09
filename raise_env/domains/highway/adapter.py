@@ -754,6 +754,54 @@ class HighwayPPOTrainer:
         return holdout_metrics
 
 
+def evaluate_saved_policy(
+    checkpoint_path: str,
+    reward_fn: Any,
+    *,
+    config: Any,
+    n_episodes: int,
+    seed: int,
+    deterministic: bool = True,
+) -> Dict[str, Any]:
+    """Re-evaluate a saved SB3 ``model.zip`` on the holdout profile.
+
+    ``seed`` is the trainer's eval seed (``config.seed + round_index`` unless
+    ``highway_eval_seed_base`` was set), so the same value reproduces the
+    episodes scored at training time.
+    """
+    from stable_baselines3 import PPO
+
+    from domains.highway.action_config import configure_action_mode_from_config
+    from domains.highway.env_wrapper import (
+        HOLDOUT_SEED_OFFSET,
+        RewardInjectedHighwayEnv,
+        holdout_env_config,
+    )
+    from domains.highway.metrics import attach_fitness
+
+    configure_action_mode_from_config(config)
+    model = PPO.load(checkpoint_path, device="cpu")
+    env = RewardInjectedHighwayEnv(
+        reward_fn, seed=int(seed) + 7, config=holdout_env_config()
+    )
+    if not deterministic:
+        model.set_random_seed(int(seed) + int(HOLDOUT_SEED_OFFSET))
+    try:
+        metrics = _eval_metrics(
+            env,
+            model,
+            n_episodes=int(n_episodes),
+            seed=int(seed),
+            seed_offset=HOLDOUT_SEED_OFFSET,
+            deterministic=deterministic,
+        )
+    finally:
+        env.close()
+    out = dict(metrics_to_highway_dict(metrics))
+    out["eval_profile"] = "holdout"
+    return attach_fitness(out)
+
+
 def make_stage2_trainer(*, use_stub: bool = False) -> HighwayStage2Trainer:
     if use_stub:
         adapter = HighwayAdapter(stage2_delegate=StubPolicyTrainer())

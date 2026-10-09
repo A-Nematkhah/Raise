@@ -7,11 +7,12 @@ re-evaluates every saved policy on a FIXED holdout episode set so training-seed
 noise is separable from eval-episode noise. Also logs the deterministic action
 histogram and mean policy entropy on the fixed set (collapse diagnostics).
 
-One seed per process; run seeds in parallel:
+One seed per process; run seeds in parallel (from raise_env/):
 
-  python scripts/label_reliability_highway.py --seed 425
-  python scripts/label_reliability_highway.py --seed 426
-  python scripts/label_reliability_highway.py --seed 427
+  python scripts/label_reliability_highway.py --run results/highway_YYYYMMDD_HHMMSS --seed 425
+  python scripts/label_reliability_highway.py --run results/highway_YYYYMMDD_HHMMSS --seed 426
+
+Output defaults to <run>/label_reliability/seed_<seed>/.
 """
 
 from __future__ import annotations
@@ -53,9 +54,9 @@ from domains.highway.reward_checks import make_highway_validator  # noqa: E402
 from raise_core.domains import load_domain, make_stage2_trainer_for_domain  # noqa: E402
 from raise_core.explore import RewardCandidate  # noqa: E402
 from raise_core.refine import Stage2Config  # noqa: E402
+from raise_core.console import ensure_utf8_stdio  # noqa: E402
 from raise_core.sandbox.config import SandboxConfig  # noqa: E402
 
-DEFAULT_RUN = "results/highway_4h_20260930_124808"
 KEEP_KEYS = (
     "SR",
     "CR",
@@ -120,10 +121,11 @@ def _action_stats(model: Any, reward_fn: Any, *, seed: int, n_episodes: int) -> 
 
 
 def main() -> int:
+    ensure_utf8_stdio()
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--run", default=DEFAULT_RUN)
+    parser.add_argument("--run", required=True, help="Finished highway closed-loop run dir")
     parser.add_argument("--seed", type=int, required=True)
-    parser.add_argument("--out", default="results/_label_reliability_20260930")
+    parser.add_argument("--out", default=None, help="Default: <run>/label_reliability")
     parser.add_argument("--train-steps", type=int, default=12_000)
     parser.add_argument("--eval-episodes", type=int, default=20)
     parser.add_argument("--fixed-eval-seed", type=int, default=10_000)
@@ -144,6 +146,8 @@ def main() -> int:
         help="Skip training; re-evaluate existing r00_<cid>/model.zip (writes labels_reeval.jsonl).",
     )
     args = parser.parse_args()
+    if not args.out:
+        args.out = os.path.join(args.run, "label_reliability")
 
     torch.set_num_threads(max(1, int(args.threads)))
     run_cfg = json.load(open(os.path.join(args.run, "config.json"), encoding="utf-8"))

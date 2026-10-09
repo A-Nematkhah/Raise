@@ -24,6 +24,8 @@ tqdm==4.66.1
 
 # RAISE Algorithm 1 (optional — only for --llm groq)
 groq>=1.0.0
+# Optional, not installed by default — only for --llm vllm (OpenAI-compatible client):
+#   pip install "openai>=1.0"
 
 # Surrogate v1 (Stage II short metric predictor)
 scikit-learn>=1.2.0,<1.6

@@ -27,6 +27,17 @@ def set_verbose(enabled: bool) -> None:
     _VERBOSE = bool(enabled)
 
 
+def ensure_utf8_stdio() -> None:
+    """Write stdout/stderr as UTF-8 even when redirected (Windows defaults to cp1252)."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            try:
+                reconfigure(encoding="utf-8", errors="replace")
+            except Exception:  # noqa: BLE001
+                pass
+
+
 def is_interactive() -> bool:
     """True when stderr looks like a live terminal (not a pipe / CI capture)."""
     if os.environ.get("RAISE_FORCE_TQDM", "").strip() in ("1", "true", "yes"):

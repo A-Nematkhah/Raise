@@ -50,11 +50,12 @@ import json
 import os
 import sys
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple
 
-_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-if _ROOT not in sys.path:
-    sys.path.insert(0, _ROOT)
+from domains.highway.final_select import run_domain
+from raise_core.console import ensure_utf8_stdio
+
 _BASELINES_ROOT = os.path.abspath(os.path.join(_ROOT, "..", "baselines_openai"))
 if _BASELINES_ROOT not in sys.path:
     sys.path.insert(0, _BASELINES_ROOT)
@@ -366,7 +367,82 @@ def run_eval(
     return result
 
 
+def run_eval_highway(
+    *,
+    run_dir: str,
+    candidate_id: str,
+    round_index: int,
+    episodes: int,
+    seed: Optional[int],
+    output_json: Optional[str],
+) -> Dict[str, Any]:
+    """Highway: re-evaluate ``stage3_train/rXX_<id>/model.zip`` on the holdout profile."""
+    from domains.crowdnav.reporting import load_candidate_dict, write_json
+    from domains.highway.adapter import evaluate_saved_policy
+    from domains.highway.metrics import format_highway_metrics_line
+    from raise_core.domains import load_domain, make_validator_for_domain
+
+    run_dir = os.path.abspath(run_dir)
+    cfg_path = os.path.join(run_dir, "config.json")
+    run_cfg = _load_json(cfg_path) if os.path.isfile(cfg_path) else {}
+    cand_payload, cand_src = _find_candidate_payload(run_dir, candidate_id)
+    validator = make_validator_for_domain(load_domain("highway"))
+    candidate = load_candidate_dict(cand_payload, validator=validator)
+    if candidate.reward_fn is None:
+        raise RuntimeError(
+            f"Candidate reward failed sandbox: {candidate.validation_error}"
+        )
+
+    train_dir = _resolve_train_dir(run_dir, candidate_id, round_index)
+    ckpt_path = os.path.join(train_dir, "model.zip")
+    if not os.path.isfile(ckpt_path):
+        raise FileNotFoundError(f"No model.zip under {train_dir}")
+
+    # Same base the trainer used: seed + round_index (Stage III sets no override).
+    eval_seed = (
+        int(seed)
+        if seed is not None
+        else int(run_cfg.get("seed", 425)) + int(round_index)
+    )
+    deterministic = bool(run_cfg.get("highway_eval_deterministic", True))
+    print(
+        f"[eval] highway candidate={candidate_id} round={round_index} "
+        f"ckpt={ckpt_path} episodes={episodes} seed={eval_seed}"
+    )
+    md = evaluate_saved_policy(
+        ckpt_path,
+        candidate.reward_fn,
+        config=SimpleNamespace(**run_cfg),
+        n_episodes=int(episodes),
+        seed=eval_seed,
+        deterministic=deterministic,
+    )
+    result = {
+        "created_utc": _utc_now(),
+        "run_dir": run_dir,
+        "domain": "highway",
+        "candidate_id": candidate_id,
+        "round_index": int(round_index),
+        "checkpoint_path": os.path.abspath(ckpt_path),
+        "reward_json_source": cand_src,
+        "eval_episodes": int(episodes),
+        "seed": eval_seed,
+        "eval_deterministic": deterministic,
+        "metrics": md,
+    }
+    out_path = output_json or os.path.join(
+        run_dir,
+        "evals",
+        f"eval_r{round_index:02d}_{candidate_id}_E{episodes}_s{eval_seed}.json",
+    )
+    write_json(out_path, result)
+    print(f"[eval] {format_highway_metrics_line(md)}")
+    print(f"[eval] wrote {out_path}")
+    return result
+
+
 def main() -> None:
+    ensure_utf8_stdio()
     parser = argparse.ArgumentParser(
         description="Eval-only re-evaluation of an RAISE Stage III checkpoint"
     )
@@ -430,13 +506,11 @@ def main() -> None:
         if args.round is None:
             print(
                 "[pareto-front] Selection recorded. Pass --round to also "
-                "run CrowdNav-style Stage III .pt re-eval (if applicable)."
+                "re-evaluate its Stage III model.zip on the holdout profile."
             )
             return
         cid, rnd = picked, int(args.round)
     elif args.best_ever:
-        from domains.highway.final_select import run_domain
-
         if run_domain(run_dir) == "highway":
             raise SystemExit(
                 "Refusing --best-ever on a highway run: that flag ranks by "
@@ -459,6 +533,17 @@ def main() -> None:
                 "(CrowdNav) / --pareto-front (highway)"
             )
         cid, rnd = str(args.candidate_id), int(args.round)
+
+    if run_domain(run_dir) == "highway":
+        run_eval_highway(
+            run_dir=run_dir,
+            candidate_id=cid,
+            round_index=rnd,
+            episodes=int(args.episodes),
+            seed=args.seed,
+            output_json=args.output_json,
+        )
+        return
 
     run_eval(
         run_dir=run_dir,

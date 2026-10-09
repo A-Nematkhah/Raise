@@ -26,6 +26,7 @@ _ROOT = _os.path.abspath(_os.path.join(_os.path.dirname(__file__), ".."))
 if _ROOT not in _sys.path:
     _sys.path.insert(0, _ROOT)
 import raise_paths  # noqa: E402,F401
+from raise_core.console import ensure_utf8_stdio  # noqa: E402
 import argparse
 import json
 import os
@@ -37,6 +38,7 @@ if _ROOT not in sys.path:
 
 
 def main() -> int:
+    ensure_utf8_stdio()
     parser = argparse.ArgumentParser(description="Bootstrap Stage-II surrogate")
     parser.add_argument(
         "--domain",

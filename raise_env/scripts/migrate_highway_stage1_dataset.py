@@ -22,6 +22,7 @@ import raise_paths  # noqa: E402,F401
 
 import argparse  # noqa: E402
 
+from raise_core.console import ensure_utf8_stdio  # noqa: E402
 from domains.highway.stage1 import (  # noqa: E402
     DEFAULT_STAGE1_DATASET,
     STATE_SCHEMA_VERSION,
@@ -30,6 +31,7 @@ from domains.highway.stage1 import (  # noqa: E402
 
 
 def main() -> int:
+    ensure_utf8_stdio()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset", default=DEFAULT_STAGE1_DATASET)
     parser.add_argument("--no-backup", action="store_true")

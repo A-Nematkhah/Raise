@@ -44,10 +44,12 @@ def _pairwise_rho(by_seed: Dict[int, Dict[str, float]], ids: List[str]) -> List[
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--out", default="results/_label_reliability_20260930")
-    parser.add_argument("--run", default="results/highway_4h_20260930_124808")
+    parser.add_argument("--run", required=True, help="Highway run dir passed to label_reliability_highway.py")
+    parser.add_argument("--out", default=None, help="Default: <run>/label_reliability")
     parser.add_argument("--labels", default="labels.jsonl", help="labels.jsonl or labels_reeval.jsonl")
     args = parser.parse_args()
+    if not args.out:
+        args.out = os.path.join(args.run, "label_reliability")
 
     rows = []
     for name in sorted(os.listdir(args.out)):

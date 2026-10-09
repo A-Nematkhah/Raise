@@ -24,9 +24,8 @@ import os
 import sys
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-if _ROOT not in sys.path:
-    sys.path.insert(0, _ROOT)
+from raise_core.console import ensure_utf8_stdio
+
 os.chdir(_ROOT)
 
 
@@ -535,6 +534,7 @@ def _plot_h_sweep(h_sweep: Sequence[Any], out_path: str) -> bool:
 
 
 def main() -> int:
+    ensure_utf8_stdio()
     parser = argparse.ArgumentParser(description="Plot RAISE run metrics to PNG")
     parser.add_argument("--run-dir", required=True, help="results/<run> directory")
     parser.add_argument(
