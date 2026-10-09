@@ -1,56 +1,26 @@
-# RAISE (this fork)
+# RAISE (highway)
 
-Extension of CrowdNav++ for **RAISE** reward search. Compatible with RAISE
-Algorithm 1 (arXiv:2605.11859); AMFRS mechanisms are not included.
+LLM-guided reward evolution for `highway-fast-v0` with Stable-Baselines3 PPO.
 
 | Package | Role |
 |---------|------|
-| `raise_core/` | RAISE search / evolution (env-agnostic) |
-| `domains/crowdnav/` | Pack + `data/` + `runtime/` (crowd_sim, crowd_nav, rl, gst) |
-| `domains/highway/` | HighwayEnv pack + `data/` |
-| `raise_paths.py` | Puts `domains/crowdnav/runtime` on `sys.path` |
+| `raise_core/` | LLM client, reward sandbox, evolution loop, Stage III |
+| `domains/highway/` | HighwayEnv pack (prompts, env wrapper, PPO trainer, Score1) + `data/` |
+| `raise_paths.py` | Puts `raise_env/` on `sys.path` for scripts |
 
-Upstream simulator docs: `README.md` in this directory.
 Repository layout map: [`../docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md).
-Simulator audit notes: `AUDIT.md` (CrowdNav++ env internals).
 
 ## Install
 
 ```bash
 cd raise_env
 py -3.10 -m venv .venv
-.venv\Scripts\python.exe -m pip install -r requirements_pinned.txt
-.venv\Scripts\python.exe -m pip install git+https://github.com/sybrenstuvel/Python-RVO2.git
-.venv\Scripts\python.exe -m pip install -e ../baselines_openai --no-build-isolation
+.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
-
-Use this single `.venv` for the project. Do not mix it with system Python or
-another environment, and do not use a `PYTHONPATH` workaround.
 
 The pinned GPU wheel is `torch==2.11.0+cu128`. Adjust the `cu1xx` suffix and
-the official PyTorch index URL in `requirements_pinned.txt` to match the local
-CUDA driver before installing on another machine.
-
-## Ollama (local, no API key)
-
-For predictable latency, use the non-thinking model variant:
-
-```bash
-ollama pull frob/qwen3.5-instruct:4b
-```
-
-The default Ollama model is the reasoning model `qwen3.5:4b`, which can emit
-`<think>` content before the code fence. If using it explicitly:
-
-```bash
-ollama pull qwen3.5:4b
-python scripts/run_raise.py --llm ollama --llm-model qwen3.5:4b --output-dir results/ollama_run
-```
-
-The server URL defaults to `http://localhost:11434/v1`; override it with
-`OLLAMA_BASE_URL`. If Gen0 rejection rates are unexpectedly high, inspect
-`results/.../gen0_rejections.jsonl` for the truncation-specific
-`no closing code fence found` error before assuming a sandbox problem.
+the PyTorch index URL in `requirements.txt` to match the local CUDA driver, or
+pass `--device cpu`.
 
 ## API keys (Groq)
 
@@ -58,67 +28,54 @@ The server URL defaults to `http://localhost:11434/v1`; override it with
 2. Add keys: `{"keys": ["gsk_...", "..."]}`
 3. Or set `GROQ_API_KEY` for a single key (pool disabled)
 
+## Ollama (local, no API key)
+
+For predictable latency, use the non-thinking model variant:
+
+```bash
+ollama pull frob/qwen3.5-instruct:4b
+python scripts/run_raise.py --llm ollama --llm-model frob/qwen3.5-instruct:4b --output-dir results/ollama_run
+```
+
+The server URL defaults to `http://localhost:11434/v1`; override it with
+`OLLAMA_BASE_URL`. If Gen0 rejection rates are unexpectedly high, inspect
+`results/.../closed_loop/stage1_rejections.jsonl` for the truncation-specific
+`no closing code fence found` error before assuming a sandbox problem.
+
 ## Run matrix
 
 | Goal | Command | Hardware | Time |
 |------|---------|----------|------|
 | Wiring smoke | `python scripts/run_raise.py --fast` | CPU | seconds |
-| Stage I dataset (M=100) | `python scripts/collect_stage1_dataset.py --regime without_random` | CPU | ~tens of min |
-| Warm surrogate (match 12h env) | `python scripts/bootstrap_surrogate.py` | GPU + Groq | hours |
-| Real-trainer smoke | `python scripts/run_raise.py --profile smoke` | CPU | minutes |
-| Closed-loop overnight | `python scripts/run_raise.py --profile 12h --warm-surrogate artifacts/surr_warm` | GPU + Groq | ~12h |
-| Local Alg.1 validation | `python scripts/run_raise.py --llm groq --device cuda --regime without_random --stage1-dataset data/stage1_dataset --stage3-train-steps 500000` | GPU + Groq | hours |
-| Paper scale | `python scripts/run_raise.py --profile paper_scale --device cuda --llm groq` | GPU + Groq | days (K3=1e7 × seeds) |
+| Stage I dataset | `python scripts/collect_highway_stage1_dataset.py` | CPU | minutes |
+| Real PPO, no LLM | `python scripts/run_raise.py --llm seed --allow-seed-llm --population 2 --generations 1 --stage2-train-steps 256 --stage3-train-steps 512 --device cpu` | CPU | minutes |
+| Full run | `python scripts/run_raise.py --llm groq --output-dir results/highway_run` | GPU/CPU + Groq | hours |
 
-Defaults (AUDIT.md §8): `without_random`, Stage II/III `predict_method=inferred`, GST `...-seed_1000/sj`.
-Innovation closed-loop writes under `output_dir/closed_loop/` (name kept for resume).
+Resume: rerun with the same `--output-dir` (on by default; `--no-resume`
+starts fresh). Checkpoints: `closed_loop/checkpoint.json` (per trained
+candidate) and `stage3/checkpoint.json` (per Stage III candidate).
 
-## Domain packs
+## What a run does
 
-Reward search is wired through a **domain pack**. Prompts, Stage I Score1, and
-Stage II/III trainers resolve via `raise_core.domains` so environments live as
-sibling packages under `domains/`.
+1. Gen0: the LLM proposes N reward functions; each passes the sandbox
+   (AST policy → spawned smoke test → compile).
+2. Each of G generations: Score1 on the Stage I dataset, PPO train + holdout
+   eval of every new candidate, rank by `highway_fitness`, LLM crossover /
+   mutation (with the evaluation metrics in the prompt) / random restarts,
+   elitism.
+3. Stage III: long PPO on the final population; the final candidate is the
+   best Stage III fitness.
 
-- Guide: [`domains/README.md`](domains/README.md)
-- CLI: `python scripts/run_raise.py --domain crowdnav|highway ...`
-- **Highway (diagnostic):** install `requirements_highway.txt`, then
-  `python scripts/run_raise.py --domain highway --fast` (stub smoke) or
-  `python scripts/run_raise_highway.py --llm groq` (full closed-loop profile).
-  Upgrade Stage I data collected before `state_schema_version=2` with
-  `python scripts/migrate_highway_stage1_dataset.py --dataset <dir>`.
-- Compat: `crowd_nav.reward_search.*` and `crowd_nav.domains.*` still re-export
-  the new packages for frozen Score1 / prompt locks.
-
-## Stage I dataset
-
-Collect once (paper: M=100, N_traj=10). Our behavior mix is **not** claimed as
-paper text — see `scripts/collect_stage1_dataset.py` and
-`domains/README.md`.
-
-After the fidelity collector fix (diverse ORCA/SF/noise/random), **recollect**
-before new Stage I science runs:
-
-```bash
-python scripts/collect_stage1_dataset.py --out domains/crowdnav/data/stage1_dataset
-```
-
-Older archives may have ~5 unique trajs / 10 (duplicate deterministic ORCA/SF).
+Outputs under `--output-dir`: `config.json`, `seed_reward.py`,
+`closed_loop/` (`epochs.jsonl`, `pop_epoch_*.json`, `REPORT.txt`,
+`stage1_rejections.jsonl`, `stage2_train/` PPO models),
+`stage2_population.json`, `stage3_train/`, `stage3_population.json`,
+`best_stage{1,2,3}.json`, `final_candidate.json`, `manifest.json`, and
+`plots/` (non-fast runs).
 
 ## Tests
 
 ```bash
-pytest -m "not slow"   # CI default (raise_core + domains; highway tests skip without requirements_highway.txt)
-pytest -m slow         # 1 real-env collect test
+pytest -m "not slow"   # CI default
+pytest -m slow         # 1 real-env rollout test
 ```
-
-## Stage III H-sweep (Table 6)
-
-After Stage III training, the best-ever candidate is re-evaluated at each
-human count in `{5, 10, 15, 20}` (clipped to `H ≤ train human_num`). **Cost:**
-each H value is a **full extra eval pass** of `E3` episodes (default 500) —
-not a cheap metric reuse. Disable with `--no-h-sweep` when iterating locally.
-Paper-scale YAML keeps `human_counts: [5, 10, 15, 20]`.
-
-## Baseline checkpoints
-
-Pretrained ORCA/SF/GST under `trained_models/` (see `scripts/report.py`). GST weights under `domains/crowdnav/runtime/gst_updated/results/`.

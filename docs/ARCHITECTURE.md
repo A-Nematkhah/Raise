@@ -1,79 +1,45 @@
 # RAISE repository architecture
 
-This document describes the **actual** layout after per-domain isolation.
-Scientific behavior (Score1, trainers, prompts, seeds) is unchanged; only
-package ownership and on-disk paths moved.
-
 ## Top-level map (`raise_env/`)
 
 ```text
 raise_env/
-├── raise_core/                 # RAISE algorithm (environment-agnostic)
-├── raise_paths.py              # sys.path bootstrap for domain runtimes
+├── raise_core/                 # RAISE algorithm
+│   ├── llm.py                  # LLM clients (groq / ollama / vllm / seed / scripted)
+│   ├── sandbox/                # AST policy, spawned smoke test, compile
+│   ├── explore.py              # Gen0 proposal, Score1 scoring, crossover / mutation
+│   ├── raise_loop/             # closed-loop runner, checkpoints, epoch logs, report
+│   ├── refine.py               # Stage II config / metrics / stub trainer
+│   ├── validate.py             # Stage III runner (long PPO, best by fitness)
+│   ├── pipeline.py             # RaisePipeline: closed loop → Stage III → artifacts
+│   └── domains/                # DomainPack + registry / factories
 ├── domains/
-│   ├── crowdnav/               # CrowdNav++ domain (frozen baseline)
-│   │   ├── pack, prompts, adapter, explore_score, state, dataset, …
-│   │   ├── tests/              # Score1 locks, regime, reward adapter, …
-│   │   ├── data/               # stage1 / AL / surrogate datasets
-│   │   └── runtime/            # importable env stack (on sys.path)
-│   │       ├── crowd_sim/      # Gym environments
-│   │       ├── crowd_nav/      # configs, policy, compat shims
-│   │       ├── rl/             # A2C / PPO / vec_env
-│   │       └── gst_updated/    # Gumbel Social Transformer
-│   └── highway/                # HighwayEnv diagnostic pack
-│       ├── pack, prompts, adapter, env_wrapper, stage1, state
+│   └── highway/                # HighwayEnv pack (see domains/highway/spec.md)
+│       ├── pack, prompts, adapter, env_wrapper, stage1, state, metrics
 │       ├── tests/
-│       └── data/               # highway Stage I datasets
-├── scripts/                    # Experiment / CLI entry points
-├── configs/                    # Shared experiment YAML (e.g. paper_scale)
-├── results/  artifacts/        # Generated outputs (gitignored)
-└── docs → ../docs/ARCHITECTURE.md
+│       └── data/               # highway Stage I dataset
+├── scripts/                    # CLI entry points
+└── results/                    # generated outputs (gitignored)
 ```
 
 ## Ownership rules
 
 | Concern | Lives in |
 |---------|----------|
-| Search / evolution / Score1 math / LLM / sandbox AST / surrogate / AL | `raise_core` |
-| CrowdNav prompts, RewardState, Stage I dataset, GST regime, DS-RNN | `domains.crowdnav` |
-| CrowdNav simulator + policies + GST + RL stack | `domains/crowdnav/runtime/*` |
-| CrowdNav datasets | `domains/crowdnav/data/` |
-| Highway prompts, wrapper, SB3 trainers | `domains.highway` |
-| Highway datasets | `domains/highway/data/` |
+| Evolution loop / Score1 math / LLM / sandbox / checkpoints | `raise_core` |
+| Highway prompts, reward state, env wrapper, SB3 PPO trainer, fitness | `domains.highway` |
+| Highway Stage I dataset | `domains/highway/data/` |
 | CLI experiments | `scripts/` |
-| Frozen import paths (`crowd_nav.reward_search.*`) | shims under `runtime/crowd_nav/` |
 
-## How RAISE talks to an environment
+## Execution flow
 
 ```text
-scripts/run_raise.py --domain <name>
-  → raise_paths / domains/<name> arm runtime on sys.path
-  → raise_core.domains.load_domain(name)
-  → DomainPack  (prompts, make_score_fn, trainers, smoke_states)
-  → raise_core.pipeline.RaisePipeline
+scripts/run_raise.py
+  → RaiseRunConfig → raise_core.pipeline.RaisePipeline
+  → load_domain("highway") → DomainPack (prompts, Score1, trainers, smoke states)
+  → ClosedLoopRunner: Gen0 → for each generation:
+        Score1 → PPO train + eval new candidates → rank by fitness
+        → LLM crossover / mutation / random (+ elite) → checkpoint
+  → Stage3Runner: long PPO per final candidate → best by fitness
+  → JSON artifacts + plots
 ```
-
-## Compatibility
-
-`import crowd_sim`, `import crowd_nav`, and `import rl` still work: pytest and
-scripts put `domains/crowdnav/runtime` on `sys.path`. Prefer new imports in new
-code:
-
-- `from raise_core.pipeline import RaisePipeline`
-- `from domains.crowdnav.prompts import D5_SEED_FUNCTION`
-- `from domains.highway.pack import get_pack`
-
-## Default dataset paths
-
-| Domain | Stage I default |
-|--------|-----------------|
-| crowdnav | `domains/crowdnav/data/stage1_dataset` |
-| highway | `domains/highway/data/stage1_dataset` |
-
-GST checkpoints: `domains/crowdnav/runtime/gst_updated/results/...`
-
-## Intentionally deferred
-
-1. Moving `RealPolicyTrainer` bodies from `raise_core.refine` / `validate` into
-   `domains.crowdnav` (façade already exists).
-2. Deleting `crowd_nav.reward_search.*` shims after all callers are retargeted.

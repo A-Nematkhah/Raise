@@ -1,5 +1,21 @@
-# Legacy alias — install with:
-#   pip install -r requirements_pinned.txt
-#
-# Kept so older docs/scripts that reference requirements.txt still resolve.
--r requirements_pinned.txt
+# RAISE (highway-fast-v0) — verified on Windows, Python 3.10.
+# Adjust the cu1xx suffix to match your local CUDA driver (or use the CPU
+# wheel: pip install torch==2.11.0 --index-url https://download.pytorch.org/whl/cpu).
+
+numpy==1.23.5
+torch==2.11.0+cu128
+--extra-index-url https://download.pytorch.org/whl/cu128
+gymnasium==1.3.0
+highway-env==1.12.1
+stable-baselines3==2.9.0
+matplotlib==3.6.2
+Pillow==9.5.0
+tqdm==4.66.1
+
+# LLM provider (only for --llm groq). Optional, not installed by default —
+# only for --llm vllm (OpenAI-compatible client):
+#   pip install "openai>=1.0"
+groq>=1.0.0
+
+# Development / CI
+pytest>=7.0.0

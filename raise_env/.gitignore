@@ -1,44 +1,20 @@
 # Local run artifacts (regenerate via scripts/; never commit warm models)
 results/
 
-# Per-domain datasets
-domains/crowdnav/data/stage1_dataset/
-domains/crowdnav/data/active_learning/queue.jsonl
-domains/crowdnav/data/active_learning/done.jsonl
-domains/crowdnav/data/active_learning/steps.jsonl
-domains/crowdnav/data/active_learning/manifest.json
-domains/crowdnav/data/active_learning/stage1_extra/
-!domains/crowdnav/data/active_learning/.gitkeep
-domains/crowdnav/data/surrogate_dataset/*.jsonl
-domains/crowdnav/data/surrogate_dataset/manifest.json
-
+# Highway Stage I dataset (regenerate via scripts/collect_highway_stage1_dataset.py)
 domains/highway/data/stage1_dataset/
 domains/highway/data/stage1_dataset_*/
-domains/highway/data/active_learning/queue.jsonl
-domains/highway/data/active_learning/done.jsonl
-domains/highway/data/active_learning/steps.jsonl
-domains/highway/data/active_learning/manifest.json
-domains/highway/data/active_learning/stage1_extra/
-!domains/highway/data/active_learning/.gitkeep
-domains/highway/data/surrogate_dataset/*.jsonl
-domains/highway/data/surrogate_dataset/manifest.json
 !domains/highway/data/README.md
-!domains/highway/data/surrogate_dataset/.gitkeep
+
+# Untracked data from the removed CrowdNav domain (left on disk, never commit)
+domains/crowdnav/
 
 # Legacy path aliases (if someone still writes under raise_env/data/)
 data/stage1_dataset/
 data/highway_stage1_dataset/
-data/surrogate_dataset/*.jsonl
-data/surrogate_dataset/manifest.json
-data/active_learning/
 
-# All generated surrogate / experiment artifacts except tiny tracked fixtures
+# Experiment artifacts / PPO checkpoints
 artifacts/**
-!artifacts/surrogate/.gitkeep
-
-# Simulator / GST weight trees
-gst_datasets/
-domains/crowdnav/runtime/gst_updated/scripts/data
 trained_models/
 figures/*.gif
 

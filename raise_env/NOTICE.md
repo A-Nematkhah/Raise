@@ -1,6 +1,8 @@
 # NOTICE
 
-This directory contains a local copy of the MIT-licensed open-source repository:
+This directory started as a local copy of the MIT-licensed open-source
+repository below. The CrowdNav++ simulator, policies and baselines have since
+been removed; RAISE now targets HighwayEnv only.
 
 **CrowdNav_Prediction_AttnGraph**  
 https://github.com/Shuijing725/CrowdNav_Prediction_AttnGraph
@@ -21,5 +23,4 @@ policies, Social Force (SF), and ORCA) originate from:
 Please also see the upstream `LICENSE` file (MIT) and `README.md` citation
 blocks for related prior work (DS-RNN, Gumbel Social Transformer).
 
-This copy is used as the environment and baseline substrate for the RAISE
-project. Upstream authorship and license terms remain unchanged.
+Upstream authorship and license terms remain unchanged.

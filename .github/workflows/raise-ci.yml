@@ -1,4 +1,4 @@
-# Fast unit tests for raise_env (raise_core + domains; no GPU, no Groq network).
+# Fast unit tests for raise_env (raise_core + highway domain; no GPU, no Groq network).
 name: raise-env-ci
 
 on:
@@ -25,16 +25,15 @@ jobs:
         with:
           python-version: "3.10"
 
-      # Same torch release as requirements_pinned.txt, CPU build (the pinned
+      # Same torch release as requirements.txt, CPU build (the pinned
       # +cu128 wheel is GPU-only and several GB).
-      - name: Install deps (CPU torch + pinned + highway extras)
+      - name: Install deps (CPU torch + pinned)
         run: |
           python -m pip install --upgrade pip
           pip install torch==2.11.0 --index-url https://download.pytorch.org/whl/cpu
-          grep -vE '^(torch==|--extra-index-url)' requirements_pinned.txt > "$RUNNER_TEMP/requirements_ci.txt"
+          grep -vE '^(torch==|--extra-index-url)' requirements.txt > "$RUNNER_TEMP/requirements_ci.txt"
           pip install -r "$RUNNER_TEMP/requirements_ci.txt"
-          pip install -r requirements_highway.txt
 
-      - name: Fast tests (exclude slow simulator collect)
+      - name: Fast tests (exclude slow env rollout)
         run: |
           python -m pytest -m "not slow" -q

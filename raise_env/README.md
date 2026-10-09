@@ -1,34 +1,21 @@
 # raise_env
 
-Active RAISE / Evonav experiment tree (LLM-guided reward search + domain packs).
-
-## Architecture / repo layout
-
-**`raise_core/` is the only live reward-search pipeline.** Closed-loop
-(`raise_loop/`), Stage I–III orchestration, sandbox, surrogate, and AL all
-live there.
-
-**`domains/crowdnav/runtime/crowd_nav/reward_search/` is a frozen legacy
-compatibility shim** (pre–domain-isolation import paths). Do not edit it for
-algorithm work — see
-[`domains/crowdnav/runtime/crowd_nav/reward_search/README_LEGACY.md`](domains/crowdnav/runtime/crowd_nav/reward_search/README_LEGACY.md).
+RAISE experiment tree: LLM-guided reward evolution on HighwayEnv.
 
 | Area | Location |
 |------|----------|
 | RAISE core | `raise_core/` |
-| CrowdNav domain | `domains/crowdnav/` |
-| Highway domain | `domains/highway/` |
+| Highway domain | `domains/highway/` (spec: [`domains/highway/spec.md`](domains/highway/spec.md)) |
 | CLIs | `scripts/` |
-| Highway final pick | `docs/SELECTION.md` |
 
 ```bash
-python scripts/run_raise.py --domain highway --fast                 # stub wiring smoke
-python scripts/run_raise.py --domain highway --closed-loop --llm groq
-python scripts/run_raise_highway.py --llm groq                      # full highway profile
+python scripts/run_raise.py --fast                       # stub wiring smoke (seconds)
+python scripts/run_raise.py --llm groq                   # full run (N=6, G=4, K2=12k, K3=70k)
+python scripts/run_raise.py --llm seed --allow-seed-llm  # real PPO, no LLM cost
 ```
 
 A non-`--fast` run with the default `--llm seed` (no real LLM) is refused
-unless you pass `--allow-seed-llm` (debug only).
-
-Highway run budget (N, G, K2, K3, …): `raise_core/presets.py` →
-`CLOSED_LOOP_PROFILES["highway"]`.
+unless you pass `--allow-seed-llm` (debug only). Run budgets are CLI flags
+(`--population`, `--generations`, `--stage2-train-steps`,
+`--stage3-train-steps`, …); defaults live in `raise_core/pipeline.py`
+(`RaiseRunConfig`). Install, keys and run details: [`README_RAISE.md`](README_RAISE.md).

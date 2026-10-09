@@ -1,9 +1,7 @@
 # Highway domain pack
 
-Diagnostic / fast validation domain for RAISE (additive; **not** the paper baseline).
-
-Default scientific domain remains ``crowdnav``. Use ``--domain highway`` to
-exercise Score1 → Stage II/III wiring on a cheap simulator.
+The only RAISE domain: LLM-proposed reward functions for `highway-fast-v0`,
+trained and evaluated with Stable-Baselines3 PPO.
 
 ## Task
 
@@ -49,7 +47,7 @@ Hybrid Score1 (not Spearman-only):
 −0.35 · collision-decoy penalty
 ```
 
-Trajectory label `timeout` is the CrowdNav-shared name for a non-collision
+Trajectory label `timeout` is the historical name for a non-collision
 failure (off-road). It is unrelated to `state.timeout`: off-road frames carry
 `off_road=True, timeout=False`.
 
@@ -60,30 +58,14 @@ Score1 can punish “survive by going slow”. Collect with:
 python scripts/collect_highway_stage1_dataset.py
 ```
 
-## Surrogate (Stage II labels)
-
-Fit targets (highway only; CrowdNav stays SR/CR/TR):
-
-```
-SR, CR, TR, mean_speed, mean_progress, soft_success
-```
-
-Gate / AL quality uses `highway_fitness` on predicted `y_hat`
-(not SR−CR−0.5·TR alone). Labels store `fitness` (alias `selection_scalar`).
-Highway features use schema version 2 (lane-index fix); older surrogate
-datasets are relabeled instead of mixed.
-
-Warm bootstrap (optional) and closed-loop refit pick these targets via
-`--domain highway` / `ClosedLoopConfig.domain`.
-
-## LLM sandbox (Phase 3)
+## LLM sandbox
 
 Highway `RewardValidator` enables an **AST Attribute allowlist**: only
 `HighwayRewardState` / `EgoVehicle` / `NearbyVehicle` fields (+ `memory.get`).
 Hallucinated names (`lane_position`, `distance`, `robot`, …) are rejected
-before smoke. D.1 includes negative few-shots; D.3 repair maps them to
-legal substitutes. SeedVariant rotates clearance / lane / speed-band /
-crawl structures (not only coef tweaks).
+before smoke. D.1 includes negative few-shots. SeedVariant (`--llm seed`)
+rotates clearance / lane / speed-band / crawl structures (not only coef
+tweaks).
 
 Runaway code is contained at every stage:
 
@@ -95,26 +77,6 @@ Runaway code is contained at every stage:
 - PPO labels run under a stall watchdog (`watchdog.py`): no env step for
   `highway_stall_seconds` (default 300) fails the label, not the run.
 
-## Closed-loop / Stage III (Phase 4)
-
-- Hard Surrogate gate (highway profile): `n_labeled ≥ 16` **or** mean val
-  MAE ≤ `0.35` (`--closed-loop-max-val-mae-gate`). Until then gate is soft.
-- Parent order for next gen (`evolve_rank=pareto`, highway default):
-  feasibility (SR > 0) + NSGA-II fronts with crowding over
-  `−CR, −TR, progress, mean_speed, lane_change_rate, overtakes_per_km`
-  (each extra toggled by `--no-highway-pareto-use-*`). Calibration default is
-  `no_speed_floor`. Only CR/TR comparisons get a 2×Bernoulli-SE noise margin.
-  `evolve_rank=scalar` (legacy `highway_fitness`) and `hybrid` remain options.
-- Stage III input = gated kept ∪ best Stage II ∪ best fitness;
-  Score1-best is forced only if `soft_success` / fitness look strong;
-  unlabeled Score1-best is protected from surrogate drop.
-- Highway profile Stage II budget: **K2=12k env steps, E2=20** holdout episodes
-  (holdout seeds shared by every candidate in a generation).
-- Final pick is a human choice from Pareto front 0
-  (`scripts/eval_raise_checkpoint.py --pareto-front`), not an automatic scalar.
-- Epoch logs include Score1 spread, soft_success μ, fitness μ, best_ever,
-  cruise-plateau fraction.
-
 ## Evaluation metrics
 
 Mapped onto RAISE `ProxyMetrics`:
@@ -124,50 +86,70 @@ Mapped onto RAISE `ProxyMetrics`:
 - TR — off-road rate
 - NT — mean episode duration (s)
 - PL — mean forward progress (m)
-- ITR — mean ego speed (m/s) (CrowdNav uses intrusion %)
+- ITR — mean ego speed (m/s)
 - SD — mean nearest-vehicle gap (m)
-
-Primary **selection** for the next generation is **Pareto ranking**
-(`evolve_rank=pareto`, see above). `highway_fitness` is still computed and
-logged as a legacy scalar.
-
-`soft_success` = fraction of episodes that survive **and** average ≥25 m/s
-(= `V_TARGET`) **and** travel ≥400 m (eval diagnostic only; never a Pareto
-or selection objective).
 
 Logged continuous fields: `mean_speed`, `mean_progress`, `lane_change_rate`
 (lane changes per step), `overtakes_per_km` (net passes: a vehicle that drops
-back ahead again does not count), `speed_p10`/`speed_p90`. Surrogate targets
-are the six listed above.
+back ahead again does not count), `speed_p10`/`speed_p90`, `soft_success`
+(survive **and** average ≥25 m/s **and** travel ≥400 m).
+
+## Selection fitness
+
+Candidates are ranked by `highway_fitness` (`metrics.py`, holdout metrics
+when present):
+
+```
+gate = sigmoid speed gate on speed_p10 (hard −penalty below the speed floor)
+F = gate · (SR − CR − 0.5·TR) + 0.35·tanh(progress/800) + 0.25·tanh(speed/v_target)
+  + 0.15·soft_success·gate − lag − degeneracy − low_speed penalties
+```
+
+The trainer stamps `fitness` on the candidate; the LLM sees the raw holdout
+metrics plus this fitness (`raise_loop/proxy_feedback.py`).
+
+## Run flow
+
+1. **Gen0**: the LLM proposes N reward functions (one batched call); each passes
+   AST policy → spawned smoke test → compile.
+2. **Each generation g < G**: Score1 on the Stage I dataset; every new
+   executable candidate is PPO-trained for K2 env steps and evaluated on E2
+   holdout episodes (eval seeds shared within the generation; PPO warm-starts
+   from a parent's checkpoint when that parent is still in the population);
+   rank by fitness; the LLM breeds the next generation
+   (crossover of the top 2, mutation of the lower half with its evaluation
+   evidence, random restarts; the best genome is carried over with elitism).
+3. **Stage III**: every candidate of the final population is trained once for
+   K3 env steps and evaluated on E3 episodes; the final candidate is the best
+   Stage III fitness. No LLM call.
+
+Defaults: N=6, G=4, K2=12k, E2=20, K3=70k, E3=30 (`raise_core/pipeline.py`).
 
 ## Env / policy
 
 - Gymnasium id: `highway-fast-v0`
-- Policy: Stable-Baselines3 PPO (MLP)
-- Stage II: short PPO proxy; Stage III: longer PPO; **no human H-sweep**
-- Full RAISE path: warm surrogate bootstrap + closed-loop (Score1 ↔ Stage II
-  short ↔ Surrogate gate / AL / proxy feedback) then Stage III
-  (`scripts/run_raise_highway.py`)
+- Policy: Stable-Baselines3 PPO (MLP); action space `meta_default`
+  (DiscreteMetaAction), `meta_fine` or `continuous`
 
 ## Pack layout
 
 | File | Role |
 |------|------|
 | `spec.md` | This document |
-| `prompts.py` | D1/D2/D3/D5 templates for HighwayRewardState |
+| `prompts.py` | D1/D2/D4/D5 templates for HighwayRewardState |
 | `state.py` | Dataclasses + smoke states |
 | `stage1.py` | Score1 / smoke factory |
 | `score1_worker.py` | Dataset Score1 in a killable child (pack entry) |
 | `env_wrapper.py` | Obs → state + reward injection |
-| `adapter.py` | Stage II/III SB3 trainers |
+| `action_config.py` | Action-space modes |
+| `adapter.py` | Stage II/III SB3 PPO trainers |
+| `metrics.py` | Eval metrics + `highway_fitness` |
 | `watchdog.py` | PPO stall watchdog |
-| `evolve_hooks.py` | Closed-loop Pareto calibration + elite archive (`DomainPack.make_evolve_hooks`) |
+| `post_run.py` / `viz.py` | Plots + rollout GIF after a non-fast run |
 | `pack.py` | `get_pack()` |
 
 ## Dependencies
 
-Install separately (does not replace CrowdNav pins):
-
 ```bash
-pip install -r requirements_highway.txt
+pip install -r requirements.txt
 ```
