@@ -132,6 +132,7 @@ _COMPACT_METRIC_KEYS = (
     "mean_progress",
     "soft_success",
     "fitness",
+    "fitness_se",
 )
 
 
@@ -234,7 +235,7 @@ class ClosedLoopRunner:
 
         eval_eps = getattr(cfg, "eval_episodes", None)
         if eval_eps is None:
-            eval_eps = 8 if cfg.use_stub else 20
+            eval_eps = 8 if cfg.use_stub else 30
         else:
             eval_eps = max(1, int(eval_eps))
 

@@ -23,7 +23,7 @@ class Stage2Config:
 
     # PPO budget per candidate (environment steps).
     train_env_steps: int = 12_000
-    eval_episodes: int = 20
+    eval_episodes: int = 30
     seed: int = 425
     output_root: str = "trained_models/stage2"
     device: str = "cpu"

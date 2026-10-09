@@ -11,7 +11,9 @@ PPO optimizes the LLM ``compute_reward``; we keep genomes that raise fitness.
 from __future__ import annotations
 
 import math
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Dict, Mapping, Optional, Sequence
+
+import numpy as np
 
 from domains.highway.objective_constants import (
     CRASH_WEIGHT,
@@ -35,6 +37,8 @@ __all__ = [
     "highway_fitness",
     "fitness_components",
     "attach_fitness",
+    "bootstrap_fitness_se",
+    "episode_fitness_fields",
     "format_highway_metrics_line",
 ]
 
@@ -283,12 +287,68 @@ def format_highway_metrics_line(metrics: Mapping[str, Any]) -> str:
     if n_ok is not None and n_cr is not None and n_ep is not None:
         counts = f" ok={int(n_ok)}/{int(n_ep)} col={int(n_cr)}"
     dq = " DQ" if v_eff < V_FLOOR else ""
+    se = src.get("fitness_se")
+    se_txt = f"±{_finite(se):.3f}" if se is not None else ""
     return (
         f"{tag}SR={sr:.2f} CR={cr:.2f} TR={tr:.2f} "
         f"progress={pl:.1f}m speed={spd:.1f}m/s v_eff={v_eff:.1f} "
         f"gate={gate:.2f} soft={soft:.3f} laneΔ={lc:.3f} ovt/km={ovt:.2f} "
-        f"fitness={fit:.3f}{dq}{counts}"
+        f"fitness={fit:.3f}{se_txt}{dq}{counts}"
     )
+
+
+def episode_fitness_fields(
+    outcomes: Sequence[str],
+    dists: Sequence[float],
+    speeds: Sequence[float],
+    lane_changes: Sequence[int],
+    steps: Sequence[int],
+) -> Dict[str, float]:
+    """Fitness inputs aggregated from per-episode eval records."""
+    n = max(1, len(outcomes))
+    spd = np.asarray(speeds, dtype=float)
+    dst = np.asarray(dists, dtype=float)
+    return {
+        "SR": sum(1 for o in outcomes if o == "success") / n,
+        "CR": sum(1 for o in outcomes if o == "collision") / n,
+        "TR": sum(1 for o in outcomes if o == "off_road") / n,
+        "PL": float(dst.mean()) if dst.size else 0.0,
+        "mean_speed": float(spd.mean()) if spd.size else 0.0,
+        "speed_p10": float(np.percentile(spd, 10)) if spd.size else 0.0,
+        "speed_p90": float(np.percentile(spd, 90)) if spd.size else 0.0,
+        "lane_change_rate": float(sum(lane_changes)) / float(max(1, sum(steps))),
+        "progress_std": float(dst.std()) if dst.size > 1 else 0.0,
+        "outcome_unique": float(len(set(outcomes))),
+    }
+
+
+def bootstrap_fitness_se(
+    outcomes: Sequence[str],
+    dists: Sequence[float],
+    speeds: Sequence[float],
+    lane_changes: Sequence[int],
+    steps: Sequence[int],
+    *,
+    n_boot: int = 200,
+    seed: int = 0,
+) -> float:
+    """Std of ``highway_fitness`` over episode resamples (seeded, reproducible)."""
+    n = len(outcomes)
+    if n < 2 or n_boot < 2:
+        return 0.0
+    rng = np.random.default_rng(int(seed))
+    fits = []
+    for _ in range(int(n_boot)):
+        idx = rng.integers(0, n, size=n)
+        fields = episode_fitness_fields(
+            [outcomes[i] for i in idx],
+            [dists[i] for i in idx],
+            [speeds[i] for i in idx],
+            [lane_changes[i] for i in idx],
+            [steps[i] for i in idx],
+        )
+        fits.append(highway_fitness(fields))
+    return float(np.std(fits, ddof=1))
 
 
 def attach_fitness(metrics: Dict[str, Any]) -> Dict[str, Any]:

@@ -126,6 +126,10 @@ Progress and speed only count when survival is positive, so a policy that
 crashes in half its episodes cannot score positive on distance driven before
 the crash. `soft_success` is logged for humans only and is not part of `F`.
 
+Each evaluation also logs `fitness_se`, the standard deviation of `F` over 200
+seeded bootstrap resamples of the evaluated episodes; differences smaller than
+about twice that are within evaluation noise.
+
 The trainer stamps `fitness` on the candidate; the LLM sees the raw holdout
 metrics plus this fitness (`raise_loop/proxy_feedback.py`).
 
@@ -144,7 +148,7 @@ metrics plus this fitness (`raise_loop/proxy_feedback.py`).
    K3 env steps and evaluated on E3 episodes; the final candidate is the best
    Stage III fitness. No LLM call.
 
-Defaults: N=6, G=4, K2=12k, E2=20, K3=70k, E3=30 (`raise_core/pipeline.py`).
+Defaults: N=6, G=4, K2=12k, E2=30, K3=70k, E3=30 (`raise_core/pipeline.py`).
 
 ## Env / policy
 

@@ -15,7 +15,12 @@ from domains.highway.action_config import (
     configure_action_mode_from_config,
     spaces_compatible,
 )
-from domains.highway.metrics import attach_fitness, format_highway_metrics_line
+from domains.highway.metrics import (
+    attach_fitness,
+    bootstrap_fitness_se,
+    episode_fitness_fields,
+    format_highway_metrics_line,
+)
 from domains.highway.objective_constants import V_TARGET
 from domains.highway.overtake import OvertakeTracker
 from domains.highway.watchdog import StallWatchdog, stall_seconds_from_config
@@ -139,8 +144,8 @@ def _eval_metrics(
     speeds: list[float] = []
     gaps: list[float] = []
     soft_ok = 0
-    lane_changes = 0
-    total_steps = 0
+    ep_lane_changes: list[int] = []
+    ep_step_counts: list[int] = []
     outcomes: list[str] = []
     ep_overtakes: list[int] = []
 
@@ -226,38 +231,41 @@ def _eval_metrics(
         dists.append(ep_dist)
         speeds.append(mean_spd)
         gaps.append(ep_gap_sum / float(max(1, ep_steps)))
-        lane_changes += ep_lane_chg
-        total_steps += ep_steps
+        ep_lane_changes.append(ep_lane_chg)
+        ep_step_counts.append(ep_steps)
 
     n = float(n_eps)
     total_km = float(sum(dists)) / 1000.0
     total_overtakes = float(sum(ep_overtakes))
+    episodes = (outcomes, dists, speeds, ep_lane_changes, ep_step_counts)
+    fields = episode_fitness_fields(*episodes)
     metrics = ProxyMetrics(
-        sr=sr / n,
-        cr=cr / n,
-        tr=tr / n,
+        sr=fields["SR"],
+        cr=fields["CR"],
+        tr=fields["TR"],
         nt=float(np.mean(times)) if times else 0.0,
-        pl=float(np.mean(dists)) if dists else 0.0,
-        itr=float(np.mean(speeds)) if speeds else 0.0,
+        pl=fields["PL"],
+        itr=fields["mean_speed"],
         sd=float(np.mean(gaps)) if gaps else 0.0,
     )
     metrics._highway_extras = {  # type: ignore[attr-defined]
-        "mean_speed": float(np.mean(speeds)) if speeds else 0.0,
-        "mean_progress": float(np.mean(dists)) if dists else 0.0,
+        "mean_speed": fields["mean_speed"],
+        "mean_progress": fields["PL"],
         "soft_success": soft_ok / n,
-        "lane_change_rate": float(lane_changes) / float(max(1, total_steps)),
+        "lane_change_rate": fields["lane_change_rate"],
         "overtakes_per_km": total_overtakes / total_km if total_km > 0 else 0.0,
         "overtake_episode_frac": (
             float(sum(1 for k in ep_overtakes if k > 0)) / n
         ),
-        "speed_p10": float(np.percentile(speeds, 10)) if speeds else 0.0,
-        "speed_p90": float(np.percentile(speeds, 90)) if speeds else 0.0,
-        "progress_std": float(np.std(dists)) if len(dists) > 1 else 0.0,
+        "speed_p10": fields["speed_p10"],
+        "speed_p90": fields["speed_p90"],
+        "progress_std": fields["progress_std"],
         "n_success": int(sr),
         "n_collision": int(cr),
         "n_off_road": int(tr),
         "n_eval_episodes": int(n_eps),
-        "outcome_unique": int(len(set(outcomes))),
+        "outcome_unique": int(fields["outcome_unique"]),
+        "fitness_se": bootstrap_fitness_se(*episodes, seed=base + offset),
     }
     return metrics
 

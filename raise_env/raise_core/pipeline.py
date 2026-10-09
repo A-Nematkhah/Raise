@@ -52,7 +52,7 @@ class RaiseRunConfig:
     population: int = 6
     generations: int = 4
     stage2_train_steps: int = 12_000
-    stage2_eval_episodes: int = 20
+    stage2_eval_episodes: int = 30
 
     # Stage III: long PPO on the final population.
     stage3_train_steps: int = STAGE3_STEPS
