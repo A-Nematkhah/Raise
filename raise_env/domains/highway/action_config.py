@@ -2,6 +2,8 @@
 
 Process-wide settings are set from pipeline/CLI config. Default is
 ``meta_default`` (eleven gears 20..30) for denser DiscreteMetaAction steps.
+Spawned child processes (sandbox smoke runs, Score1 worker) start from the
+defaults, so mode-dependent checks must run in the parent.
 """
 
 from __future__ import annotations
@@ -10,7 +12,7 @@ import ast
 import logging
 import math
 import re
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -28,6 +30,8 @@ META_DEFAULT_SPEEDS_MPS: Tuple[float, ...] = tuple(
 
 _DEFAULT_ACCEL_RANGE: Tuple[float, float] = (-5.0, 5.0)
 _DEFAULT_STEER_RANGE: Tuple[float, float] = (-math.pi / 4.0, math.pi / 4.0)
+# Without speed_range highway-env uses Vehicle.MIN/MAX_SPEED = ±40 (reversing allowed).
+_DEFAULT_CONTINUOUS_SPEED_RANGE: Tuple[float, float] = (0.0, 40.0)
 
 _TARGET_NAME_RE = re.compile(
     r"(target_speed|speed_target|traffic_speed|v_target|cruise_speed)",
@@ -44,11 +48,7 @@ class ActionModeSettings:
     meta_fine_n: int = 21
     acceleration_range: Tuple[float, float] = _DEFAULT_ACCEL_RANGE
     steering_range: Tuple[float, float] = _DEFAULT_STEER_RANGE
-    # Optional ContinuousAction speed_range; None → probe vehicle limits at runtime.
-    continuous_speed_range: Optional[Tuple[float, float]] = None
-    _cached_physical_range: Optional[Tuple[float, float]] = field(
-        default=None, repr=False, compare=False
-    )
+    continuous_speed_range: Tuple[float, float] = _DEFAULT_CONTINUOUS_SPEED_RANGE
 
 
 _SETTINGS = ActionModeSettings()
@@ -63,11 +63,7 @@ def set_action_settings(settings: ActionModeSettings) -> None:
     mode = str(settings.mode or "meta_default").strip().lower()
     if mode not in ACTION_MODES:
         raise ValueError(f"Unknown action_mode {mode!r}; expected one of {ACTION_MODES}")
-    _SETTINGS = replace(
-        settings,
-        mode=mode,
-        _cached_physical_range=None,
-    )
+    _SETTINGS = replace(settings, mode=mode)
     logger.info(
         "Highway action_mode=%s continuous_lateral=%s",
         _SETTINGS.mode,
@@ -101,9 +97,7 @@ def configure_action_mode_from_config(config: Any) -> ActionModeSettings:
         meta_fine_n=max(2, fine_n),
         acceleration_range=_pair(accel, _DEFAULT_ACCEL_RANGE),
         steering_range=_pair(steer, _DEFAULT_STEER_RANGE),
-        continuous_speed_range=(
-            _pair(spd, (15.0, 35.0)) if spd is not None else None
-        ),
+        continuous_speed_range=_pair(spd, _DEFAULT_CONTINUOUS_SPEED_RANGE),
     )
     set_action_settings(settings)
     return settings
@@ -129,9 +123,8 @@ def resolve_action_dict(settings: Optional[ActionModeSettings] = None) -> Dict[s
             "lateral": bool(s.continuous_lateral),
             "acceleration_range": list(s.acceleration_range),
             "steering_range": list(s.steering_range),
+            "speed_range": list(s.continuous_speed_range),
         }
-        if s.continuous_speed_range is not None:
-            action["speed_range"] = list(s.continuous_speed_range)
         return action
     speeds = meta_target_speeds(s)
     return {
@@ -144,51 +137,19 @@ def is_continuous_mode(settings: Optional[ActionModeSettings] = None) -> bool:
     return (settings or get_action_settings()).mode == "continuous"
 
 
-def physical_speed_range(
-    settings: Optional[ActionModeSettings] = None,
-    *,
-    force_probe: bool = False,
-) -> Tuple[float, float]:
+def physical_speed_range(settings: Optional[ActionModeSettings] = None) -> Tuple[float, float]:
     """
     Reachable ego speed band for prompts / sandbox checks.
 
     - meta_*: ``[min(target_speeds), max(target_speeds)]``
-    - continuous: configured ``speed_range`` if set, else probe the live
-      ContinuousAction / vehicle MIN_SPEED–MAX_SPEED (no hard-coded band).
+    - continuous: the ContinuousAction ``speed_range`` the env clamps to.
     """
     s = settings or get_action_settings()
     if s.mode != "continuous":
         gears = meta_target_speeds(s)
         return (float(min(gears)), float(max(gears)))
-    if s.continuous_speed_range is not None:
-        lo, hi = s.continuous_speed_range
-        return (float(lo), float(hi))
-    if s._cached_physical_range is not None and not force_probe:
-        return s._cached_physical_range
-    lo, hi = _probe_continuous_speed_range(s)
-    s._cached_physical_range = (lo, hi)
-    return (lo, hi)
-
-
-def _probe_continuous_speed_range(settings: ActionModeSettings) -> Tuple[float, float]:
-    from domains.highway.env_wrapper import make_base_env
-
-    env = make_base_env(seed=0, config={"action": resolve_action_dict(settings)})
-    try:
-        at = getattr(env.unwrapped, "action_type", None)
-        sr = getattr(at, "speed_range", None) if at is not None else None
-        if sr is not None and len(sr) >= 2:
-            return (float(sr[0]), float(sr[1]))
-        veh = getattr(env.unwrapped, "vehicle", None)
-        cls = type(veh) if veh is not None else None
-        lo = float(getattr(cls, "MIN_SPEED", -40.0))
-        hi = float(getattr(cls, "MAX_SPEED", 40.0))
-        return (lo, hi)
-    finally:
-        try:
-            env.close()
-        except Exception:  # noqa: BLE001
-            pass
+    lo, hi = s.continuous_speed_range
+    return (float(lo), float(hi))
 
 
 def action_space_prompt_block(settings: Optional[ActionModeSettings] = None) -> str:
@@ -209,12 +170,10 @@ def action_space_prompt_block(settings: Optional[ActionModeSettings] = None) -> 
         return (
             "Action space (this run):\n"
             f"- ContinuousAction ({axes}).\n"
-            f"- state.action is a numeric array, not a number: read {action_doc} "
-            "as floats, e.g. float(state.action[0]). Never use the whole array in "
-            "a comparison or `if` (ambiguous truth value -> the reward crashes).\n"
-            f"- Ego speed is continuous; physical speed limits from the simulator "
-            f"are approximately [{lo:.1f}, {hi:.1f}] m/s "
-            "(read from the env/vehicle — not a hand-picked cruise target).\n"
+            f"- state.action is a tuple of floats, not a number: read {action_doc}, "
+            "e.g. float(state.action[0]). Never compare the whole tuple with a number.\n"
+            f"- Ego speed is continuous and clamped by the simulator to "
+            f"[{lo:.1f}, {hi:.1f}] m/s (physical limits, not a cruise target).\n"
             "- Do NOT impose any specific target_speed / cruise setpoint in the "
             "reward. Shape with state.speed / state.progress / safety signals only.\n"
         )

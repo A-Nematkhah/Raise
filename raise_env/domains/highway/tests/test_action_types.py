@@ -6,7 +6,12 @@ import numpy as np
 import pytest
 from gymnasium import spaces
 
-from domains.highway.action_config import ActionModeSettings, set_action_settings
+from domains.highway.action_config import (
+    ActionModeSettings,
+    physical_speed_range,
+    resolve_action_dict,
+    set_action_settings,
+)
 from domains.highway.env_wrapper import (
     RewardInjectedHighwayEnv,
     action_for_state,
@@ -40,6 +45,12 @@ def test_action_for_state_plain_types():
     out = action_for_state(np.array([0.5, -0.25], dtype=np.float32), box)
     assert out == (0.5, -0.25)
     assert all(type(a) is float for a in out)
+
+
+def test_continuous_default_speed_range_forbids_reversing():
+    settings = ActionModeSettings(mode="continuous")
+    assert physical_speed_range(settings) == (0.0, 40.0)
+    assert resolve_action_dict(settings)["speed_range"] == [0.0, 40.0]
 
 
 def test_smoke_states_follow_action_mode(restore_action_mode):
