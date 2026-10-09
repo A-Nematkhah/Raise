@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence
 
 from raise_core.explore import RewardCandidate
+from raise_core.json_io import atomic_write_json
 from domains.crowdnav.reporting import candidate_to_dict, load_candidate_dict
 
 _CHECKPOINT_NAME = "checkpoint.json"
@@ -98,11 +99,8 @@ def build_checkpoint(
 
 def save_checkpoint(run_dir: str, payload: Dict[str, Any]) -> str:
     """Write ``checkpoint.json`` and a small ``RESUME.json`` pointer; return ckpt path."""
-    os.makedirs(run_dir, exist_ok=True)
     path = os.path.join(run_dir, _CHECKPOINT_NAME)
-    with open(path, "w", encoding="utf-8") as fh:
-        json.dump(payload, fh, indent=2, ensure_ascii=False)
-        fh.write("\n")
+    atomic_write_json(path, payload)
     resume = {
         "checkpoint": _CHECKPOINT_NAME,
         "status": payload.get("status"),
@@ -110,9 +108,7 @@ def save_checkpoint(run_dir: str, payload: Dict[str, Any]) -> str:
         "epoch": payload.get("epoch"),
         "updated_at": payload.get("updated_at") or _utc_now(),
     }
-    with open(os.path.join(run_dir, _RESUME_NAME), "w", encoding="utf-8") as fh:
-        json.dump(resume, fh, indent=2, ensure_ascii=False)
-        fh.write("\n")
+    atomic_write_json(os.path.join(run_dir, _RESUME_NAME), resume)
     return path
 
 

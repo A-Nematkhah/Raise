@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional, Sequence
 from raise_core.active_learning import acquire as acquire_mod
 from raise_core.active_learning import queue as queue_mod
 from raise_core.active_learning.query import score_queries
+from raise_core.domains import load_domain, make_validator_for_domain
 from raise_core.surrogate.features import extract_candidate_features
 from raise_core.surrogate.model import SurrogateModel
 
@@ -23,7 +24,7 @@ def _model_ready(surrogate_model_dir: str) -> bool:
     return os.path.isfile(os.path.join(surrogate_model_dir, "model.joblib"))
 
 
-def load_candidates_from_json(path: str) -> List[Any]:
+def load_candidates_from_json(path: str, *, validator: Any = None) -> List[Any]:
     from domains.crowdnav.reporting import load_candidate_dict
 
     with open(path, "r", encoding="utf-8") as fh:
@@ -39,7 +40,7 @@ def load_candidates_from_json(path: str) -> List[Any]:
     for row in rows:
         if not isinstance(row, dict):
             continue
-        cand = load_candidate_dict(row)
+        cand = load_candidate_dict(row, validator=validator)
         if cand.valid and cand.reward_fn is not None:
             cands.append(cand)
     return cands
@@ -129,16 +130,17 @@ def run_active_learning_step(
         return summary
 
     model = SurrogateModel.load(surrogate_model_dir)
+    domain_key = str(domain or "crowdnav").strip().lower()
+    pack = load_domain(domain_key)
 
     batch: List[Any] = list(candidates or [])
     if not batch and candidates_path:
-        batch = load_candidates_from_json(candidates_path)
+        batch = load_candidates_from_json(
+            candidates_path, validator=make_validator_for_domain(pack)
+        )
 
     score_fn = None
     if batch:
-        from raise_core.domains import load_domain
-
-        pack = load_domain("crowdnav")
         mode = "smoke" if use_stub else "dataset"
         try:
             score_fn, _ds = pack.make_score_fn(
@@ -195,6 +197,7 @@ def run_active_learning_step(
         "stage1_dataset_path": stage1_dataset_path,
         "seed": int(seed),
         "stage1_extra_dir": os.path.join(queue_root, "stage1_extra"),
+        "domain": domain_key,
     }
 
     executed = []
@@ -215,7 +218,7 @@ def run_active_learning_step(
             surrogate_dataset=surrogate_dataset,
             surrogate_model_dir=surrogate_model_dir,
             seed=int(seed),
-            domain=str(domain or "crowdnav"),
+            domain=domain_key,
         )
         did_refit = refit_info.get("status") == "ok"
         if did_refit:

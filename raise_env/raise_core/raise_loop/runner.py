@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional
@@ -26,7 +27,7 @@ from raise_core.raise_loop.logging_io import (
 from raise_core import console
 from raise_core.explore import RewardCandidate, StageIConfig, StageIEvolver
 from raise_core.llm import LLMClient, make_llm_client
-from domains.crowdnav.reporting import load_candidate_dict
+from domains.crowdnav.reporting import candidate_to_dict, load_candidate_dict
 from raise_core.surrogate.bootstrap import label_and_append_candidate
 from raise_core.surrogate.dataset_io import (
     existing_example_ids,
@@ -85,11 +86,80 @@ def _save_ckpt(output_dir: str, payload: Dict[str, Any]) -> None:
 
 
 def _load_ckpt(output_dir: str) -> Optional[Dict[str, Any]]:
+    corrupt: List[str] = []
     for path in _checkpoint_dirs(output_dir):
-        data = load_checkpoint(path)
+        try:
+            data = load_checkpoint(path)
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            logger.warning("Unreadable closed-loop checkpoint in %s (%s)", path, exc)
+            corrupt.append(path)
+            continue
         if data:
             return data
+    if corrupt:
+        raise RuntimeError(
+            "closed-loop resume: every checkpoint copy is unreadable "
+            f"({corrupt}); refusing to silently restart from scratch"
+        )
     return None
+
+
+def _resume_known_ids(ckpt: Dict[str, Any], stage2_root: str) -> List[str]:
+    """Every candidate id an interrupted run may already have issued."""
+    ids: List[str] = []
+    for key in ("population", "ranked", "to_label"):
+        ids.extend(
+            str(row.get("candidate_id"))
+            for row in (ckpt.get(key) or [])
+            if isinstance(row, dict)
+        )
+    best = ckpt.get("global_best")
+    if isinstance(best, dict):
+        ids.append(str(best.get("candidate_id")))
+    for rec in ckpt.get("history") or []:
+        if not isinstance(rec, dict):
+            continue
+        for key in ("ranking", "labeled_ids", "evolve_ranking"):
+            ids.extend(str(x) for x in (rec.get(key) or []))
+    if os.path.isdir(stage2_root):
+        for name in os.listdir(stage2_root):
+            # Trainer folders are ``rXX_<candidate_id>``.
+            head, sep, tail = name.partition("_")
+            if sep and head.startswith("r") and head[1:].isdigit():
+                ids.append(tail)
+    return ids
+
+
+def _serialize_highway_elite(runner: Any) -> Optional[Dict[str, Any]]:
+    elite = getattr(runner, "_highway_pareto_elite", None)
+    best = getattr(runner, "_highway_best_ever_cand", None)
+    if elite is None and best is None:
+        return None
+    fit = getattr(runner, "_highway_best_ever_fitness", None)
+    return {
+        "pareto_elite": candidate_to_dict(elite) if elite is not None else None,
+        "best_ever_cand": candidate_to_dict(best) if best is not None else None,
+        "best_ever_fitness": (
+            float(fit) if fit is not None and math.isfinite(float(fit)) else None
+        ),
+    }
+
+
+def _restore_highway_elite(
+    runner: Any, saved: Optional[Dict[str, Any]], *, validator: Any
+) -> None:
+    if not isinstance(saved, dict):
+        return
+    if isinstance(saved.get("pareto_elite"), dict):
+        runner._highway_pareto_elite = load_candidate_dict(
+            dict(saved["pareto_elite"]), validator=validator
+        )
+    if isinstance(saved.get("best_ever_cand"), dict):
+        runner._highway_best_ever_cand = load_candidate_dict(
+            dict(saved["best_ever_cand"]), validator=validator
+        )
+    if saved.get("best_ever_fitness") is not None:
+        runner._highway_best_ever_fitness = float(saved["best_ever_fitness"])
 
 
 def _refit_surrogate(
@@ -346,6 +416,10 @@ class ClosedLoopRunner:
                 "al_root": cfg.al_root,
                 "generations": generations,
             }
+            run_state: Dict[str, Any] = {"id_counter": evolver.id_counter}
+            highway_elite = _serialize_highway_elite(self)
+            if highway_elite is not None:
+                run_state["highway_elite"] = highway_elite
             payload = build_checkpoint(
                 status=status,
                 phase=phase,
@@ -361,7 +435,7 @@ class ClosedLoopRunner:
                 n_labeled=n_labeled,
                 history=history,
                 config=cfg_dict,
-                extra={**paths, **(extra or {})},
+                extra={**paths, **run_state, **(extra or {})},
             )
             # Mirror paths at top level so resume scripts can read them directly.
             payload.update(paths)
@@ -379,6 +453,14 @@ class ClosedLoopRunner:
                 )
             population = deserialize_population(
                 ckpt.get("population"), validator=self.validator
+            )
+            ckpt_extra = ckpt.get("extra") or {}
+            evolver.restore_id_counter(
+                ckpt_extra.get("id_counter"),
+                existing_ids=_resume_known_ids(ckpt, stage2_cfg.output_root),
+            )
+            _restore_highway_elite(
+                self, ckpt_extra.get("highway_elite"), validator=self.validator
             )
             if str(ckpt.get("phase") or "") == "labeling" and start_epoch < generations:
                 resumed_to_label = deserialize_population(
@@ -761,7 +843,8 @@ class ClosedLoopRunner:
                 getattr(cfg, "evolve_rank", None),
                 domain=str(getattr(cfg, "domain", "crowdnav") or "crowdnav"),
             )
-            w = float(getattr(cfg, "evolve_rank_score1_weight", 0.4) or 0.4)
+            w_raw = getattr(cfg, "evolve_rank_score1_weight", None)
+            w = 0.4 if w_raw is None else float(w_raw)
 
             pareto_ref = None
             calib_mode = None

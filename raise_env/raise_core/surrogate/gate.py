@@ -18,6 +18,13 @@ from raise_core.surrogate.targets import quality_from_y_hat
 logger = logging.getLogger(__name__)
 
 
+def _score1_value(s1: Any) -> Optional[float]:
+    if s1 is None:
+        return None
+    raw = getattr(s1, "score", s1)
+    return float("nan") if raw is None else float(raw)
+
+
 def surrogate_model_ready(model_dir: Optional[str]) -> bool:
     if not model_dir or not str(model_dir).strip():
         return False
@@ -58,11 +65,7 @@ def predict_population(
                 "y_hat": dict(pred.y_hat),
                 "uncertainty": float(pred.uncertainty),
                 "quality": float(quality),
-                "score1": (
-                    None
-                    if s1 is None
-                    else float(getattr(s1, "score", s1) or float("nan"))
-                ),
+                "score1": _score1_value(s1),
                 "model_id": pred.model_id,
             }
         )

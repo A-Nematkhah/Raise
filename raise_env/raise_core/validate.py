@@ -748,6 +748,22 @@ class Stage3Runner:
             "save_interval_updates": int(getattr(cfg, "save_interval_updates", 50)),
         }
 
+    def _warn_config_drift(self, saved: Dict[str, Any]) -> None:
+        """Resume keeps going, but a changed budget/seed mixes incomparable rounds."""
+        current = self._config_snapshot()
+        drift = {
+            key: (saved[key], current[key])
+            for key in current
+            if key in saved and saved[key] != current[key]
+        }
+        if not drift:
+            return
+        detail = ", ".join(f"{k}: {old!r} -> {new!r}" for k, (old, new) in drift.items())
+        console.warn(
+            f"resuming with settings that differ from the checkpoint ({detail})",
+            stage="Stage III",
+        )
+
     def _persist(
         self,
         *,
@@ -1271,7 +1287,9 @@ class Stage3Runner:
             cached = store.load(key)
             if cached is not None:
                 payload = cached.get("payload") or {}
-                refined = load_candidate_dict(payload["candidate"])
+                refined = load_candidate_dict(
+                    payload["candidate"], validator=self.validator
+                )
                 md = payload.get("metrics") or {}
                 metrics = ProxyMetrics(
                     sr=float(md.get("SR", md.get("sr", 0.0))),
@@ -1471,6 +1489,8 @@ class Stage3Runner:
 
         if bool(getattr(self.config, "resume", True)):
             payload = load_checkpoint(self._ckpt_dir)
+            if payload:
+                self._warn_config_drift(payload.get("config") or {})
             if payload and str(payload.get("status", "")) != "done":
                 console.status(
                     f"resuming Stage III from {self._ckpt_dir} "

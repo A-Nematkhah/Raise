@@ -24,7 +24,7 @@ def _utc_now() -> str:
     )
 
 
-def _candidate_from_payload(payload: Dict[str, Any]):
+def _candidate_from_payload(payload: Dict[str, Any], *, validator: Any = None):
     from domains.crowdnav.reporting import load_candidate_dict
 
     code = payload.get("code")
@@ -39,12 +39,17 @@ def _candidate_from_payload(payload: Dict[str, Any]):
             "metadata": {
                 "behavior_fingerprint": payload.get("behavior_fingerprint") or [],
             },
-        }
+        },
+        validator=validator,
     )
 
 
 def _execute_stage2_label(item: QueryItem, *, config: Dict[str, Any]) -> Dict[str, Any]:
-    from raise_core.domains import load_domain, make_stage2_trainer_for_domain
+    from raise_core.domains import (
+        load_domain,
+        make_stage2_trainer_for_domain,
+        make_validator_for_domain,
+    )
     from raise_core.refine import Stage2Config
     from raise_core.surrogate.bootstrap import label_and_append_candidate
     from raise_core.surrogate.dataset_io import existing_example_ids
@@ -54,7 +59,7 @@ def _execute_stage2_label(item: QueryItem, *, config: Dict[str, Any]) -> Dict[st
     stage1_dataset = config.get("stage1_dataset_path") or "domains/crowdnav/data/stage1_dataset"
     score1_mode = "smoke" if use_stub else str(config.get("score1_mode") or "dataset")
 
-    pack = load_domain("crowdnav")
+    pack = load_domain(str(config.get("domain") or "crowdnav").strip().lower())
     score_fn, _ds = pack.make_score_fn(
         mode=score1_mode,
         dataset_path=None if score1_mode == "smoke" else stage1_dataset,
@@ -78,7 +83,9 @@ def _execute_stage2_label(item: QueryItem, *, config: Dict[str, Any]) -> Dict[st
         num_processes=1 if use_stub else None,
     )
 
-    candidate = _candidate_from_payload(item.payload)
+    candidate = _candidate_from_payload(
+        item.payload, validator=make_validator_for_domain(pack)
+    )
     if not candidate.valid or candidate.reward_fn is None:
         return {
             "status": "failed",
@@ -97,6 +104,9 @@ def _execute_stage2_label(item: QueryItem, *, config: Dict[str, Any]) -> Dict[st
         known_ids=known,
         label_rejected=bool(config.get("label_rejected", True)),
         use_stub=use_stub,
+        smoke_states=(
+            pack.smoke_states_fn() if pack.smoke_states_fn is not None else None
+        ),
     )
     result["kind"] = "stage2_label"
     return result

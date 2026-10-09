@@ -342,7 +342,9 @@ class RaisePipeline:
                 domain=str(pack.name),
             ),
             evolve_rank_score1_weight=float(
-                getattr(cfg, "closed_loop_evolve_rank_score1_weight", 0.4) or 0.4
+                0.4
+                if getattr(cfg, "closed_loop_evolve_rank_score1_weight", None) is None
+                else cfg.closed_loop_evolve_rank_score1_weight
             ),
             highway_n_envs=max(
                 1, int(getattr(cfg, "highway_n_envs", None) or 1)
@@ -459,6 +461,7 @@ class RaisePipeline:
                 validator=self.validator,
                 config=s2_cfg,
                 prompts=pack.prompts,
+                domain=str(pack.name),
             )
             stage2_pop = s2_runner.run(stage2_pop)
 
@@ -687,6 +690,7 @@ class RaisePipeline:
                         use_stub=bool(cfg.stage2_use_stub or cfg.fast),
                         seed=int(cfg.seed),
                         stage1_dataset_path=str(cfg.stage1_dataset_path),
+                        domain=str(pack.name),
                     )
                     write_json(
                         os.path.join(cfg.output_dir, "active_learning_step.json"),
@@ -749,6 +753,7 @@ class RaisePipeline:
                 validator=self.validator,
                 config=s2_cfg,
                 prompts=pack.prompts,
+                domain=str(pack.name),
             )
             if self.checkpoint_store is not None:
                 s2_runner.checkpoint_store = self.checkpoint_store

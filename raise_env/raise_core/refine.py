@@ -185,6 +185,31 @@ def _v2_candidate_id(candidate_id: str) -> str:
     return _next_revision_id(candidate_id, stage_tag="v2")
 
 
+_PARENT_TRAINING_KEYS = (
+    "last_metrics",
+    "checkpoint_path",
+    "trained_snapshot",
+    "trained_round",
+    "refine_kept_previous",
+    "refine_error",
+    "refine_skipped_elite",
+)
+
+
+def _untested_child_metadata(candidate: Any, metrics: "ProxyMetrics") -> Dict[str, Any]:
+    """Refined code is untrained: keep parent context but not its train results."""
+    parent_md = {
+        k: v
+        for k, v in (candidate.metadata or {}).items()
+        if k not in _PARENT_TRAINING_KEYS
+    }
+    return {
+        **parent_md,
+        "refine_kept_previous": False,
+        "parent_metrics": metrics.as_dict(),
+    }
+
+
 def _unique_trained_snapshot_id(candidate_id: str, *, round_index: int, snap_index: int) -> str:
     """Disambiguate trained snapshots that share a genome id across rounds."""
     return f"{candidate_id}__r{int(round_index)}_s{int(snap_index)}"
@@ -759,12 +784,14 @@ class Stage2Runner:
         validator: Optional[RewardValidator] = None,
         config: Optional[Stage2Config] = None,
         prompts: Any = None,
+        domain: str = "crowdnav",
     ) -> None:
         self.llm = llm
         self.trainer = trainer
         self.validator = validator or RewardValidator()
         self.config = config or Stage2Config()
         self._prompts = prompts
+        self.domain = str(domain or "crowdnav").strip().lower()
         self.history: List[Stage2RoundRecord] = []
         self.validation_failures: List[Dict[str, Any]] = []
         # Trained (pre-refine) snapshots; best_trained is best-ever by SR-CR-0.5TR.
@@ -939,6 +966,15 @@ class Stage2Runner:
                         "Repair succeeded for %s: validation passed",
                         candidate.candidate_id,
                     )
+                    if self.domain == "crowdnav":
+                        # CrowdNav baseline (frozen) keeps the legacy metadata.
+                        repaired_md = {
+                            **candidate.metadata,
+                            "refine_kept_previous": False,
+                            "last_metrics": metrics.as_dict(),
+                        }
+                    else:
+                        repaired_md = _untested_child_metadata(candidate, metrics)
                     return replace(
                         candidate,
                         candidate_id=_v2_candidate_id(candidate.candidate_id),
@@ -949,9 +985,7 @@ class Stage2Runner:
                         origin="refinement",
                         parent_ids=(candidate.candidate_id,),
                         metadata={
-                            **candidate.metadata,
-                            "refine_kept_previous": False,
-                            "last_metrics": metrics.as_dict(),
+                            **repaired_md,
                             "repair_attempted": True,
                             "repair_succeeded": True,
                             "parent_genome_key": genome_key(candidate.code),
@@ -996,21 +1030,6 @@ class Stage2Runner:
                 },
             )
 
-        # New code is untested — do not attach parent train metrics as its own.
-        parent_md = {
-            k: v
-            for k, v in (candidate.metadata or {}).items()
-            if k
-            not in (
-                "last_metrics",
-                "checkpoint_path",
-                "trained_snapshot",
-                "trained_round",
-                "refine_kept_previous",
-                "refine_error",
-                "refine_skipped_elite",
-            )
-        }
         return replace(
             candidate,
             candidate_id=_v2_candidate_id(candidate.candidate_id),
@@ -1021,9 +1040,7 @@ class Stage2Runner:
             origin="refinement",
             parent_ids=(candidate.candidate_id,),
             metadata={
-                **parent_md,
-                "refine_kept_previous": False,
-                "parent_metrics": metrics.as_dict(),
+                **_untested_child_metadata(candidate, metrics),
                 "parent_id": candidate.candidate_id,
                 "parent_genome_key": genome_key(candidate.code),
             },
@@ -1132,7 +1149,9 @@ class Stage2Runner:
             cached = store.load(key)
             if cached is not None:
                 payload = cached.get("payload") or {}
-                refined = load_candidate_dict(payload["candidate"])
+                refined = load_candidate_dict(
+                    payload["candidate"], validator=self.validator
+                )
                 md = payload.get("metrics") or {}
                 metrics = ProxyMetrics(
                     sr=float(md.get("SR", md.get("sr", 0.0))),

@@ -49,6 +49,7 @@ from domains.crowdnav.state import RewardFunction
 logger = logging.getLogger(__name__)
 
 _DIAGNOSIS_FENCE_RE = re.compile(r"```(?:python)?\s*\n", re.IGNORECASE)
+_CANDIDATE_SERIAL_RE = re.compile(r"^[A-Za-z]+_(\d+)")
 
 
 def extract_llm_diagnosis(raw: str, *, max_chars: int = 500) -> Optional[str]:
@@ -201,6 +202,29 @@ class StageIEvolver:
         cid = f"{prefix}_{self._counter:04d}"
         self._counter += 1
         return cid
+
+    @property
+    def id_counter(self) -> int:
+        return int(self._counter)
+
+    def restore_id_counter(
+        self,
+        saved: Optional[int] = None,
+        *,
+        existing_ids: Sequence[str] = (),
+    ) -> int:
+        """Advance the ID serial past ``saved`` and every ``<prefix>_<NNNN>`` id.
+
+        Resumed runs must not re-issue ids already present in the population,
+        surrogate dataset or ledgers (labels are deduplicated by id).
+        """
+        nxt = max(int(self._counter), int(saved or 0))
+        for cid in existing_ids:
+            match = _CANDIDATE_SERIAL_RE.match(str(cid))
+            if match:
+                nxt = max(nxt, int(match.group(1)) + 1)
+        self._counter = nxt
+        return nxt
 
     def _completion_to_code(self, raw: str) -> str:
         code = extract_python_code(raw)
