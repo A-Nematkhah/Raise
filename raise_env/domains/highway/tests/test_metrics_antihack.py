@@ -177,6 +177,43 @@ def test_scalar_penalizes_constant_cruise_degeneracy():
     assert highway_fitness(varied) > highway_fitness(flat)
 
 
+def test_crash_prone_slow_policy_scores_non_positive():
+    """Measured always-SLOWER holdout (seed 425): progress must not cushion crashes."""
+    slower = {
+        "SR": 0.55,
+        "CR": 0.45,
+        "TR": 0.0,
+        "mean_speed": 20.5,
+        "PL": 561.0,
+        "soft_success": 0.0,
+        "lane_change_rate": 0.0,
+        "speed_p10": 20.3,
+        "speed_p90": 20.7,
+        "progress_std": 120.0,
+        "outcome_unique": 2,
+    }
+    assert fitness_components(slower)["survival"] < 0.0
+    assert highway_fitness(slower) <= 0.0
+
+
+def test_crash_costs_more_than_survival_earns():
+    base = {
+        "TR": 0.0,
+        "mean_speed": 22.0,
+        "PL": 700.0,
+        "soft_success": 0.0,
+        "lane_change_rate": 0.05,
+        "speed_p10": 20.0,
+        "speed_p90": 24.0,
+        "progress_std": 40.0,
+        "outcome_unique": 2,
+    }
+    half = highway_fitness({**base, "SR": 0.5, "CR": 0.5})
+    all_crash = highway_fitness({**base, "SR": 0.0, "CR": 1.0, "PL": 300.0})
+    assert half < 0.0
+    assert all_crash < half
+
+
 def test_soft20_cruise_loses_to_traffic_matching_mid():
     """Run fingerprint: locked soft@20 must not beat a mid policy at ~24 m/s."""
     cruise20 = {

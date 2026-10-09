@@ -14,7 +14,8 @@ def test_timeout_documented_as_survival():
 def test_selection_objective_describes_holdout_fitness():
     text = prompts._SELECTION_OBJECTIVE
     assert "holdout fitness" in text and "higher is better" in text
-    assert "survival rate minus collision rate" in text
+    assert "survival rate minus twice the collision rate" in text
+    assert "proportion to positive survival" in text
     assert "Pareto" not in text
 
 

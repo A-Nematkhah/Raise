@@ -116,9 +116,15 @@ when present):
 
 ```
 gate = sigmoid speed gate on speed_p10 (hard −penalty below the speed floor)
-F = gate · (SR − CR − 0.5·TR) + 0.35·tanh(progress/800) + 0.25·tanh(speed/v_target)
+survival = SR − 2·CR − TR
+quality  = 0.35·tanh(progress/800) + 0.25·tanh(speed/v_target)
+F = gate · survival + max(0, survival) · quality
   + 0.15·soft_success·gate − lag − degeneracy − low_speed penalties
 ```
+
+Progress and speed only count when survival is positive, so a policy that
+crashes in half its episodes cannot score positive on distance driven before
+the crash.
 
 The trainer stamps `fitness` on the candidate; the LLM sees the raw holdout
 metrics plus this fitness (`raise_loop/proxy_feedback.py`).

@@ -14,8 +14,10 @@ import math
 from typing import Any, Dict, Mapping, Optional
 
 from domains.highway.objective_constants import (
+    CRASH_WEIGHT,
     K_GATE,
     LAG_SPEED_MPS,
+    OFF_ROAD_WEIGHT,
     REF_PROGRESS_M,
     V_FLOOR,
     V_MIN,
@@ -146,6 +148,10 @@ def _low_speed_penalty(v_eff: float) -> float:
     return float(LOW_SPEED_WEIGHT * gap / V_TARGET)
 
 
+def _survival(sr: float, cr: float, tr: float) -> float:
+    return float(sr - CRASH_WEIGHT * cr - OFF_ROAD_WEIGHT * tr)
+
+
 def _lag_penalty(sr: float, mean_speed: float) -> float:
     if sr >= 0.5 and mean_speed < LAG_SPEED_MPS:
         return 0.40 * (LAG_SPEED_MPS - mean_speed) / LAG_SPEED_MPS
@@ -162,11 +168,16 @@ def highway_fitness(metrics: Optional[Mapping[str, Any]]) -> float:
         center = (v_min + v_target) / 2
         gate = sigmoid(k · (v_eff − center) / (v_target − v_min))
 
-        F = gate · (SR − CR − 0.5·TR)
-          + 0.35 · tanh(progress / 800)
-          + 0.25 · tanh(mean_speed / v_target)
+        survival = SR − 2·CR − TR
+        quality  = 0.35 · tanh(progress / 800) + 0.25 · tanh(mean_speed / v_target)
+
+        F = gate · survival
+          + max(0, survival) · quality
           + 0.15 · soft_success · gate
           − lag_penalty − degeneracy_penalty − low_speed_penalty
+
+    Progress and speed only count in proportion to positive survival, so a
+    crash-prone policy cannot bank distance driven before crashing.
     """
     if not metrics:
         return float("-inf")
@@ -186,9 +197,10 @@ def highway_fitness(metrics: Optional[Mapping[str, Any]]) -> float:
     soft = _finite(src.get("soft_success", 0.0))
 
     gate = _speed_gate(v_eff)
-    survival = sr - cr - 0.5 * tr
-    progress_term = 0.35 * _tanh01(pl / _REF_PROGRESS_M)
-    speed_term = 0.25 * _tanh01(speed / _REF_SPEED_MPS)
+    survival = _survival(sr, cr, tr)
+    quality = 0.35 * _tanh01(pl / _REF_PROGRESS_M) + 0.25 * _tanh01(
+        speed / _REF_SPEED_MPS
+    )
     soft_term = 0.15 * soft * gate
 
     lag = _lag_penalty(sr, speed)
@@ -197,8 +209,7 @@ def highway_fitness(metrics: Optional[Mapping[str, Any]]) -> float:
 
     return float(
         gate * survival
-        + progress_term
-        + speed_term
+        + max(0.0, survival) * quality
         + soft_term
         - lag
         - degen
@@ -225,10 +236,16 @@ def fitness_components(metrics: Optional[Mapping[str, Any]]) -> Dict[str, float]
             "low_speed_penalty": 0.0,
         }
     gate = _speed_gate(v_eff)
+    survival = _survival(
+        _finite(src.get("SR", src.get("sr", 0.0))),
+        _finite(src.get("CR", src.get("cr", 0.0))),
+        _finite(src.get("TR", src.get("tr", 0.0))),
+    )
     return {
         "fitness": float(highway_fitness(metrics)),
         "v_eff": float(v_eff),
         "gate": float(gate),
+        "survival": float(survival),
         "v_min": float(V_MIN),
         "v_floor": float(V_FLOOR),
         "v_target": float(V_TARGET),

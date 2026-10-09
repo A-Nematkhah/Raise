@@ -30,11 +30,13 @@ _SELECTION_OBJECTIVE = (
     "Your reward function is judged by training a PPO policy and evaluating it "
     "on held-out rollouts. Candidates are ranked by one holdout fitness "
     "score (higher is better) that combines survival (survival rate minus "
-    "collision rate minus half the off-road rate, scaled by a speed gate that "
-    "grows as the policy drives closer to free-flowing traffic speed), "
-    "forward progress and mean speed, minus penalties for lagging, degenerate "
-    "or very slow driving. Pure low-speed lane-keeping is therefore not "
-    "preferred, and crashing at high speed is not either. Reason about these "
+    "twice the collision rate minus the off-road rate, scaled by a speed gate "
+    "that grows as the policy drives closer to free-flowing traffic speed) "
+    "with forward progress and mean speed, which only count in proportion to "
+    "positive survival, minus penalties for lagging, degenerate or very slow "
+    "driving. A collision costs more than a survived episode earns, so "
+    "progress made before crashing earns nothing. Pure low-speed "
+    "lane-keeping is not preferred either. Reason about these "
     "trade-offs directly from the evidence given to you."
 )
 
