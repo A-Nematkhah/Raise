@@ -129,3 +129,11 @@ class SandboxConfig:
     # expressions and bare expressions may only be docstrings: no calls,
     # lambdas or comprehensions run at import time.
     restrict_top_level: bool = False
+    # Wall-clock budget for compute_reward at train/score time. Stage II labels
+    # in threads, so single calls include GIL waits: the per-call cap is loose
+    # and the rolling mean catches steadily slow (data-dependent) rewards.
+    max_call_seconds: float = 1.0
+    max_mean_call_seconds: float = 0.02
+    mean_call_window: int = 100
+    # Smoke states run alone in a child process, so a tighter cap is safe.
+    smoke_max_call_seconds: float = 0.1

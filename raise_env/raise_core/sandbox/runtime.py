@@ -15,7 +15,9 @@ from __future__ import annotations
 import ast
 import math
 import multiprocessing as mp
+import time
 from abc import ABC, abstractmethod
+from collections import deque
 from typing import Any, Callable, Dict, Optional, Sequence, Tuple
 
 from raise_core.sandbox.config import SandboxConfig
@@ -265,6 +267,7 @@ def _smoke_worker(
         compute_fn = compile_compute_reward(source_code, config)
         memory: Dict[str, Any] = {}
         for state in states:
+            started = time.perf_counter()
             try:
                 value = compute_fn(state, memory)
             except RewardSandboxError:
@@ -273,6 +276,13 @@ def _smoke_worker(
                 raise RewardSandboxError(
                     f"runtime error during smoke test: {type(exc).__name__}: {exc}"
                 ) from exc
+            elapsed = time.perf_counter() - started
+            if elapsed > config.smoke_max_call_seconds:
+                raise RewardSandboxError(
+                    f"reward too slow: one compute_reward call took {elapsed:.3f}s "
+                    f"(limit {config.smoke_max_call_seconds}s per step); "
+                    "avoid loops whose length grows with the state"
+                )
             unpack_reward_return(value, allow_components=bool(allow_components))
         queue.put(("ok", None))
     except BaseException as exc:  # noqa: BLE001
@@ -384,6 +394,32 @@ class SandboxedReward(RewardFunction):
         self._allow_components = bool(allow_components)
         self._memory: Dict[str, Any] = {}
         self._last_components: Dict[str, float] = {}
+        self._init_call_timing()
+
+    def _init_call_timing(self) -> None:
+        self._recent_call_seconds: deque = deque(maxlen=int(self._config.mean_call_window))
+        self._recent_call_total = 0.0
+
+    def _check_call_time(self, elapsed: float) -> None:
+        cfg = self._config
+        if elapsed > cfg.max_call_seconds:
+            raise RewardSandboxError(
+                f"reward too slow: one compute() call took {elapsed:.3f}s "
+                f"(limit {cfg.max_call_seconds}s)"
+            )
+        window = self._recent_call_seconds
+        if len(window) == window.maxlen:
+            self._recent_call_total -= window[0]
+        window.append(elapsed)
+        self._recent_call_total += elapsed
+        if len(window) == window.maxlen:
+            mean = self._recent_call_total / len(window)
+            if mean > cfg.max_mean_call_seconds:
+                raise RewardSandboxError(
+                    f"reward too slow: mean compute() time {mean * 1000:.1f}ms over "
+                    f"the last {len(window)} calls (limit "
+                    f"{cfg.max_mean_call_seconds * 1000:.1f}ms)"
+                )
 
     def reset(self) -> None:
         self._memory.clear()
@@ -394,6 +430,7 @@ class SandboxedReward(RewardFunction):
         return dict(self._last_components)
 
     def compute(self, state: Any) -> float:
+        started = time.perf_counter()
         try:
             value = self._compute_fn(state, self._memory)
         except RewardSandboxError:
@@ -402,6 +439,7 @@ class SandboxedReward(RewardFunction):
             raise RewardSandboxError(
                 f"runtime error in sandboxed compute(): {type(exc).__name__}: {exc}"
             ) from exc
+        self._check_call_time(time.perf_counter() - started)
         total, comps = unpack_reward_return(
             value, allow_components=self._allow_components
         )
@@ -427,4 +465,5 @@ class SandboxedReward(RewardFunction):
         self._allow_components = bool(state.get("allow_components", False))
         self._memory = {}
         self._last_components = {}
+        self._init_call_timing()
         self._compute_fn = compile_compute_reward(self._source_code, self._config)
