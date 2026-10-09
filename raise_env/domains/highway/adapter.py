@@ -571,7 +571,7 @@ class HighwayPPOTrainer:
             holdout_env_config,
         )
 
-        eval_deterministic = bool(getattr(config, "highway_eval_deterministic", True))
+        eval_deterministic = bool(getattr(config, "highway_eval_deterministic", False))
         eval_seed_raw = getattr(config, "highway_eval_seed_base", None)
         eval_seed = seed if eval_seed_raw is None else int(eval_seed_raw)
         train_dict: Dict[str, float] = {}
