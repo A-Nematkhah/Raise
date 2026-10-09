@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 from types import SimpleNamespace
 
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv
 
+from domains.highway import adapter as adapter_mod
 from domains.highway.adapter import (
     _highway_eval_mode,
     _highway_n_envs,
@@ -43,6 +45,32 @@ def test_warm_start_none_falls_back_to_env(monkeypatch):
     assert _highway_warm_start_enabled(SimpleNamespace(highway_warm_start=None)) is False
     monkeypatch.setenv("RAISE_HIGHWAY_WARM_START", "1")
     assert _highway_warm_start_enabled(SimpleNamespace(highway_warm_start=None)) is True
+
+
+class _ListHandler(logging.Handler):
+    def __init__(self) -> None:
+        super().__init__(level=logging.INFO)
+        self.records: list[logging.LogRecord] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.records.append(record)
+
+
+def test_cuda_fallback_logged_once(monkeypatch):
+    monkeypatch.setattr(adapter_mod, "_cuda_fallback_logged", False)
+    log = adapter_mod.logger
+    handler = _ListHandler()
+    old_level = log.level
+    log.addHandler(handler)
+    log.setLevel(logging.INFO)
+    try:
+        adapter_mod._log_cuda_fallback_once("cuda")
+        adapter_mod._log_cuda_fallback_once("cuda")
+    finally:
+        log.removeHandler(handler)
+        log.setLevel(old_level)
+    hits = [r for r in handler.records if "RAISE_HIGHWAY_FORCE_CUDA" in r.getMessage()]
+    assert len(hits) == 1
 
 
 def test_stage2_label_defaults_short_rollout_stochastic_eval():
