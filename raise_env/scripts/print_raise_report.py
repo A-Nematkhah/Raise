@@ -2,10 +2,7 @@
 """Print a readable closed-loop REPORT for an existing run directory.
 
 Usage (from raise_env/):
-  python scripts/print_raise_report.py results/raise_12h_YYYYMMDD_HHMMSS
-
-Highway reports include Pareto front0 ids when epochs recorded ``pareto``
-(see raise_env/docs/SELECTION.md for deliberate final pick).
+  python scripts/print_raise_report.py results/raise_YYYYMMDD_HHMMSS
 """
 
 from __future__ import annotations
@@ -14,12 +11,15 @@ import os as _os, sys as _sys
 _ROOT = _os.path.abspath(_os.path.join(_os.path.dirname(__file__), ".."))
 if _ROOT not in _sys.path:
     _sys.path.insert(0, _ROOT)
-import raise_paths  # noqa: E402,F401 — arms domains/crowdnav/runtime on sys.path
-import argparse
-import os
-import sys
+import argparse  # noqa: E402
+import os  # noqa: E402
+import sys  # noqa: E402
 
-from raise_core.console import ensure_utf8_stdio
+from raise_core.console import ensure_utf8_stdio  # noqa: E402
+from raise_core.raise_loop.report import (  # noqa: E402
+    build_closed_loop_report,
+    write_closed_loop_report,
+)
 
 
 def main() -> int:
@@ -30,14 +30,6 @@ def main() -> int:
         help="Run output dir containing closed_loop/epochs.jsonl",
     )
     args = parser.parse_args()
-    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    if root not in sys.path:
-        sys.path.insert(0, root)
-
-    from raise_core.raise_loop.report import (
-        build_closed_loop_report,
-        write_closed_loop_report,
-    )
 
     out = args.output_dir
     if not os.path.isdir(out):

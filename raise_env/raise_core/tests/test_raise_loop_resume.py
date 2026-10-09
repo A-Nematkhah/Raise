@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import os
 
-import pytest
-
+from domains.highway.reward_checks import make_highway_validator
+from raise_core.explore import RewardCandidate
 from raise_core.raise_loop.checkpoint import (
     build_checkpoint,
     deserialize_population,
@@ -14,14 +14,12 @@ from raise_core.raise_loop.checkpoint import (
 )
 from raise_core.raise_loop.config import ClosedLoopConfig
 from raise_core.raise_loop.runner import ClosedLoopRunner
-from raise_core.explore import RewardCandidate
-from domains.crowdnav.prompts import D5_SEED_FUNCTION
-from raise_core.sandbox.validator import RewardValidator
+from raise_core.refine import StubPolicyTrainer
 
 
-def _cand(cid: str, pot: float) -> RewardCandidate:
-    code = D5_SEED_FUNCTION.replace("pot_factor = 2.0", f"pot_factor = {pot}")
-    fn = RewardValidator().validate_code(code)
+def _cand(cid: str, k: float, **md) -> RewardCandidate:
+    code = f"def compute_reward(state, memory):\n    return float(state.progress) * {k}\n"
+    fn = make_highway_validator().validate_code(code)
     return RewardCandidate(
         candidate_id=cid,
         code=code,
@@ -29,7 +27,32 @@ def _cand(cid: str, pot: float) -> RewardCandidate:
         valid=True,
         origin="test",
         score=0.5,
+        metadata=dict(md),
     )
+
+
+class _RecordingTrainer(StubPolicyTrainer):
+    def __init__(self) -> None:
+        self.trained: list[str] = []
+
+    def train_and_eval(self, candidate, *, round_index, config):
+        self.trained.append(str(candidate.candidate_id))
+        return super().train_and_eval(candidate, round_index=round_index, config=config)
+
+
+def _cfg(out: str, **kw) -> ClosedLoopConfig:
+    base = dict(
+        population_size=2,
+        generations=2,
+        stage2_train_steps=8,
+        use_stub=True,
+        llm_provider="seed",
+        output_dir=out,
+        resume=True,
+        device="cpu",
+    )
+    base.update(kw)
+    return ClosedLoopConfig(**base)
 
 
 def test_checkpoint_roundtrip(tmp_path):
@@ -41,13 +64,10 @@ def test_checkpoint_roundtrip(tmp_path):
         epoch=1,
         next_epoch=1,
         population=pop,
-        ranked=pop,
         to_label=pop[:1],
         labeled_ids_this_epoch=["a"],
         global_best=pop[0],
         reflection="hi",
-        labels_since_refit=2,
-        n_labeled=5,
         history=[{"epoch": 0}],
         config={"generations": 2},
     )
@@ -58,64 +78,34 @@ def test_checkpoint_roundtrip(tmp_path):
     assert loaded is not None
     assert loaded["phase"] == "labeling"
     assert loaded["labeled_ids_this_epoch"] == ["a"]
-    restored = deserialize_population(loaded["population"])
+    restored = deserialize_population(loaded["population"], validator=make_highway_validator())
     assert len(restored) == 2
     assert restored[0].candidate_id == "a"
-    assert "pot_factor" in restored[0].code
+    assert restored[0].reward_fn is not None
+    assert "* 1.1" in restored[0].code
 
 
 def test_closed_loop_resume_skips_finished_epochs(tmp_path):
-    pytest.importorskip("sklearn")
     out = str(tmp_path / "run")
-    data = str(tmp_path / "surr_data")
-    model = str(tmp_path / "surr_model")
-    os.makedirs(data, exist_ok=True)
-    os.makedirs(model, exist_ok=True)
-
-    cfg = ClosedLoopConfig(
-        population_size=2,
-        generations=2,
-        min_labels_for_gate=4,
-        refit_every_new_labels=2,
-        stage2_train_steps=8,
-        k2_unit="env_steps",
-        al_enabled=False,
-        use_stub=True,
-        llm_provider="seed",
-        output_dir=out,
-        surrogate_dataset=data,
-        surrogate_model_dir=model,
-        isolate_run_artifacts=False,
-        resume=True,
-        device="cpu",
-        num_processes=1,
-        n_crossover=1,
-        n_mutation=0,
-        n_random=1,
-    )
-
-    r1 = ClosedLoopRunner(cfg).run()
+    r1 = ClosedLoopRunner(_cfg(out)).run()
     assert r1.n_labeled_total >= 1
-    # generations=G → G scored epochs (Gen0 is epoch 0), same as test_raise_loop.py.
     assert len(r1.history) == 2
     ckpt = load_checkpoint(out)
     assert ckpt is not None
     assert ckpt["status"] == "completed"
 
-    r2 = ClosedLoopRunner(cfg).run()
+    trainer = _RecordingTrainer()
+    r2 = ClosedLoopRunner(_cfg(out), trainer=trainer).run()
     assert r2.resumed is True
+    assert trainer.trained == []
     assert len(r2.population) == len(r1.population)
 
 
-def test_resume_mid_labeling_continues(tmp_path, monkeypatch):
-    pytest.importorskip("sklearn")
+def test_resume_mid_labeling_continues(tmp_path):
     out = str(tmp_path / "run")
-    data = str(tmp_path / "surr_data")
-    model = str(tmp_path / "surr_model")
-    os.makedirs(data, exist_ok=True)
-    os.makedirs(model, exist_ok=True)
-
-    pop = [_cand("c0", 1.0), _cand("c1", 1.5)]
+    done = _cand("c0", 1.0, fitness=0.3, last_metrics={"SR": 0.5, "CR": 0.1, "TR": 0.1})
+    todo = _cand("c1", 1.5)
+    pop = [done, todo]
     save_checkpoint(
         out,
         build_checkpoint(
@@ -124,105 +114,19 @@ def test_resume_mid_labeling_continues(tmp_path, monkeypatch):
             epoch=0,
             next_epoch=0,
             population=pop,
-            ranked=pop,
             to_label=pop,
-            labeled_ids_this_epoch=[pop[0].candidate_id],
-            global_best=pop[0],
-            reflection="",
-            labels_since_refit=0,
-            n_labeled=0,
+            labeled_ids_this_epoch=["c0"],
+            global_best=done,
             history=[],
             config={},
-            extra={
-                "surrogate_model_dir": model,
-                "surrogate_dataset": data,
-                "al_root": str(tmp_path / "al"),
-            },
         ),
     )
 
-    labeled: list[str] = []
+    trainer = _RecordingTrainer()
+    result = ClosedLoopRunner(_cfg(out, generations=1), trainer=trainer).run()
 
-    def _fake_label(cand, **kwargs):
-        labeled.append(cand.candidate_id)
-        eid = f"ex_{cand.candidate_id}"
-        known = kwargs.get("known_ids")
-        if known is not None:
-            known.add(eid)
-        from raise_core.surrogate.dataset_io import append_example
-
-        append_example(
-            kwargs["out_dir"],
-            features={"example_id": eid, "code_len": 1, "score1": 0.1},
-            labels={
-                "example_id": eid,
-                "SR": 0.5,
-                "CR": 0.1,
-                "TR": 0.1,
-                "ok": True,
-                "k2_unit": "env_steps",
-            },
-            example_id=eid,
-        )
-        return {"status": "ok", "example_id": eid}
-
-    monkeypatch.setattr(
-        "raise_core.raise_loop.runner.label_and_append_candidate",
-        _fake_label,
-    )
-
-    cfg = ClosedLoopConfig(
-        population_size=2,
-        generations=1,
-        min_labels_for_gate=99,
-        al_enabled=False,
-        use_stub=True,
-        llm_provider="seed",
-        output_dir=out,
-        surrogate_dataset=data,
-        surrogate_model_dir=model,
-        isolate_run_artifacts=False,
-        resume=True,
-        device="cpu",
-        num_processes=1,
-        n_crossover=1,
-        n_mutation=0,
-        n_random=1,
-        stage2_train_steps=8,
-        k2_unit="env_steps",
-    )
-    result = ClosedLoopRunner(cfg).run()
-
-    assert pop[0].candidate_id not in labeled
-    assert pop[1].candidate_id in labeled
+    assert trainer.trained == ["c1"]
     assert result.resumed is True
     ckpt = load_checkpoint(out)
     assert ckpt is not None
     assert ckpt["status"] == "completed"
-
-def test_highway_deserialize_uses_domain_validator():
-    """Resume must not re-validate highway code against CrowdNav RewardState."""
-    from domains.highway.prompts import D5_SEED_FUNCTION
-    from raise_core.domains import load_domain, make_validator_for_domain
-    from raise_core.raise_loop.checkpoint import deserialize_population
-    from domains.crowdnav.reporting import load_candidate_dict
-
-    pack = load_domain("highway")
-    v = make_validator_for_domain(pack)
-    rows = [
-        {
-            "candidate_id": "hw0",
-            "code": D5_SEED_FUNCTION,
-            "score": 0.5,
-            "valid": True,
-            "origin": "test",
-            "parent_ids": [],
-            "metadata": {},
-        }
-    ]
-    bad = load_candidate_dict(rows[0])
-    assert bad.reward_fn is None
-
-    good = deserialize_population(rows, validator=v)
-    assert len(good) == 1
-    assert good[0].reward_fn is not None

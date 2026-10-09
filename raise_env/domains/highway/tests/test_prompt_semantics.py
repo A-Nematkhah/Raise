@@ -1,4 +1,4 @@
-"""Prompt / fixture wording matches what the wrapper and Pareto code actually do."""
+"""Prompt / fixture wording matches what the wrapper and fitness code actually do."""
 
 from __future__ import annotations
 
@@ -9,14 +9,13 @@ from domains.highway.stage1 import smoke_trajectories
 
 def test_timeout_documented_as_survival():
     assert "survived" in prompts.D1_USER_PROMPT
-    assert "timeout = survived" in prompts.D3_SYSTEM_PROMPT
 
 
-def test_selection_objective_states_directions_and_noise_scope():
+def test_selection_objective_describes_holdout_fitness():
     text = prompts._SELECTION_OBJECTIVE
-    assert "lower is better" in text and "higher is better" in text
-    assert "more active lane use counts as better" in text
-    assert "standard errors" in text
+    assert "holdout fitness" in text and "higher is better" in text
+    assert "survival rate minus collision rate" in text
+    assert "Pareto" not in text
 
 
 def test_action_block_documents_action_type_per_mode():

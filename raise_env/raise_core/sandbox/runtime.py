@@ -1,7 +1,7 @@
 """
 Restricted execution of validated reward source.
 
-Ported from mobile_robot_env.rewards.sandbox.runtime; adapted to RewardState.
+Ported from mobile_robot_env.rewards.sandbox.runtime.
 
 Episode memory contract (option a — function-only stateful rewards):
   ``compute_reward(state, memory)`` where ``memory`` is a plain ``dict``
@@ -15,18 +15,27 @@ from __future__ import annotations
 import ast
 import math
 import multiprocessing as mp
+from abc import ABC, abstractmethod
 from typing import Any, Callable, Dict, Optional, Sequence, Tuple
 
 from raise_core.sandbox.config import SandboxConfig
 from raise_core.sandbox.errors import RewardSandboxError
-from domains.crowdnav.state import (
-    HumanObservable,
-    RewardFunction,
-    RewardState,
-    RobotRewardState,
-)
 
-ComputeFn = Callable[[RewardState, Dict[str, Any]], Any]
+ComputeFn = Callable[[Any, Dict[str, Any]], Any]
+
+
+class RewardFunction(ABC):
+    """Abstract interface every reward implementation must satisfy."""
+
+    @abstractmethod
+    def reset(self) -> None:
+        """Called at the start of each episode, before any compute() call."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def compute(self, state: Any) -> float:
+        """Compute the scalar reward for one step, given state."""
+        raise NotImplementedError
 
 # Cap on reward-component dict size (highway EUREKA-style returns).
 MAX_REWARD_COMPONENT_KEYS = 12
@@ -124,7 +133,7 @@ def unpack_reward_return(
     """
     Normalize a ``compute_reward`` return value to ``(total, components)``.
 
-    When ``allow_components`` is False (CrowdNav / default), only a bare
+    When ``allow_components`` is False, only a bare
     finite float is accepted. When True (highway), also accepts
     ``(float, dict[str, float])`` and shims a bare float to ``(float, {})``.
     """
@@ -248,7 +257,7 @@ def _smoke_worker(
     queue: Any,
     source_code: str,
     config: SandboxConfig,
-    states: Sequence[RewardState],
+    states: Sequence[Any],
     allow_components: bool = False,
 ) -> None:
     """Child-process entry: recompile source and smoke-test states."""
@@ -272,7 +281,7 @@ def _smoke_worker(
 
 def smoke_test_compute(
     compute_fn: Optional[ComputeFn],
-    states: Sequence[RewardState],
+    states: Sequence[Any],
     config: SandboxConfig,
     *,
     source_code: Optional[str] = None,
@@ -289,7 +298,7 @@ def smoke_test_compute(
     returns in addition to bare floats (compatibility shim).
     """
     if not states:
-        raise RewardSandboxError("smoke test requires at least one RewardState")
+        raise RewardSandboxError("smoke test requires at least one state")
 
     if source_code:
         if config.timeout_seconds <= 0.0:
@@ -349,75 +358,6 @@ def smoke_test_compute(
     run_with_timeout(_run, config.timeout_seconds)
 
 
-def default_smoke_states() -> tuple[RewardState, ...]:
-    """Small, deterministic RewardState snapshots for sandbox smoke tests."""
-
-    def make_state(
-        *,
-        dmin: float,
-        collision: bool = False,
-        reaching_goal: bool = False,
-        timeout: bool = False,
-        px: float = 0.0,
-        py: float = 0.0,
-        gx: float = 4.0,
-        gy: float = 0.0,
-        human_d: float = 2.0,
-    ) -> RewardState:
-        action = (0.5, 0.0)
-        humans = (
-            HumanObservable(px + human_d, py, 0.0, 0.0, 0.3),
-        )
-        return RewardState(
-            robot=RobotRewardState(
-                px=px,
-                py=py,
-                vx=0.5,
-                vy=0.0,
-                radius=0.3,
-                gx=gx,
-                gy=gy,
-                v_pref=1.0,
-            ),
-            humans=humans,
-            dmin=float(dmin),
-            discomfort_dist=0.25,
-            collision=collision,
-            reaching_goal=reaching_goal,
-            timeout=timeout,
-            action=action,
-            time_step=0.25,
-            global_time=1.0,
-            time_limit=50.0,
-        )
-
-    return (
-        make_state(dmin=1.0),
-        make_state(dmin=0.1),
-        make_state(dmin=0.5, reaching_goal=True, px=3.9, gx=4.0),
-        make_state(dmin=-0.05, collision=True, human_d=0.4),
-        make_state(dmin=2.0, timeout=True),
-        make_state(dmin=0.5, px=1.0, gx=5.0),
-        # Exercise common LLM failure modes before a candidate reaches rollout.
-        make_state(
-            dmin=0.0,
-            px=1.0e6,
-            py=-1.0e6,
-            gx=-1.0e6,
-            gy=1.0e6,
-            human_d=1.0e-6,
-        ),
-        make_state(
-            dmin=1.0e-8,
-            px=-1.0e6,
-            py=1.0e6,
-            gx=1.0e6,
-            gy=-1.0e6,
-            human_d=1.0e-6,
-        ),
-    )
-
-
 class SandboxedReward(RewardFunction):
     """
     RewardFunction wrapper around a sandbox-compiled compute_reward.
@@ -427,7 +367,7 @@ class SandboxedReward(RewardFunction):
     so the object can be cloudpickled into ShmemVecEnv workers (Windows spawn).
 
     ``allow_components`` must only be True for highway validators (domain pack
-    wiring). CrowdNav stays scalar-only: tuple returns are rejected.
+    wiring); otherwise tuple returns are rejected.
     """
 
     def __init__(
@@ -450,10 +390,10 @@ class SandboxedReward(RewardFunction):
         self._last_components = {}
 
     def last_reward_components(self) -> Dict[str, float]:
-        """Most recent step's component dict (empty if none / CrowdNav)."""
+        """Most recent step's component dict (empty if none)."""
         return dict(self._last_components)
 
-    def compute(self, state: RewardState) -> float:
+    def compute(self, state: Any) -> float:
         try:
             value = self._compute_fn(state, self._memory)
         except RewardSandboxError:

@@ -17,7 +17,6 @@ import os as _os, sys as _sys
 _ROOT = _os.path.abspath(_os.path.join(_os.path.dirname(__file__), ".."))
 if _ROOT not in _sys.path:
     _sys.path.insert(0, _ROOT)
-import raise_paths  # noqa: E402,F401 — arms domains/crowdnav/runtime on sys.path
 import argparse
 import json
 import os
@@ -257,54 +256,38 @@ def _read_epochs_jsonl(run_dir: str) -> List[Dict[str, Any]]:
     return rows
 
 
+def _float_or_nan(value: Any) -> float:
+    try:
+        return float(value) if value is not None else float("nan")
+    except (TypeError, ValueError):
+        return float("nan")
+
+
 def plot_closed_loop_epochs(run_dir: str, out_path: str) -> bool:
-    """Score1 / soft_success / labels across closed-loop epochs."""
+    """Best Score1 / best fitness / trained candidates across closed-loop epochs."""
     rows = _read_epochs_jsonl(run_dir)
     if not rows:
         return False
     import matplotlib.pyplot as plt
 
     epochs = [int(r.get("epoch", i)) for i, r in enumerate(rows)]
-    score1 = []
-    soft = []
-    scalar = []
-    labeled = []
-    for r in rows:
-        try:
-            score1.append(float(r.get("best_score1")) if r.get("best_score1") is not None else float("nan"))
-        except (TypeError, ValueError):
-            score1.append(float("nan"))
-        stats = r.get("stats") or {}
-        soft.append(
-            float(stats["soft_success_mean"])
-            if stats.get("soft_success_mean") is not None
-            else float("nan")
-        )
-        scalar.append(
-            float(stats["scalar_mean"])
-            if stats.get("scalar_mean") is not None
-            else float("nan")
-        )
-        try:
-            labeled.append(float(r.get("n_labeled_dataset") or 0))
-        except (TypeError, ValueError):
-            labeled.append(0.0)
+    score1 = [_float_or_nan(r.get("best_score1")) for r in rows]
+    fitness = [_float_or_nan(r.get("evolve_best_fitness")) for r in rows]
+    trained = [_float_or_nan(r.get("n_labeled_total") or 0) for r in rows]
 
     fig, axes = plt.subplots(3, 1, figsize=(8.0, 8.5), sharex=True)
     axes[0].plot(epochs, score1, "o-", color="#1f4e79", linewidth=1.8)
     axes[0].set_ylabel("Best Score1")
-    axes[0].set_title("Closed-loop — best Score1 / proxy quality / labels")
+    axes[0].set_title("Closed-loop — best Score1 / best fitness / trained candidates")
     axes[0].grid(True, alpha=0.3)
 
-    axes[1].plot(epochs, soft, "s-", color="#2ca02c", label="soft_success μ", linewidth=1.6)
-    axes[1].plot(epochs, scalar, "^-", color="#9467bd", label="scalar μ", linewidth=1.6)
-    axes[1].set_ylabel("Proxy stats")
-    axes[1].legend(loc="best", fontsize=8)
+    axes[1].plot(epochs, fitness, "^-", color="#9467bd", linewidth=1.6)
+    axes[1].set_ylabel("Best fitness")
     axes[1].grid(True, alpha=0.3)
 
-    axes[2].step(epochs, labeled, where="mid", color="#ff7f0e", linewidth=1.8)
+    axes[2].step(epochs, trained, where="mid", color="#ff7f0e", linewidth=1.8)
     axes[2].set_xlabel("Epoch")
-    axes[2].set_ylabel("Labeled n")
+    axes[2].set_ylabel("Trained (cumulative)")
     axes[2].grid(True, alpha=0.3)
 
     fig.tight_layout()
@@ -462,11 +445,6 @@ def run_plots(run_dir: str, output_dir: str, *, show: bool = False) -> List[str]
         path = os.path.join(output_dir, "stage3_metrics.png")
         if plot_stage_metrics(s3.get("history") or [], stage_label="Stage III", out_path=path):
             written.append(path)
-        h_sweep = s3.get("h_sweep") or []
-        if h_sweep:
-            path = os.path.join(output_dir, "stage3_h_sweep.png")
-            if _plot_h_sweep(h_sweep, path):
-                written.append(path)
 
     path = os.path.join(output_dir, "best_summary.png")
     if plot_stage_summary(run_dir, path):
@@ -494,43 +472,6 @@ def run_plots(run_dir: str, output_dir: str, *, show: bool = False) -> List[str]
             ax.set_title(os.path.basename(p))
         plt.show()
     return written
-
-
-def _plot_h_sweep(h_sweep: Sequence[Any], out_path: str) -> bool:
-    # Accept either list of {human_num, metrics} or nested by_human_count dicts.
-    points: List[Tuple[int, Dict[str, float]]] = []
-    for item in h_sweep:
-        if not isinstance(item, dict):
-            continue
-        if "by_human_count" in item:
-            for h, m in (item.get("by_human_count") or {}).items():
-                if isinstance(m, dict):
-                    points.append((int(h), {k: float(m.get(k, 0.0)) for k in ("SR", "CR", "TR")}))
-        elif "human_num" in item and "metrics" in item:
-            m = item["metrics"] or {}
-            points.append(
-                (int(item["human_num"]), {k: float(m.get(k, 0.0)) for k in ("SR", "CR", "TR")})
-            )
-    if not points:
-        return False
-    import matplotlib.pyplot as plt
-
-    points.sort(key=lambda t: t[0])
-    hs = [h for h, _ in points]
-    fig, ax = plt.subplots(figsize=(7.0, 4.2))
-    ax.plot(hs, [m["SR"] for _, m in points], "o-", label="SR", color="#2ca02c")
-    ax.plot(hs, [m["CR"] for _, m in points], "s-", label="CR", color="#d62728")
-    ax.plot(hs, [m["TR"] for _, m in points], "^-", label="TR", color="#ff7f0e")
-    ax.set_xlabel("Human count H")
-    ax.set_ylabel("Rate")
-    ax.set_ylim(0.0, 1.05)
-    ax.set_title("Stage III — Table 6 H-sweep")
-    ax.legend()
-    ax.grid(True, alpha=0.3)
-    fig.tight_layout()
-    fig.savefig(out_path, dpi=150)
-    plt.close(fig)
-    return True
 
 
 def main() -> int:

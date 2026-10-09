@@ -15,7 +15,7 @@ def _run_script(script_name: str, argv: list[str], monkeypatch) -> int:
     script = _SCRIPTS / script_name
     assert script.is_file(), script
     monkeypatch.chdir(_RAISE_ROOT)
-    # Prepend root so `import crowd_nav` works the same as CLI from raise_env/.
+    # Prepend root so imports work the same as CLI from raise_env/.
     root_str = str(_RAISE_ROOT)
     if root_str not in sys.path:
         sys.path.insert(0, root_str)
@@ -30,7 +30,7 @@ def _run_script(script_name: str, argv: list[str], monkeypatch) -> int:
 
 
 def test_run_raise_refuses_seed_without_fast(monkeypatch, capsys):
-    """Non-fast + default seed LLM must exit before GST/dataset/simulator."""
+    """Non-fast + default seed LLM must exit before dataset/PPO work."""
     out_dir = _RAISE_ROOT / "results" / "_seed_refuse_test"
     code = _run_script(
         "run_raise.py",
@@ -53,34 +53,3 @@ def test_run_raise_fast_still_allows_seed(monkeypatch):
     )
     assert code == 0
     assert (_RAISE_ROOT / "results" / "_seed_fast_ok" / "manifest.json").is_file()
-
-
-def test_paper_scale_refuses_seed_yaml_default(monkeypatch, capsys):
-    code = _run_script(
-        "run_raise.py",
-        ["--profile", "paper_scale", "--output-dir", "results/_paper_seed_refuse"],
-        monkeypatch,
-    )
-    assert code == 2
-    err = capsys.readouterr().err
-    assert "Refusing to run a non-fast pipeline" in err
-
-
-def test_paper_scale_dry_run_stubs_bypass_seed_gate(monkeypatch):
-    """--dry-run-stubs is the paper-scale equivalent of --fast for the seed gate."""
-    code = _run_script(
-        "run_raise.py",
-        [
-            "--profile",
-            "paper_scale",
-            "--dry-run-stubs",
-            "--seeds",
-            "425",
-            "--output-dir",
-            "results/_paper_seed_dry",
-            "--device",
-            "cpu",
-        ],
-        monkeypatch,
-    )
-    assert code == 0

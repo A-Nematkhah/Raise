@@ -1,21 +1,21 @@
 """
-Pluggable domain packs for reward search.
+Domain pack registry for reward search.
 
-Default domain is ``crowdnav`` (RAISE on CrowdNav++). Other
-environments are added as sibling packages under this package, each exposing
-``get_pack() -> DomainPack``.
+Each environment family is a package under ``domains/`` exposing
+``get_pack() -> DomainPack``. The only registered domain is ``highway``.
 """
 
 from __future__ import annotations
 
+import importlib
 from typing import Any, List, Optional
 
+from domains.highway.reward_checks import make_highway_validator
 from raise_core.domains.base import DomainPack, EnvAdapter
 
-DEFAULT_DOMAIN = "crowdnav"
+DEFAULT_DOMAIN = "highway"
 
 _REGISTRY = {
-    "crowdnav": "domains.crowdnav",
     "highway": "domains.highway",
 }
 
@@ -36,8 +36,6 @@ def load_domain(name: str = DEFAULT_DOMAIN, *, with_adapter: bool = True) -> Dom
         known = ", ".join(available_domains()) or "(none)"
         raise KeyError(f"Unknown domain {name!r}. Registered: {known}")
     module_path = _REGISTRY[key]
-    import importlib
-
     mod = importlib.import_module(module_path)
     get_pack = getattr(mod, "get_pack", None)
     if get_pack is None:
@@ -58,78 +56,40 @@ def make_score_fn_for_domain(
     mode: str = "dataset",
     dataset_path: Optional[str] = None,
 ) -> Any:
-    """
-    Resolve Stage I score_fn via the domain pack.
-
-    Uses ``pack.make_score_fn`` when set; CrowdNav returns ``(score_fn, dataset)``
-    — this helper returns only ``score_fn`` for the pipeline.
-    """
+    """Resolve the Stage I Score1 function (``pack.make_score_fn`` returns ``(fn, dataset)``)."""
     path = dataset_path
     if path is None or not str(path).strip():
         path = pack.stage1_dataset_default
-
-    if pack.make_score_fn is not None:
-        result = pack.make_score_fn(mode=mode, dataset_path=path)
-        if isinstance(result, tuple):
-            return result[0]
-        return result
-
-    if pack.name == "crowdnav":
-        from domains.crowdnav.explore_score import make_score_fn
-
-        score_fn, _dataset = make_score_fn(mode=mode, dataset_path=path)
-        return score_fn
-
-    raise NotImplementedError(
-        f"Domain {pack.name!r} has no Stage I make_score_fn yet"
-    )
+    if pack.make_score_fn is None:
+        raise NotImplementedError(f"Domain {pack.name!r} has no make_score_fn")
+    result = pack.make_score_fn(mode=mode, dataset_path=path)
+    if isinstance(result, tuple):
+        return result[0]
+    return result
 
 
 def make_stage2_trainer_for_domain(
     pack: DomainPack, *, use_stub: bool = False
 ) -> Any:
-    """Resolve Stage II PolicyTrainer via the domain pack."""
-    if pack.make_stage2_trainer is not None:
-        return pack.make_stage2_trainer(use_stub=use_stub)
-    if pack.name == "crowdnav":
-        from domains.crowdnav.adapter import make_stage2_trainer
-
-        return make_stage2_trainer(use_stub=use_stub)
-    raise NotImplementedError(
-        f"Domain {pack.name!r} has no Stage II trainer factory yet"
-    )
+    """Resolve the Stage II trainer via the domain pack."""
+    if pack.make_stage2_trainer is None:
+        raise NotImplementedError(f"Domain {pack.name!r} has no Stage II trainer")
+    return pack.make_stage2_trainer(use_stub=use_stub)
 
 
 def make_stage3_trainer_for_domain(
     pack: DomainPack, *, use_stub: bool = False
 ) -> Any:
-    """Resolve Stage III PolicyTrainer via the domain pack."""
-    if pack.make_stage3_trainer is not None:
-        return pack.make_stage3_trainer(use_stub=use_stub)
-    if pack.name == "crowdnav":
-        from domains.crowdnav.adapter import make_stage3_trainer
-
-        return make_stage3_trainer(use_stub=use_stub)
-    raise NotImplementedError(
-        f"Domain {pack.name!r} has no Stage III trainer factory yet"
-    )
+    """Resolve the Stage III trainer via the domain pack."""
+    if pack.make_stage3_trainer is None:
+        raise NotImplementedError(f"Domain {pack.name!r} has no Stage III trainer")
+    return pack.make_stage3_trainer(use_stub=use_stub)
 
 
 def make_validator_for_domain(pack: DomainPack) -> Any:
-    """Build a RewardValidator with domain smoke states / sandbox config."""
-    from raise_core.sandbox import RewardValidator
-
-    config = getattr(pack, "sandbox_config", None)
+    """Build the reward validator with the pack's smoke states / sandbox config."""
     smoke = pack.smoke_states_fn() if pack.smoke_states_fn is not None else None
-    if str(getattr(pack, "name", "")).lower() == "highway":
-        from domains.highway.reward_checks import make_highway_validator
-
-        return make_highway_validator(config=config, smoke_states=smoke)
-    if smoke is not None:
-        return RewardValidator(config=config, smoke_states=smoke)
-    if config is not None:
-        return RewardValidator(config=config)
-    return RewardValidator()
+    return make_highway_validator(config=pack.sandbox_config, smoke_states=smoke)
 
 
 def register_domain(name: str, module_path: str) -> None:

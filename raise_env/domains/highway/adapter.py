@@ -13,7 +13,6 @@ import numpy as np
 
 from domains.highway.action_config import (
     configure_action_mode_from_config,
-    is_continuous_mode,
     spaces_compatible,
 )
 from domains.highway.metrics import attach_fitness, format_highway_metrics_line
@@ -23,8 +22,8 @@ from domains.highway.state import lane_index_from_y
 from domains.highway.watchdog import StallWatchdog, stall_seconds_from_config
 from raise_core import console
 from raise_core.refine import ProxyMetrics, StubPolicyTrainer
-from raise_core.validate import HumanSweepReport, TrainEvalBundle
 from raise_core.validate import StubPolicyTrainer as Stage3StubTrainer
+from raise_core.validate import TrainEvalBundle
 
 logger = logging.getLogger(__name__)
 
@@ -82,17 +81,6 @@ class HighwayAdapter:
             )
         raise ValueError(f"Unknown stage for HighwayAdapter: {stage!r}")
 
-    def evaluate_at_human_counts(
-        self,
-        candidate: Any,
-        bundle: Any,
-        *,
-        config: Any,
-        human_counts: Optional[Any] = None,
-    ) -> Any:
-        """No-op H-sweep for highway (CrowdNav-only concept)."""
-        return HumanSweepReport(candidate_id=str(candidate.candidate_id), by_human_count={})
-
 
 class HighwayStage2Trainer:
     def __init__(self, adapter: HighwayAdapter) -> None:
@@ -119,18 +107,6 @@ class HighwayStage3Trainer:
             **kwargs,
         )
 
-    def evaluate_at_human_counts(
-        self,
-        candidate: Any,
-        bundle: Any,
-        *,
-        config: Any,
-        human_counts: Optional[Any] = None,
-    ) -> Any:
-        return self.adapter.evaluate_at_human_counts(
-            candidate, bundle, config=config, human_counts=human_counts
-        )
-
 
 def _eval_metrics(
     env: Any,
@@ -146,12 +122,12 @@ def _eval_metrics(
     """
     Evaluate a highway policy.
 
-    Survival metrics (SR/CR/TR) stay episode-level rates for surrogate labels.
+    Survival metrics (SR/CR/TR) are episode-level rates.
     Continuous driving quality is packed into NT/PL/ITR/SD plus extra keys on
     the returned dict via ``metrics_to_highway_dict`` (called by the trainer):
 
     - PL  = mean forward progress (m)
-    - ITR = mean ego speed (m/s)   [highway remap; CrowdNav uses intrusion %]
+    - ITR = mean ego speed (m/s)
     - SD  = mean nearest-vehicle gap proxy (m)
     - NT  = mean episode duration (s)
 
@@ -171,12 +147,9 @@ def _eval_metrics(
 
     # Soft-success: survive AND mean_speed ≥ V_TARGET AND progress ≥ threshold.
     #
-    # Legacy human-facing diagnostic only — same convention as highway_fitness:
-    # NOT a Pareto / selection / LLM objective. Threshold stays FIXED at
-    # V_TARGET (intentionally NOT auto-calibrated) so the logged indicator is
-    # a stable aspirational bar for humans reading reports; selection uses
-    # continuous mean_speed instead. Do not feed this into pareto_rank or
-    # any breeding decision.
+    # Human-facing diagnostic only: NOT a selection / LLM objective. Threshold
+    # stays FIXED at V_TARGET so the logged indicator is a stable aspirational
+    # bar for humans reading reports.
     min_speed_for_soft = float(
         V_TARGET if soft_speed_mps is None else soft_speed_mps
     )
@@ -583,38 +556,10 @@ class HighwayPPOTrainer:
 
         t0 = time.perf_counter()
         cb = _ppo_progress_callback(train_steps, desc=f"PPO {cid} ({stage_tag})")
-        from domains.highway.diagnostics_callback import (
-            GroundTruthCheckpointCallback,
-            RolloutDiagnosticsCallback,
-            combine_train_callbacks,
-        )
-
-        # Part 1: free PPO logger signals every rollout (always on; side-effect only).
-        rollout_diag = RolloutDiagnosticsCallback(
-            candidate_id=cid,
-            log_path=os.path.join(out_dir, "diagnostics_rollout.jsonl"),
-            continuous_actions=is_continuous_mode(),
-        )
-        diag_cbs = [
-            cb,
-            rollout_diag,
-        ]
-        # Part 2: cheap ground-truth evals — opt-in; never touches metadata/selection.
-        if bool(getattr(config, "highway_diagnostics_groundtruth", False)):
-            diag_cbs.append(
-                GroundTruthCheckpointCallback(
-                    candidate_id=cid,
-                    log_path=os.path.join(out_dir, "diagnostics_groundtruth.jsonl"),
-                    train_env_steps=train_steps,
-                    reward_fn=clone_reward_fn(candidate.reward_fn),
-                    seed=seed,
-                    n_episodes=4,
-                )
-            )
         model.learn(
             total_timesteps=max(1, train_steps),
             progress_bar=False,
-            callback=combine_train_callbacks(diag_cbs),
+            callback=cb,
             # reset_num_timesteps omitted on purpose: this PPO is always freshly
             # constructed (_last_obs is None), so SB3 resets the env regardless
             # of that flag — passing it would be misleading documentation.
@@ -626,14 +571,6 @@ class HighwayPPOTrainer:
             f"({sps:.0f} steps/s)",
             stage=stage_tag,
         )
-
-        # Attach EUREKA component trends from rollout-end snapshots only.
-        component_trends = rollout_diag.component_trend_summary()
-        if component_trends:
-            # Stash on candidate early so eval/metadata path can pick it up.
-            early_md = dict(candidate.metadata or {})
-            early_md["reward_component_trends"] = component_trends
-            candidate.metadata = early_md
 
         ckpt = os.path.join(out_dir, "model.zip")
         model.save(ckpt)
@@ -723,24 +660,6 @@ class HighwayPPOTrainer:
         fit = float(metrics_dict["fitness"])
         md["fitness"] = fit
         md["selection_scalar"] = fit  # alias
-        # Invalidate stale Pareto stamps from a prior epoch ranking pass.
-        for key in (
-            "pareto_rank",
-            "pareto_n",
-            "pareto_score",
-            "pareto_feasible",
-            "pareto_v_floor",
-            "pareto_cr_ceiling",
-            "pareto_tr_ceiling",
-            "pareto_calibration_source",
-            "pareto_require_survival",
-            "pareto_ambient_traffic",
-            "pareto_use_progress",
-            "pareto_objectives",
-            "pareto_front",
-            "pareto_front0",
-        ):
-            md.pop(key, None)
         md["checkpoint_path"] = ckpt
         md["train_steps"] = int(train_steps)
         md["train_seed"] = int(seed)
@@ -758,52 +677,6 @@ class HighwayPPOTrainer:
                 checkpoint_path=ckpt,
             )
         return holdout_metrics
-
-
-def evaluate_saved_policy(
-    checkpoint_path: str,
-    reward_fn: Any,
-    *,
-    config: Any,
-    n_episodes: int,
-    seed: int,
-    deterministic: bool = True,
-) -> Dict[str, Any]:
-    """Re-evaluate a saved SB3 ``model.zip`` on the holdout profile.
-
-    ``seed`` is the trainer's eval seed (``config.seed + round_index`` unless
-    ``highway_eval_seed_base`` was set), so the same value reproduces the
-    episodes scored at training time.
-    """
-    from stable_baselines3 import PPO
-
-    from domains.highway.env_wrapper import (
-        HOLDOUT_SEED_OFFSET,
-        RewardInjectedHighwayEnv,
-        holdout_env_config,
-    )
-
-    configure_action_mode_from_config(config)
-    model = PPO.load(checkpoint_path, device="cpu")
-    env = RewardInjectedHighwayEnv(
-        reward_fn, seed=int(seed) + 7, config=holdout_env_config()
-    )
-    if not deterministic:
-        model.set_random_seed(int(seed) + int(HOLDOUT_SEED_OFFSET))
-    try:
-        metrics = _eval_metrics(
-            env,
-            model,
-            n_episodes=int(n_episodes),
-            seed=int(seed),
-            seed_offset=HOLDOUT_SEED_OFFSET,
-            deterministic=deterministic,
-        )
-    finally:
-        env.close()
-    out = dict(metrics_to_highway_dict(metrics))
-    out["eval_profile"] = "holdout"
-    return attach_fitness(out)
 
 
 def make_stage2_trainer(*, use_stub: bool = False) -> HighwayStage2Trainer:

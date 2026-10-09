@@ -58,7 +58,7 @@ def label_candidates_parallel(
     ``label_one(cand, round_index) -> result dict`` must be thread-safe for the
     trainer/env stack. ``on_done`` runs in the main thread for append/checkpoint,
     always in ``to_label`` order (results that finish early are held back), so
-    ledgers and checkpoints do not depend on thread timing. A crash in one
+    epoch records and checkpoints do not depend on thread timing. A crash in one
     label is recorded as ``failed`` instead of aborting the epoch.
     Returns ``(n_ok, n_fail)``.
     """

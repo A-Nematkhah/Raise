@@ -58,7 +58,6 @@ class HighwayRewardValidator(RewardValidator):
 
     Enables ``allow_components=True`` so ``compute_reward`` may return
     ``(float, dict[str, float])`` (bare float still accepted via shim).
-    CrowdNav validators never set this flag.
     """
 
     def __init__(

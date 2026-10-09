@@ -38,7 +38,7 @@ class HighwayTrajectoryRecord:
     scenario_id: str
     seed: Optional[int]
     states: Tuple[HighwayRewardState, ...]
-    # success | collision | timeout. Label "timeout" is the CrowdNav-shared name
+    # success | collision | timeout. Label "timeout" is the shared rules name
     # for a non-collision failure (off-road); it is unrelated to state.timeout,
     # which is True only on the last frame of a survived (truncated) episode.
     label: str
@@ -276,8 +276,7 @@ def _rule_score_at_frame(traj: HighwayTrajectoryRecord, frame: int) -> float:
     """
     Highway analytical preference along a trajectory (higher = better).
 
-    Unlike CrowdNav's near-monotonic ``1e6 - t``, this rewards instantaneous
-    progress and cruise speed and collapses on collision / off-road frames.
+    Rewards instantaneous progress and cruise speed and collapses on collision / off-road frames.
     """
     idx = min(frame, len(traj.states) - 1)
     st = traj.states[idx]

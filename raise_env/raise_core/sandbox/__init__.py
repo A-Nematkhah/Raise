@@ -7,13 +7,13 @@ filter obviously bad LLM reward code before expensive RL.
 
 from raise_core.sandbox.config import SandboxConfig
 from raise_core.sandbox.errors import RewardSandboxError
-from raise_core.sandbox.runtime import SandboxedReward, default_smoke_states
+from raise_core.sandbox.runtime import RewardFunction, SandboxedReward
 from raise_core.sandbox.validator import RewardValidator
 
 __all__ = [
+    "RewardFunction",
     "RewardSandboxError",
     "RewardValidator",
     "SandboxConfig",
     "SandboxedReward",
-    "default_smoke_states",
 ]

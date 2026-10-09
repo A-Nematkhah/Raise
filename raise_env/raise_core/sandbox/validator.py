@@ -1,8 +1,8 @@
 """
 Reward validation pipeline.
 
-Ported from mobile_robot_env.rewards.sandbox.validator; CrowdNav operates on
-source strings (no RewardCandidate pool required for Phase 0/1 unit tests).
+Ported from mobile_robot_env.rewards.sandbox.validator; operates on source
+strings (no RewardCandidate pool required).
 """
 
 from __future__ import annotations
@@ -20,7 +20,6 @@ from raise_core.sandbox.errors import RewardSandboxError
 from raise_core.sandbox.runtime import (
     SandboxedReward,
     compile_compute_reward,
-    default_smoke_states,
     smoke_test_compute,
 )
 
@@ -31,16 +30,15 @@ class RewardValidator:
     def __init__(
         self,
         config: Optional[SandboxConfig] = None,
-        smoke_states: Optional[Sequence[object]] = None,
+        smoke_states: Sequence[object] = (),
         *,
         allow_components: bool = False,
     ) -> None:
         self.config = config if config is not None else SandboxConfig()
-        self.smoke_states = (
-            tuple(smoke_states) if smoke_states is not None else default_smoke_states()
-        )
-        # Highway-only: set True exclusively via HighwayRewardValidator.
-        # CrowdNav / default stay False (scalar returns only).
+        self.smoke_states = tuple(smoke_states)
+        if not self.smoke_states:
+            raise ValueError("RewardValidator needs domain smoke_states")
+        # Highway sets True via HighwayRewardValidator (tuple returns allowed).
         self.allow_components = bool(allow_components)
 
     def validate_code(self, code: str) -> SandboxedReward:

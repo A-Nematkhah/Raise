@@ -1,16 +1,8 @@
 """
-RAISE Stage I analytical rules (Figure 3).
+Stage I analytical rule helpers (episode categories + Spearman).
 
-Six preference categories (best → worst):
-  Success + short nav length
-  Success + long nav length
-  Other (timeout) + short dist-to-goal
-  Other + long dist-to-goal
-  Fail (collision) + short dist-to-goal
-  Fail + long dist-to-goal
-
-Rule ranks prioritize Success > Other > Fail; tie-breaks use nav length
-(for Success) or distance-to-goal at the ranked frame (for Other/Fail).
+Preference order: Success > Other (timeout) > Fail (collision); the domain
+pack supplies within-category tie-breaks.
 """
 
 from __future__ import annotations
@@ -22,9 +14,9 @@ import numpy as np
 
 
 class TrajectoryCategory(IntEnum):
-    """Final episode label mapped onto Figure 3 buckets."""
+    """Final episode label bucket."""
 
-    SUCCESS = 0  # ReachGoal
+    SUCCESS = 0
     OTHER = 1  # Timeout / incomplete
     FAIL = 2  # Collision
 
@@ -38,32 +30,6 @@ def label_to_category(label: str) -> TrajectoryCategory:
     if key in ("other", "timeout", "time_out", "truncation"):
         return TrajectoryCategory.OTHER
     raise ValueError(f"Unknown trajectory label: {label!r}")
-
-
-def dist_to_goal(px: float, py: float, gx: float, gy: float) -> float:
-    return float(((px - gx) ** 2 + (py - gy) ** 2) ** 0.5)
-
-
-def rule_preference_score(
-    category: TrajectoryCategory,
-    *,
-    nav_length: float,
-    dist_goal: float,
-) -> float:
-    """
-    Higher = preferred by analytical rules (aligned with cumulative reward rank).
-
-    Category dominates; within Success shorter nav_length is better; within
-    Other/Fail smaller dist_goal is better.
-    """
-    base = {
-        TrajectoryCategory.SUCCESS: 1e6,
-        TrajectoryCategory.OTHER: 0.0,
-        TrajectoryCategory.FAIL: -1e6,
-    }[category]
-    if category == TrajectoryCategory.SUCCESS:
-        return float(base - float(nav_length))
-    return float(base - float(dist_goal))
 
 
 def _rankdata(values: Sequence[float]) -> np.ndarray:

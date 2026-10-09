@@ -1,10 +1,10 @@
-"""Phase 3: highway AST field allowlist + repair / seed diversity."""
+"""Highway AST field allowlist + seed diversity."""
 
 from __future__ import annotations
 
 import pytest
 
-from domains.highway.prompts import D5_SEED_FUNCTION, format_d3_repair
+from domains.highway.prompts import D5_SEED_FUNCTION
 from domains.highway.sandbox_fields import (
     HIGHWAY_FORBIDDEN_HALLUCINATIONS,
     highway_sandbox_config,
@@ -71,30 +71,8 @@ def compute_reward(state, memory):
     assert v.validate_code(ok) is not None
 
 
-def test_crowdnav_validator_unchanged_no_allowlist():
-    pack = load_domain("crowdnav")
-    v = make_validator_for_domain(pack)
-    assert getattr(pack, "sandbox_config", None) is None
-    # CrowdNav still allows state.robot.* (no highway allowlist).
-    from domains.crowdnav.prompts import D5_SEED_FUNCTION as CN_SEED
-
-    assert v.validate_code(CN_SEED) is not None
-
-
-def test_repair_prompt_mentions_hallucinated_field():
-    text = format_d3_repair(
-        bad_code="def compute_reward(state, memory):\n    return state.lane_position\n",
-        validation_error="attribute 'lane_position' is not on the domain allowlist",
-    )
-    assert "lane_position" in text
-    assert "lane_index" in text
-    assert "MANDATORY FIELD FIXES" in text
-
-
 def test_seed_variant_structural_diversity():
-    from domains.highway.prompts import D5_SEED_FUNCTION as HW_SEED
-
-    client = SeedVariantLLMClient(base_code=HW_SEED)
+    client = SeedVariantLLMClient(base_code=D5_SEED_FUNCTION)
     pack = load_domain("highway")
     v = make_validator_for_domain(pack)
     codes = []

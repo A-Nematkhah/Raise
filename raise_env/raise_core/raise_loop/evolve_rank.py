@@ -1,35 +1,28 @@
 """Order genomes for closed-loop ``_next_generation``.
 
-CrowdNav / paper path keeps Score1-only ranking (``evolve_rank=score1``).
-
-Highway defaults to ``evolve_rank=pareto``: auto-calibrated feasibility +
-Pareto / crowding (see ``domains.highway.pareto_rank``). Unlabeled seats stay
-Score1-ordered after all labeled.
-
-``scalar`` (``highway_fitness``) remains available as an explicit diagnostic
-mode for human-facing logs — not the LLM-facing / breeding default.
+``scalar`` (default): trained candidates by ``highway_fitness`` of their Stage II
+evaluation; untrained seats follow, ordered by Score1.
+``score1``: analytical Score1 only. ``hybrid``: normalized blend of both.
 """
 
 from __future__ import annotations
 
-from typing import Any, List, Literal, Mapping, Optional, Sequence, Tuple
+from typing import List, Literal, Sequence, Tuple
 
 from raise_core.explore import RewardCandidate
 from raise_core.selection import candidate_fitness, candidate_nav_scalar
 
-EvolveRankMode = Literal["score1", "scalar", "hybrid", "pareto"]
+EvolveRankMode = Literal["score1", "scalar", "hybrid"]
 
-_VALID = frozenset({"score1", "scalar", "hybrid", "pareto"})
+_VALID = frozenset({"score1", "scalar", "hybrid"})
 
 
-def parse_evolve_rank(value: object, *, domain: str = "crowdnav") -> EvolveRankMode:
-    """Default: score1 for crowdnav; pareto for highway when unset/empty."""
+def parse_evolve_rank(value: object) -> EvolveRankMode:
+    """Default ``scalar`` when unset/empty/unknown."""
     raw = str(value or "").strip().lower()
     if raw in _VALID:
         return raw  # type: ignore[return-value]
-    if str(domain).strip().lower() == "highway":
-        return "pareto"
-    return "score1"
+    return "scalar"
 
 
 def _score1(c: RewardCandidate) -> float:
@@ -45,181 +38,23 @@ def _has_proxy(c: RewardCandidate) -> bool:
     md = c.metadata or {}
     if md.get("fitness") is not None or md.get("selection_scalar") is not None:
         return True
-    if md.get("pareto_rank") is not None:
-        return True
     metrics = md.get("last_metrics")
     return isinstance(metrics, dict) and bool(metrics)
-
-
-def _metrics_blob(c: RewardCandidate) -> Optional[dict]:
-    md = c.metadata or {}
-    m = md.get("last_metrics")
-    return dict(m) if isinstance(m, dict) else None
-
-
-def rank_population_pareto(
-    population: Sequence[RewardCandidate],
-    *,
-    ref: Any = None,
-    calibration_mode: Optional[str] = None,
-    objectives: Any = None,
-    ambient: Optional[Mapping[str, float]] = None,
-) -> List[RewardCandidate]:
-    """
-    Order labeled candidates via highway Pareto pipeline; unlabeled by Score1
-    after all labeled. Highway breeding default when ``evolve_rank=pareto``.
-
-    ``calibration_mode=None`` keeps the legacy population/reference behavior
-    for callers that do not pass a mode (final_select, older tests).
-    """
-    from domains.highway.pareto_rank import (
-        calibrate_from_population,
-        metrics_from_mapping,
-        parse_calibration_mode,
-        rank_population,
-        reference_for_mode,
-        stamp_pareto_ranks,
-    )
-
-    pop = list(population)
-    labeled = [c for c in pop if _has_proxy(c) and _metrics_blob(c)]
-    labeled_ids = {id(c) for c in labeled}
-    unlabeled = [c for c in pop if id(c) not in labeled_ids]
-
-    if not labeled:
-        return sorted(pop, key=_score1, reverse=True)
-
-    metrics_list = []
-    for c in labeled:
-        blob = _metrics_blob(c) or {}
-        metrics_list.append(metrics_from_mapping(str(c.candidate_id), blob))
-
-    mode_key = (
-        parse_calibration_mode(calibration_mode)
-        if calibration_mode is not None
-        else "population"
-    )
-    if mode_key == "population":
-        # ``ref`` may already be a SLOWER/FASTER gear-endpoint ReferenceStats.
-        ref = reference_for_mode(
-            "population", metrics_list, ambient=ambient, gear_ref=ref
-        )
-    elif ref is None:
-        ref = reference_for_mode(mode_key, metrics_list, ambient=ambient)
-    if ref is None:
-        ref = calibrate_from_population(metrics_list)
-
-    ordered_m = rank_population(metrics_list, ref=ref, objectives=objectives)
-    stamp_pareto_ranks(labeled, ordered_m, ref=ref, objectives=objectives)
-
-    by_id = {str(m.candidate_id): i for i, m in enumerate(ordered_m)}
-    ranked_l = sorted(
-        labeled,
-        key=lambda c: by_id.get(str(c.candidate_id), 10**9),
-    )
-    ranked_u = sorted(unlabeled, key=_score1, reverse=True)
-    return ranked_l + ranked_u
-
-
-ELITE_ARCHIVE_MODES = ("auto", "pareto", "fitness")
-
-
-def resolve_elite_archive_mode(value: object, calibration_mode: Optional[str]) -> str:
-    """``auto`` → legacy ``fitness`` for ``population`` calibration, else ``pareto``."""
-    key = str(value or "auto").strip().lower()
-    if key not in ELITE_ARCHIVE_MODES:
-        raise ValueError(
-            f"elite archive mode must be one of {ELITE_ARCHIVE_MODES}, got {value!r}"
-        )
-    if key != "auto":
-        return key
-    return "fitness" if str(calibration_mode or "") == "population" else "pareto"
-
-
-def select_pareto_elite(
-    population: Sequence[RewardCandidate],
-    previous_elite: Optional[RewardCandidate],
-    *,
-    calibration_mode: str,
-    objectives: Any = None,
-    ambient: Optional[Mapping[str, float]] = None,
-) -> Optional[RewardCandidate]:
-    """
-    Pareto rank-0 of ``population`` ∪ ``previous_elite`` (no metadata stamping).
-
-    The previous elite is listed first so it survives crowding-distance ties
-    and is only displaced when dominated or out-diversified.
-    """
-    from domains.highway.pareto_rank import (
-        metrics_from_mapping,
-        rank_population,
-        reference_for_mode,
-    )
-
-    pool: List[RewardCandidate] = []
-    seen: set = set()
-    for c in ([previous_elite] if previous_elite is not None else []) + list(
-        population
-    ):
-        cid = str(c.candidate_id)
-        if cid in seen or not _metrics_blob(c):
-            continue
-        seen.add(cid)
-        pool.append(c)
-    if not pool:
-        return previous_elite
-    metrics_list = [
-        metrics_from_mapping(str(c.candidate_id), _metrics_blob(c) or {})
-        for c in pool
-    ]
-    ref = reference_for_mode(calibration_mode, metrics_list, ambient=ambient)
-    ordered = rank_population(metrics_list, ref=ref, objectives=objectives)
-    best_id = str(ordered[0].candidate_id)
-    return next(c for c in pool if str(c.candidate_id) == best_id)
 
 
 def rank_population_for_evolution(
     population: Sequence[RewardCandidate],
     *,
-    mode: EvolveRankMode = "score1",
+    mode: EvolveRankMode = "scalar",
     hybrid_score1_weight: float = 0.4,
-    pareto_ref: Any = None,
-    calibration_mode: Optional[str] = None,
-    pareto_objectives: Any = None,
-    ambient: Optional[Mapping[str, float]] = None,
 ) -> List[RewardCandidate]:
-    """
-    Return a new list sorted best-first for crossover/mutation parents.
-
-    Modes
-    -----
-    score1
-        Analytical Score1 only (CrowdNav / Alg.1 default).
-    scalar
-        Labeled by legacy ``highway_fitness`` / nav scalar; unlabeled by Score1
-        after all labeled (diagnostic / human logs).
-    pareto
-        Highway default: auto-calibrated feasibility + Pareto / crowding.
-    hybrid
-        Among labeled: ``w·norm(Score1) + (1-w)·norm(fitness)``.
-    """
-    mode_key = str(mode).strip().lower()
-    if mode_key not in _VALID:
-        mode_key = "score1"
+    """Return a new list sorted best-first for crossover/mutation parents."""
+    mode_key = parse_evolve_rank(mode)
     pop = list(population)
     if not pop:
         return pop
     if mode_key == "score1":
         return sorted(pop, key=_score1, reverse=True)
-
-    if mode_key == "pareto":
-        return rank_population_pareto(
-            pop,
-            ref=pareto_ref,
-            calibration_mode=calibration_mode,
-            objectives=pareto_objectives,
-            ambient=ambient,
-        )
 
     labeled = [c for c in pop if _has_proxy(c)]
     unlabeled = [c for c in pop if not _has_proxy(c)]

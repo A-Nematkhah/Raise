@@ -1,16 +1,12 @@
 """
-RAISE Stage I evolutionary loop (analytical Score1).
+RAISE reward evolution operators (LLM proposal + Score1 scoring).
 
-Population N=8, G1=10 generations. Each generation:
-  1. Score candidates via ``score1_for_dataset`` (injected / Phase 2).
-  2. Rank by score.
-  3. Build next population: mutation (lower performers + weakness feedback),
-     crossover (top-2), occasional random restart (D.1) — **no** novelty
-     filter / archive (those are AMFRS-only).
-  4. Accumulate a short reflective note for the next generation's prompts.
+``StageIEvolver`` provides Gen0 proposal, Score1 scoring, and next-generation
+breeding (crossover of the top-2, mutation of lower performers with Stage II
+evaluation feedback, random restarts). The closed-loop runner drives it.
 
-Invalid sandbox candidates are replaced by regenerating (Gen0: up to N
-extra draws, same spirit as AMFRS "generate 8 extra to replace invalid").
+Invalid sandbox candidates are replaced by regenerating; after the retry
+budget the domain seed (or the parent source) fills the slot.
 """
 
 from __future__ import annotations
@@ -21,8 +17,9 @@ import os
 import re
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
+from domains.highway import prompts as highway_prompts
 from raise_core.llm import (
     EmptyCompletionError,
     LLMClient,
@@ -31,20 +28,11 @@ from raise_core.llm import (
     normalize_to_compute_reward,
     split_reward_function_sources,
 )
-from raise_core.scoring import Score1Result, format_score1_failure_hints
+from raise_core.scoring import Score1Result
 from raise_core import console
-from domains.crowdnav.prompts import (
-    D1_SYSTEM_PROMPT,
-    D5_SEED_FUNCTION,
-    format_d1_initial,
-    format_d1_initial_batch,
-    format_d2_crossover,
-    format_d2_mutation,
-)
 from raise_core.rejection_log import categorize_validation_error
 from raise_core.sandbox import RewardValidator
-from raise_core.sandbox.runtime import SandboxedReward
-from domains.crowdnav.state import RewardFunction
+from raise_core.sandbox.runtime import RewardFunction, SandboxedReward
 
 logger = logging.getLogger(__name__)
 
@@ -105,20 +93,8 @@ class StageIConfig:
     keep_runtime_elite: bool = False
 
 
-@dataclass
-class GenerationRecord:
-    generation: int
-    population: List[RewardCandidate]
-    ranking: List[str]
-    reflection: str
-    best_score: Optional[float]
-    best_id: Optional[str]
-
-
 class StageIEvolver:
-    """
-    Stage I: evolve N reward candidates for G1 generations under Score1.
-    """
+    """LLM reward proposal, Score1 scoring and next-generation breeding."""
 
     def __init__(
         self,
@@ -127,34 +103,29 @@ class StageIEvolver:
         score_fn: Optional[Callable[..., float]] = None,
         validator: Optional[RewardValidator] = None,
         config: Optional[StageIConfig] = None,
-        system_prompt: str = D1_SYSTEM_PROMPT,
         rejection_log_path: Optional[str] = None,
         prompts: Any = None,
     ) -> None:
         self.llm = llm
         if score_fn is None:
             raise ValueError(
-                "StageIEvolver requires score_fn=. Pass make_score1_fn(load_stage1_dataset(...)) "
-                "for paper Score1, or make_smoke_score_fn() only for --fast / --score1 smoke tests."
+                "StageIEvolver requires score_fn= (pack.make_score_fn(...))."
+            )
+        if validator is None:
+            raise ValueError(
+                "StageIEvolver requires validator= (make_validator_for_domain(pack))."
             )
         self.score_fn = score_fn
-        self.validator = validator or RewardValidator()
+        self.validator = validator
         self.config = config or StageIConfig()
-        # Domain pack prompt module (defaults: CrowdNav re-export).
-        self._prompts = prompts
-        self.system_prompt = (
-            system_prompt
-            if prompts is None
-            else str(getattr(prompts, "D1_SYSTEM_PROMPT", system_prompt))
-        )
+        self._prompts = prompts if prompts is not None else highway_prompts
+        self.system_prompt = str(self._prompts.D1_SYSTEM_PROMPT)
         self.rejection_log_path = rejection_log_path
         self._counter = 0
         self.reflection: str = ""
-        self.history: List[GenerationRecord] = []
         self.global_best: Optional[RewardCandidate] = None
-        # Highway evidence trends (numbers only; fed into reflection).
-        self._highway_best_speed_feasible_trend: List[float] = []
-        self._highway_n_feasible_trend: List[str] = []
+        # Best-fitness trend across generations (numbers only; fed into reflection).
+        self._best_fitness_trend: List[float] = []
 
         n = self.config.population_size
         if self.config.n_crossover + self.config.n_mutation + self.config.n_random != n:
@@ -165,36 +136,16 @@ class StageIEvolver:
             )
 
     def _format_d1_initial(self, **kwargs: Any) -> str:
-        fn = (
-            getattr(self._prompts, "format_d1_initial", None)
-            if self._prompts is not None
-            else None
-        )
-        return (fn or format_d1_initial)(**kwargs)
+        return self._prompts.format_d1_initial(**kwargs)
 
     def _format_d1_initial_batch(self, n: int, **kwargs: Any) -> str:
-        fn = (
-            getattr(self._prompts, "format_d1_initial_batch", None)
-            if self._prompts is not None
-            else None
-        )
-        return (fn or format_d1_initial_batch)(n, **kwargs)
+        return self._prompts.format_d1_initial_batch(n, **kwargs)
 
     def _format_d2_crossover(self, *args: Any, **kwargs: Any) -> str:
-        fn = (
-            getattr(self._prompts, "format_d2_crossover", None)
-            if self._prompts is not None
-            else None
-        )
-        return (fn or format_d2_crossover)(*args, **kwargs)
+        return self._prompts.format_d2_crossover(*args, **kwargs)
 
     def _format_d2_mutation(self, *args: Any, **kwargs: Any) -> str:
-        fn = (
-            getattr(self._prompts, "format_d2_mutation", None)
-            if self._prompts is not None
-            else None
-        )
-        return (fn or format_d2_mutation)(*args, **kwargs)
+        return self._prompts.format_d2_mutation(*args, **kwargs)
 
     # ------------------------------------------------------------------ helpers
 
@@ -216,7 +167,7 @@ class StageIEvolver:
         """Advance the ID serial past ``saved`` and every ``<prefix>_<NNNN>`` id.
 
         Resumed runs must not re-issue ids already present in the population,
-        surrogate dataset or ledgers (labels are deduplicated by id).
+        epoch history or Stage II training folders.
         """
         nxt = max(int(self._counter), int(saved or 0))
         for cid in existing_ids:
@@ -229,15 +180,6 @@ class StageIEvolver:
     def _completion_to_code(self, raw: str) -> str:
         code = extract_python_code(raw)
         return normalize_to_compute_reward(code, self.config.func_name)
-
-    def _is_highway_pack(self) -> bool:
-        prompts = self._prompts
-        if prompts is None:
-            return False
-        if str(getattr(prompts, "DOMAIN_NAME", "")).strip().lower() == "highway":
-            return True
-        path = str(getattr(prompts, "__file__", "") or "").replace("\\", "/")
-        return "/domains/highway/" in path
 
     @staticmethod
     def _batch_max_tokens(population_size: int) -> int:
@@ -290,8 +232,7 @@ class StageIEvolver:
             )
 
     def _seed_code(self) -> str:
-        raw = getattr(self._prompts, "D5_SEED_FUNCTION", None)
-        return normalize_to_compute_reward(str(raw if raw is not None else D5_SEED_FUNCTION))
+        return normalize_to_compute_reward(str(self._prompts.D5_SEED_FUNCTION))
 
     def _seed_fallback_candidate(self, *, origin: str = "seed_fallback") -> RewardCandidate:
         return self._clone_valid(self._seed_code(), origin=origin)
@@ -607,12 +548,8 @@ class StageIEvolver:
                 meta["score1_n_degenerate"] = int(
                     getattr(raw, "n_degenerate", 0) or 0
                 )
-                if isinstance(raw, Score1Result):
-                    hints = format_score1_failure_hints(raw)
-                    if hints:
-                        meta["score1_failure_hints"] = hints
-                    if raw.scenario_scores:
-                        meta["score1_scenario_scores"] = dict(raw.scenario_scores)
+                if isinstance(raw, Score1Result) and raw.scenario_scores:
+                    meta["score1_scenario_scores"] = dict(raw.scenario_scores)
                 if getattr(raw, "rejected", False):
                     meta["score1_rejected"] = True
                     meta["score1_reject_reason"] = getattr(raw, "reject_reason", None)
@@ -683,30 +620,17 @@ class StageIEvolver:
     ) -> RewardCandidate:
         proxy_fb = (parent.metadata or {}).get("proxy_feedback")
         if proxy_fb:
-            if self._is_highway_pack():
-                # Evidence only — LLM diagnoses from numbers in the block.
-                weakness = (
-                    f"Parent {parent.candidate_id} Score1={parent.score}.\n"
-                    f"{proxy_fb}\n"
-                    f"Global reflection: {reflection}"
-                )
-            else:
-                weakness = (
-                    f"Parent {parent.candidate_id} Score1={parent.score}. "
-                    f"Use the Stage-II proxy feedback below (higher priority than "
-                    f"Score1 alone).\n{proxy_fb}\n"
-                    f"Global reflection: {reflection}"
-                )
+            # Evidence only — LLM diagnoses from numbers in the block.
+            weakness = (
+                f"Parent {parent.candidate_id} Score1={parent.score}.\n"
+                f"{proxy_fb}\n"
+                f"Global reflection: {reflection}"
+            )
         else:
             weakness = (
                 f"Parent {parent.candidate_id} score={parent.score}. "
                 f"Weakness focus: improve analytical Score1 relative to elites. "
                 f"Global reflection: {reflection}"
-            )
-        parent_hints = (parent.metadata or {}).get("score1_failure_hints")
-        if parent_hints and not proxy_fb and not self._is_highway_pack():
-            weakness = (
-                f"{weakness}\nScore1 diagnostics for this parent: {parent_hints}"
             )
         prompt = self._format_d2_mutation(
             parent.code,
@@ -882,114 +806,56 @@ class StageIEvolver:
         assert len(next_pop) == cfg.population_size
         return next_pop
 
-    def _build_highway_evidence_reflection(
+    def _build_evidence_reflection(
         self, ranked: Sequence[RewardCandidate], *, generation: int
     ) -> str:
-        """Pareto-ordered population table + feasible-speed trends + diagnoses."""
+        """Fitness-ordered population table + best-fitness trend + diagnoses."""
 
-        def _score1(c: RewardCandidate) -> float:
-            if c.score is None:
-                return float("-inf")
-            try:
-                return float(c.score)
-            except (TypeError, ValueError):
-                return float("-inf")
-
-        def _pareto_key(c: RewardCandidate) -> Tuple[int, int, float]:
-            md = c.metadata or {}
-            pr = md.get("pareto_rank")
-            if pr is not None:
-                try:
-                    return (0, int(pr), 0.0)
-                except (TypeError, ValueError):
-                    pass
-            # Unlabeled / not yet stamped: after all ranked, Score1 desc.
-            return (1, 0, -_score1(c))
-
-        ordered = sorted(ranked, key=_pareto_key)
+        def _num(source: Dict[str, Any], *keys: str) -> float:
+            for key in keys:
+                if source.get(key) is not None:
+                    try:
+                        return float(source[key])
+                    except (TypeError, ValueError):
+                        pass
+            return float("nan")
 
         rows: List[Dict[str, Any]] = []
-        n_feasible = 0
-        n_total = 0
-        best_feas_speed: Optional[float] = None
-        for c in ordered:
+        best_fitness: Optional[float] = None
+        for c in ranked:
             md = c.metadata or {}
             m = md.get("last_metrics")
             if not isinstance(m, dict):
                 m = {}
             holdout = m.get("holdout") if isinstance(m.get("holdout"), dict) else m
-            try:
-                speed = float(
-                    (holdout or {}).get(
-                        "mean_speed", (holdout or {}).get("ITR", float("nan"))
-                    )
-                )
-            except (TypeError, ValueError):
-                speed = float("nan")
-            feas = md.get("pareto_feasible")
-            if feas is True:
-                n_feasible += 1
-                if speed == speed and (
-                    best_feas_speed is None or speed > best_feas_speed
-                ):
-                    best_feas_speed = float(speed)
-            if md.get("pareto_rank") is not None or isinstance(m, dict) and m:
-                n_total += 1
-            pr = md.get("pareto_rank")
+            fitness = _num(md, "fitness")
+            if fitness == fitness and (best_fitness is None or fitness > best_fitness):
+                best_fitness = fitness
             rows.append(
                 {
                     "id": str(c.candidate_id),
-                    "SR": float(
-                        (holdout or {}).get(
-                            "SR", (holdout or {}).get("sr", float("nan"))
-                        )
-                    ),
-                    "CR": float(
-                        (holdout or {}).get(
-                            "CR", (holdout or {}).get("cr", float("nan"))
-                        )
-                    ),
-                    "mean_speed": speed,
-                    "pareto_rank": pr,
-                    "feasible": feas,
+                    "SR": _num(holdout, "SR", "sr"),
+                    "CR": _num(holdout, "CR", "cr"),
+                    "mean_speed": _num(holdout, "mean_speed", "ITR"),
+                    "fitness": fitness,
                     "diagnosis": md.get("llm_diagnosis"),
                 }
             )
 
-        if n_total <= 0:
-            n_total = len(ordered)
-        if best_feas_speed is not None:
-            self._highway_best_speed_feasible_trend.append(float(best_feas_speed))
-        self._highway_n_feasible_trend.append(f"{n_feasible}/{max(1, n_total)}")
-        self._highway_best_speed_feasible_trend = (
-            self._highway_best_speed_feasible_trend[-5:]
-        )
-        self._highway_n_feasible_trend = self._highway_n_feasible_trend[-5:]
-
-        def _fmt_speed_trend(vals: Sequence[float]) -> str:
-            return "[" + ", ".join(f"{v:.1f}" for v in vals) + "]"
-
+        if best_fitness is not None:
+            self._best_fitness_trend.append(float(best_fitness))
+            self._best_fitness_trend = self._best_fitness_trend[-5:]
         trend = (
-            f"Gen{generation} best_speed_among_feasible="
-            f"{_fmt_speed_trend(self._highway_best_speed_feasible_trend)} "
-            f"n_feasible_trend="
-            f"[{', '.join(self._highway_n_feasible_trend)}]"
+            f"Gen{generation} best_fitness_trend=["
+            + ", ".join(f"{v:.3f}" for v in self._best_fitness_trend)
+            + "]"
         )
-        table_bits = []
-        for r in rows:
-            pr = r["pareto_rank"]
-            pr_s = f"pareto_rank={int(pr)}" if pr is not None else "pareto_rank=?"
-            feas = r["feasible"]
-            feas_s = (
-                f"feasible={bool(feas)}"
-                if feas is not None
-                else "feasible=?"
-            )
-            table_bits.append(
-                f"{r['id']}: SR={r['SR']:.2f} CR={r['CR']:.2f} "
-                f"mean_speed={r['mean_speed']:.1f} {pr_s} {feas_s}"
-            )
-        table = "Population(pareto_rank asc): " + (
+        table_bits = [
+            f"{r['id']}: SR={r['SR']:.2f} CR={r['CR']:.2f} "
+            f"mean_speed={r['mean_speed']:.1f} fitness={r['fitness']:.3f}"
+            for r in rows
+        ]
+        table = "Population(fitness desc): " + (
             "; ".join(table_bits) if table_bits else "(empty)"
         )
         diag_bits: List[str] = []
@@ -1009,128 +875,10 @@ class StageIEvolver:
     def _build_reflection(
         self, ranked: Sequence[RewardCandidate], *, generation: int
     ) -> str:
-        """
-        Reflective note for the next generation (§4.2).
-
-        Highway: factual trends + population metrics + prior LLM diagnoses.
-        CrowdNav: Score1 summary + selective proxy line (unchanged advice path).
-        """
-        if self._is_highway_pack():
-            note = self._build_highway_evidence_reflection(
-                ranked, generation=generation
-            )
-        else:
-            score_bits = []
-            for c in ranked:
-                sc = c.score if c.score is not None else float("nan")
-                score_bits.append(f"{c.candidate_id}={sc}")
-            best = ranked[0]
-            worst = ranked[-1]
-            lower = ranked[len(ranked) // 2 :]
-            lower_ids = (
-                ", ".join(c.candidate_id for c in lower[:4]) if lower else "(none)"
-            )
-            note = (
-                f"Gen{generation} scores[{', '.join(score_bits)}]. "
-                f"Best={best.candidate_id} score={best.score}; "
-                f"Worst={worst.candidate_id} score={worst.score}. "
-                f"Underperformers ({lower_ids}): strengthen goal progress and "
-                f"collision/discomfort penalties while keeping dense shaping. "
-                f"Prefer combining elite safety terms with efficient progress; "
-                f"avoid near-constant rewards."
-            )
-            diag_bits = []
-            for c in (worst, *(lower[:2])):
-                hints = (c.metadata or {}).get("score1_failure_hints")
-                if hints:
-                    diag_bits.append(f"{c.candidate_id}: {hints}")
-            if diag_bits:
-                seen = set()
-                uniq = []
-                for b in diag_bits:
-                    if b not in seen:
-                        seen.add(b)
-                        uniq.append(b)
-                note = note + " Diagnostics: " + " | ".join(uniq[:3])
-            try:
-                from raise_core.raise_loop.proxy_feedback import (
-                    proxy_summary_for_reflection,
-                )
-
-                proxy_line = proxy_summary_for_reflection(ranked)
-                if proxy_line:
-                    note = note + " " + proxy_line
-            except Exception:  # noqa: BLE001
-                pass
+        """Reflective note for the next generation (last three notes kept)."""
+        note = self._build_evidence_reflection(ranked, generation=generation)
         if not self.reflection.strip():
             return note
         parts = [p.strip() for p in self.reflection.split(" || ") if p.strip()]
         parts.append(note)
-        # Bound prompt size: keep the most recent notes.
         return " || ".join(parts[-3:])
-
-    # ------------------------------------------------------------------ run
-
-    def run(self) -> List[RewardCandidate]:
-        """
-        Run Gen0 + G1 evolutionary generations.
-
-        Returns the final ranked population (best first).
-        """
-        console.banner("Stage I - analytical Score1 evolution")
-        with console.timed("initialize Gen0 population", stage="Stage I"):
-            population = self.initialize_population()
-        ranked = self.score_population(population)
-        self.global_best = ranked[0]
-        self.reflection = self._build_reflection(ranked, generation=0)
-        self.history.append(
-            GenerationRecord(
-                generation=0,
-                population=list(ranked),
-                ranking=[c.candidate_id for c in ranked],
-                reflection=self.reflection,
-                best_score=ranked[0].score,
-                best_id=ranked[0].candidate_id,
-            )
-        )
-        console.stage1_gen_summary(
-            0, self.config.generations, ranked, global_best=self.global_best
-        )
-
-        for g in range(1, self.config.generations + 1):
-            previous_best = ranked[0]
-            console.status(
-                f"Gen {g}/{self.config.generations} - evolving next population "
-                f"(crossover={self.config.n_crossover}, "
-                f"mutation={self.config.n_mutation}, "
-                f"random={self.config.n_random})",
-                stage="Stage I",
-            )
-            with console.timed(f"Gen {g} evolve+score", stage="Stage I"):
-                population = self._next_generation(ranked)
-                ranked = self.score_population(population)
-            if ranked[0].score < previous_best.score:
-                console.warn(
-                    f"regression: gen={g} best {ranked[0].candidate_id} "
-                    f"score={ranked[0].score:.6f} below previous "
-                    f"{previous_best.candidate_id} score={previous_best.score:.6f}",
-                    stage="Stage I",
-                )
-            if ranked[0].score > self.global_best.score:
-                self.global_best = ranked[0]
-            self.reflection = self._build_reflection(ranked, generation=g)
-            self.history.append(
-                GenerationRecord(
-                    generation=g,
-                    population=list(ranked),
-                    ranking=[c.candidate_id for c in ranked],
-                    reflection=self.reflection,
-                    best_score=ranked[0].score,
-                    best_id=ranked[0].candidate_id,
-                )
-            )
-            console.stage1_gen_summary(
-                g, self.config.generations, ranked, global_best=self.global_best
-            )
-
-        return ranked

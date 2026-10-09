@@ -32,8 +32,8 @@ def _lab(cid: str, *, fit: float, score1: float = 0.5) -> RewardCandidate:
     )
 
 
-def test_highway_default_evolve_is_pareto():
-    assert parse_evolve_rank("", domain="highway") == "pareto"
+def test_default_evolve_is_scalar_fitness():
+    assert parse_evolve_rank("") == "scalar"
 
 
 def test_bimodal_parent_order_and_best_ever_archive():

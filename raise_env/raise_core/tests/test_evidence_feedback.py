@@ -1,23 +1,17 @@
-"""Evidence-driven proxy feedback (highway) — no hand-coded verdicts."""
+"""Evidence-driven feedback (highway) — numbers only, no hand-coded verdicts."""
 
 from __future__ import annotations
 
 import domains.highway.prompts as hwy_prompts
-from domains.crowdnav.prompts import D5_SEED_FUNCTION
+from domains.highway.prompts import D5_SEED_FUNCTION
+from domains.highway.reward_checks import make_highway_validator
 from raise_core.explore import (
     RewardCandidate,
     StageIEvolver,
     extract_llm_diagnosis,
 )
 from raise_core.llm import ScriptedLLMClient
-from raise_core.raise_loop.proxy_feedback import (
-    attach_proxy_feedback,
-    evidence_block,
-    focus_note_from_metrics,
-    format_proxy_feedback_block,
-    should_attach_proxy_feedback,
-)
-from raise_core.sandbox.validator import RewardValidator
+from raise_core.raise_loop.proxy_feedback import attach_proxy_feedback, evidence_block
 
 _VERDICT_WORDS = ("lags", "hack", "degenerate", "improve")
 
@@ -43,7 +37,7 @@ def _hwy_metrics(**extra):
 
 
 def _cand(cid: str = "c0", *, score: float = 0.5, metrics=None) -> RewardCandidate:
-    fn = RewardValidator().validate_code(D5_SEED_FUNCTION)
+    fn = make_highway_validator().validate_code(D5_SEED_FUNCTION)
     md = {}
     if metrics is not None:
         md["last_metrics"] = dict(metrics)
@@ -58,54 +52,34 @@ def _cand(cid: str = "c0", *, score: float = 0.5, metrics=None) -> RewardCandida
     )
 
 
+def _evolver() -> StageIEvolver:
+    return StageIEvolver(
+        ScriptedLLMClient([D5_SEED_FUNCTION]),
+        score_fn=lambda *_a, **_k: type("R", (), {"score": 0.0, "rejected": False})(),
+        validator=make_highway_validator(),
+        prompts=hwy_prompts,
+    )
+
+
 def test_evidence_block_is_numbers_only():
     block = evidence_block(_hwy_metrics(), score1=0.42)
     low = block.lower()
     for word in _VERDICT_WORDS:
         assert word not in low, f"verdict word {word!r} leaked into evidence"
     assert "SR=0.80" in block
-    assert "fitness" not in low
-    assert "gate" not in low
+    assert "fitness=0.400" in block
     assert "Score1=0.420" in block
 
 
-def test_highway_attach_always_when_enabled():
+def test_attach_always_writes_metrics_and_evidence():
     c = _cand(metrics=_hwy_metrics())
-    # Good-looking metrics still attach (no threshold gate).
-    good = _hwy_metrics(mean_speed=24.5, soft_success=0.7, speed_p10=23.0)
-    assert attach_proxy_feedback(
-        c,
-        good,
-        enabled=True,
-        n_labeled_dataset=0,
-        min_labels=99,
-        epoch=0,
-    )
-    fb = (c.metadata or {})["proxy_feedback"].lower()
-    assert "sr=" in fb
-    assert "fitness" not in fb
-    assert "proxy_feedback_focus" not in (c.metadata or {})
-    assert "proxy_hack_mode" not in (c.metadata or {})
-
-
-def test_crowdnav_attach_gate_unchanged():
-    c = _cand()
-    m = {"SR": 0.4, "CR": 0.1, "TR": 0.1}
-    assert not should_attach_proxy_feedback(m)
-    assert not attach_proxy_feedback(
-        c, m, enabled=True, n_labeled_dataset=100, min_labels=16, epoch=1
-    )
-    bad = {"SR": 0.0, "CR": 0.0, "TR": 0.8}
-    assert should_attach_proxy_feedback(bad)
-    assert attach_proxy_feedback(
-        c, bad, enabled=True, n_labeled_dataset=100, min_labels=16, epoch=1
-    )
-    assert "Focus:" in (c.metadata or {})["proxy_feedback"]
-
-
-def test_crowdnav_focus_notes_still_work():
-    assert "timeout" in focus_note_from_metrics({"SR": 0.0, "CR": 0.2, "TR": 0.6})
-    assert "collision" in focus_note_from_metrics({"SR": 0.0, "CR": 0.6, "TR": 0.2})
+    attach_proxy_feedback(c, _hwy_metrics(mean_speed=24.5))
+    md = c.metadata or {}
+    assert md["last_metrics"]["mean_speed"] == 24.5
+    fb = md["proxy_feedback"]
+    assert "SR=0.80" in fb
+    assert "mean_speed=24.5" in fb
+    assert "Score1=0.500" in fb
 
 
 def test_extract_llm_diagnosis():
@@ -124,57 +98,52 @@ def test_extract_llm_diagnosis():
     assert extract_llm_diagnosis("```python\ndef compute_reward(state, memory):\n return 0.0\n```") is None
 
 
-def test_highway_build_reflection_no_hardcoded_advice():
-    evo = StageIEvolver(
-        ScriptedLLMClient([D5_SEED_FUNCTION]),
-        score_fn=lambda *_a, **_k: type("R", (), {"score": 0.0, "rejected": False})(),
-        validator=RewardValidator(),
-        prompts=hwy_prompts,
-    )
+def test_build_reflection_is_fitness_table_with_diagnoses():
+    evo = _evolver()
     pop = [
-        _cand("a", score=0.2, metrics=_hwy_metrics(mean_speed=20.0, fitness=0.3)),
         _cand("b", score=0.1, metrics=_hwy_metrics(mean_speed=24.0, fitness=0.6)),
+        _cand("a", score=0.2, metrics=_hwy_metrics(mean_speed=20.0, fitness=0.3)),
     ]
-    pop[0].metadata["pareto_rank"] = 1
-    pop[0].metadata["pareto_n"] = 2
-    pop[0].metadata["pareto_feasible"] = True
-    pop[1].metadata["pareto_rank"] = 0
-    pop[1].metadata["pareto_n"] = 2
-    pop[1].metadata["pareto_feasible"] = True
-    pop[1].metadata["llm_diagnosis"] = "CR rising with speed shaping."
-    pop[1].metadata["fitness"] = 0.6
-    pop[1].metadata["last_metrics"]["fitness"] = 0.6
+    pop[0].metadata["fitness"] = 0.6
+    pop[1].metadata["fitness"] = 0.3
+    pop[0].metadata["llm_diagnosis"] = "CR rising with speed shaping."
     note = evo._build_reflection(pop, generation=1)
     assert "strengthen goal progress" not in note
-    assert "best_speed_among_feasible=" in note
-    assert "Population(pareto_rank asc):" in note
+    assert "Population(fitness desc):" in note
+    assert "b: SR=0.80 CR=0.10 mean_speed=24.0 fitness=0.600" in note
+    assert "best_fitness_trend=[0.600]" in note
     assert "PriorLLMDiagnoses:" in note
     assert "CR rising" in note
-    assert "fitness" not in note.lower()
 
 
-def test_highway_prompts_render_with_pareto_objective():
+def test_mutation_weakness_uses_evidence_block():
+    parent = _cand("p0", score=0.4)
+    attach_proxy_feedback(parent, _hwy_metrics(TR=0.7))
+    evo = _evolver()
+    captured = {}
+
+    def _fake_format(code, weakness, **kwargs):
+        captured["weakness"] = weakness
+        return f"MUTATE:\n{code}"
+
+    orig = evo._format_d2_mutation
+    evo._format_d2_mutation = _fake_format
+    try:
+        evo._try_mutate(parent, "global note", phase="mutation", attempt=0)
+    finally:
+        evo._format_d2_mutation = orig
+    assert "Holdout eval" in captured["weakness"]
+    assert "TR=0.70" in captured["weakness"]
+    assert "Global reflection: global note" in captured["weakness"]
+
+
+def test_highway_prompts_render():
     text = hwy_prompts.format_d2_mutation(
         "def compute_reward(state, memory):\n    return 0.0\n",
         "evidence here",
     )
     assert "Before writing code" in text
-    assert "Pareto dominance" in hwy_prompts.D1_SYSTEM_PROMPT
+    assert "evidence here" in text
     assert "sigmoid" not in hwy_prompts.D1_SYSTEM_PROMPT.lower()
     assert "Do NOT reward lagging" not in hwy_prompts.D1_SYSTEM_PROMPT
     assert "Do NOT reward lagging" not in hwy_prompts.D4_EXTERNAL_KNOWLEDGE
-    d3 = hwy_prompts.format_d3_refinement(
-        "def compute_reward(state, memory):\n    return 0.0\n",
-        last_score=0.5,
-        feedback=evidence_block(_hwy_metrics()),
-    )
-    assert "Before writing code" in d3
-    assert "fitness" not in evidence_block(_hwy_metrics()).lower()
-    assert "Fitness=" not in d3
-
-
-def test_format_proxy_highway_is_evidence():
-    block = format_proxy_feedback_block(_hwy_metrics(), score1=0.3)
-    assert "Focus:" not in block
-    assert "fitness" not in block.lower()
-    assert "SR=" in block

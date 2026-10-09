@@ -4,11 +4,16 @@ from __future__ import annotations
 
 import time
 
+from domains.highway.state import default_smoke_states
 from raise_core.llm import split_reward_function_sources, strip_redundant_scalar_subscripts
 from raise_core.sandbox.config import SandboxConfig
 from raise_core.sandbox.validator import RewardValidator
 
 _DEEP_EXPR = "1" + "+1" * 9000
+
+
+def _validator(**kw) -> RewardValidator:
+    return RewardValidator(smoke_states=default_smoke_states(), **kw)
 
 
 def test_strip_scalar_subscripts_survives_hostile_input():
@@ -27,7 +32,7 @@ def test_split_sources_survives_hostile_input():
 
 
 def test_validator_rejects_deep_nesting_instead_of_crashing():
-    reward, reason = RewardValidator().try_validate(
+    reward, reason = _validator().try_validate(
         f"def compute_reward(state, memory):\n    return {_DEEP_EXPR}\n"
     )
     assert reward is None
@@ -35,7 +40,7 @@ def test_validator_rejects_deep_nesting_instead_of_crashing():
 
 
 def test_validator_rejects_null_bytes():
-    reward, reason = RewardValidator().try_validate(
+    reward, reason = _validator().try_validate(
         "def compute_reward(state, memory):\n    return 1.0\x00\n"
     )
     assert reward is None
@@ -48,7 +53,7 @@ def test_module_level_hang_is_killed_in_child_not_run_in_parent():
         "def compute_reward(state, memory):\n"
         "    return 0.0\n"
     )
-    validator = RewardValidator(config=SandboxConfig(timeout_seconds=3.0))
+    validator = _validator(config=SandboxConfig(timeout_seconds=3.0))
     t0 = time.monotonic()
     reward, reason = validator.try_validate(code)
     assert reward is None
@@ -62,6 +67,6 @@ def test_default_config_keeps_legacy_top_level_semantics():
         "def compute_reward(state, memory):\n"
         "    return 0.1 * SCALE\n"
     )
-    reward, reason = RewardValidator().try_validate(code)
+    reward, reason = _validator().try_validate(code)
     assert reason is None
     assert reward is not None

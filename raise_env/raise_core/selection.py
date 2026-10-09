@@ -1,23 +1,17 @@
 """
-Fitness / navigation helpers for Stage II / III selection.
+Fitness helpers for Stage II / III selection.
 
-Paper (Alg. 1): final rankings R2 / R3 use LLM evaluation of multi-objective
-M(r). Pipeline default is ``final_rank=llm`` (see ``ranking.py``).
-
-Highway caches a legacy diagnostic ``fitness`` (``highway_fitness``) for
-human-facing logs/plots only — evolutionary parent selection uses Pareto
-(``domains.highway.pareto_rank`` / ``evolve_rank=pareto``). CrowdNav keeps:
-
-    SR - CR - 0.5 * TR
-
-``candidate_fitness`` / ``candidate_nav_scalar`` read cached ``fitness`` or
-``selection_scalar`` when present.
+Highway trainers cache ``fitness`` (``highway_fitness`` of the holdout eval,
+alias ``selection_scalar``) on candidate metadata; that scalar ranks parents
+and picks the final best. Metrics without a highway ``domain`` tag (stub
+trainers) fall back to ``SR - CR - 0.5 * TR``.
 """
 
 from __future__ import annotations
 
 from typing import Any, Mapping, Optional, Sequence
 
+from domains.highway.metrics import highway_fitness
 from raise_core.explore import RewardCandidate
 
 
@@ -27,14 +21,13 @@ def is_highway_metrics(metrics: Mapping[str, Any]) -> bool:
 
 
 def navigation_scalar(sr: float, cr: float, tr: float) -> float:
-    """Baseline elite scalar (not the paper's LLM multi-objective rank)."""
+    """Fallback scalar for metrics without a highway fitness."""
     return float(sr) - float(cr) - 0.5 * float(tr)
 
 
 def navigation_scalar_from_dict(metrics: Optional[Mapping[str, Any]]) -> float:
     if not metrics:
         return float("-inf")
-    # Highway trainers stash official fitness (alias: selection_scalar).
     for key in ("fitness", "selection_scalar"):
         if metrics.get(key) is not None:
             try:
@@ -42,8 +35,6 @@ def navigation_scalar_from_dict(metrics: Optional[Mapping[str, Any]]) -> float:
             except (TypeError, ValueError):
                 pass
     if is_highway_metrics(metrics):
-        from domains.highway.metrics import highway_fitness
-
         return float(highway_fitness(metrics))
     sr = float(metrics.get("SR", metrics.get("sr", 0.0)))
     cr = float(metrics.get("CR", metrics.get("cr", 0.0)))
@@ -63,15 +54,14 @@ def candidate_nav_scalar(candidate: RewardCandidate) -> float:
 
 
 def candidate_fitness(candidate: RewardCandidate) -> float:
-    """Official fitness for ranking (highway: holdout fitness; CrowdNav: nav scalar)."""
+    """Fitness used for ranking (cached highway holdout fitness when present)."""
     return candidate_nav_scalar(candidate)
-
 
 
 def pick_best_trained(
     snapshots: Sequence[RewardCandidate],
 ) -> Optional[RewardCandidate]:
-    """Return the trained snapshot with highest navigation scalar, if any."""
+    """Return the trained snapshot with highest fitness, if any."""
     scored = [c for c in snapshots if candidate_nav_scalar(c) > float("-inf")]
     if not scored:
         return None

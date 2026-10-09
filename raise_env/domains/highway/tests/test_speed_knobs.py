@@ -62,7 +62,6 @@ def test_stochastic_eval_label_reproducible(tmp_path):
         )
         cfg = Stage2Config(
             train_env_steps=64,
-            k2_unit="env_steps",
             eval_episodes=2,
             seed=3,
             device="cpu",
@@ -80,7 +79,7 @@ def test_stochastic_eval_label_reproducible(tmp_path):
 
 
 def test_train_vec_env_wraps_monitor():
-    """SB3 needs Monitor so rollout/ep_rew_mean is logged (diagnostics Part 1)."""
+    """SB3 needs Monitor so rollout/ep_rew_mean is logged."""
     pack = load_domain("highway")
     fn = make_validator_for_domain(pack).validate_code(D5_SEED_FUNCTION)
     venv = _make_train_vec_env(fn, seed=0, n_envs=1)

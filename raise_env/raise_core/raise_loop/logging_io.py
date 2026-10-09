@@ -27,17 +27,6 @@ def append_epoch_record(output_dir: str, record: Dict[str, Any]) -> str:
     return path
 
 
-def append_al_step(output_dir: str, record: Dict[str, Any]) -> str:
-    root = closed_loop_dir(output_dir)
-    path = os.path.join(root, "al_steps.jsonl")
-    row = dict(record)
-    row.setdefault("ts", utc_now_z())
-    with open(path, "a", encoding="utf-8") as fh:
-        fh.write(json.dumps(row, ensure_ascii=False, default=str))
-        fh.write("\n")
-    return path
-
-
 def write_json(path: str, payload: Any) -> None:
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     with open(path, "w", encoding="utf-8") as fh:

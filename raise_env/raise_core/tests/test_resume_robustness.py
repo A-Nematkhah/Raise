@@ -1,4 +1,4 @@
-"""Crash-safe checkpoints, resume id/elite state, dataset I/O and label ordering."""
+"""Crash-safe checkpoints, resume id state and label ordering."""
 
 from __future__ import annotations
 
@@ -9,7 +9,9 @@ import time
 
 import pytest
 
-from domains.crowdnav.prompts import D5_SEED_FUNCTION
+from domains.highway.prompts import D5_SEED_FUNCTION
+from domains.highway.reward_checks import make_highway_validator
+from domains.highway.stage1 import make_score_fn
 from raise_core.explore import RewardCandidate, StageIEvolver
 from raise_core.json_io import atomic_write_json
 from raise_core.raise_loop.checkpoint import (
@@ -24,18 +26,10 @@ from raise_core.raise_loop.runner import (
     _load_ckpt,
     _resume_known_ids,
 )
-from raise_core.refine import ProxyMetrics, _untested_child_metadata
-from raise_core.sandbox.validator import RewardValidator
-from raise_core.scoring import make_smoke_score_fn
-from raise_core.surrogate.dataset_io import (
-    append_example,
-    existing_example_ids,
-    load_table,
-)
 
 
 def _cand(cid: str, **md) -> RewardCandidate:
-    fn = RewardValidator().validate_code(D5_SEED_FUNCTION)
+    fn = make_highway_validator().validate_code(D5_SEED_FUNCTION)
     return RewardCandidate(
         candidate_id=cid,
         code=D5_SEED_FUNCTION,
@@ -83,7 +77,8 @@ def test_load_ckpt_refuses_when_every_copy_is_corrupt(tmp_path):
 
 
 def test_restore_id_counter_skips_issued_ids():
-    evolver = StageIEvolver(None, score_fn=make_smoke_score_fn())
+    score_fn, _ds = make_score_fn(mode="smoke")
+    evolver = StageIEvolver(None, score_fn=score_fn, validator=make_highway_validator())
     assert evolver.restore_id_counter(None, existing_ids=["ini_0003", "mut_0011_v2", "x"]) == 12
     assert evolver.restore_id_counter(20) == 20
     assert evolver._next_id("cro") == "cro_0020"
@@ -101,44 +96,6 @@ def test_resume_known_ids_reads_checkpoint_and_train_dirs(tmp_path):
     ids = set(_resume_known_ids(ckpt, str(stage2)))
     assert {"ini_0001", "cro_0007", "ran_0009", "mut_0042"} <= ids
     assert "notes" not in ids
-
-
-def test_dataset_nan_becomes_none(tmp_path):
-    root = str(tmp_path)
-    append_example(
-        root,
-        features={"score1": float("nan"), "behavior_fingerprint": [1.0, float("inf")]},
-        labels={"SR": 1.0, "SD": float("nan")},
-        example_id="e1",
-    )
-    feats, labs = load_table(root)
-    assert feats[0]["score1"] is None
-    assert feats[0]["behavior_fingerprint"] == [1.0, None]
-    assert labs[0]["SD"] is None
-
-
-def test_dataset_orphan_feature_row_is_relabeled(tmp_path):
-    root = str(tmp_path)
-    append_example(root, features={"a": 1}, labels={"SR": 1.0}, example_id="e1")
-    with open(os.path.join(root, "features.jsonl"), "a", encoding="utf-8") as fh:
-        fh.write(json.dumps({"example_id": "e2", "a": 2}) + "\n")
-    assert existing_example_ids(root) == {"e1"}
-    append_example(root, features={"a": 2}, labels={"SR": 0.5}, example_id="e2")
-    feats, labs = load_table(root)
-    assert [f["example_id"] for f in feats] == ["e1", "e2"]
-    assert [l["SR"] for l in labs] == [1.0, 0.5]
-
-
-def test_dataset_truncated_row_does_not_swallow_next_append(tmp_path):
-    root = str(tmp_path)
-    append_example(root, features={"a": 1}, labels={"SR": 1.0}, example_id="e1")
-    for name in ("features.jsonl", "labels.jsonl"):
-        with open(os.path.join(root, name), "a", encoding="utf-8") as fh:
-            fh.write('{"example_id": "e2", "a"')
-    assert existing_example_ids(root) == {"e1"}
-    append_example(root, features={"a": 3}, labels={"SR": 0.2}, example_id="e3")
-    feats, _labs = load_table(root)
-    assert [f["example_id"] for f in feats] == ["e1", "e3"]
 
 
 def test_parallel_label_emits_in_order_and_survives_crash():
@@ -187,37 +144,28 @@ def test_sequential_label_records_crash_as_failed():
     assert "ValueError" in seen[0]["reason"]
 
 
-def test_highway_closed_loop_resume_does_not_reissue_ids(tmp_path):
-    pytest.importorskip("sklearn")
-    pytest.importorskip("gymnasium")
+def test_closed_loop_resume_does_not_reissue_ids(tmp_path):
     out = str(tmp_path / "run")
-
     cfg = ClosedLoopConfig(
-        domain="highway",
         population_size=4,
         generations=2,
         stage2_train_steps=32,
-        k2_unit="env_steps",
         use_stub=True,
         llm_provider="seed",
         output_dir=out,
-        surrogate_dataset=str(tmp_path / "surr_data"),
-        surrogate_model_dir=str(tmp_path / "surr_model"),
-        al_root=str(tmp_path / "al"),
         device="cpu",
-        num_processes=1,
         resume=True,
     )
     ClosedLoopRunner(cfg).run()
     ckpt1 = load_checkpoint(out)
     issued = ckpt1["extra"]["id_counter"]
-    assert issued >= 8
+    # Gen0 issues 4 ids, Gen1 breeds 3 (the elite is carried over).
+    assert issued >= 7
 
     # Pretend the run crashed before epoch 0 bred, from a checkpoint written
     # before id_counter was persisted (forces the derive-from-ids fallback).
     ckpt1.update(status="running", phase="init", epoch=0, next_epoch=0, history=[])
     ckpt1["extra"].pop("id_counter")
-    ckpt1["extra"].pop("highway_elite", None)
     for d in (os.path.join(out, "closed_loop"), out):
         save_checkpoint(d, ckpt1)
     resumed_ids = {r["candidate_id"] for r in ckpt1["population"]}
@@ -229,14 +177,3 @@ def test_highway_closed_loop_resume_does_not_reissue_ids(tmp_path):
     for cand in bred:
         serial = int(cand.candidate_id.split("_")[1])
         assert serial >= issued, cand.candidate_id
-
-
-def test_untested_child_drops_parent_training_results():
-    parent = _cand(
-        "p", last_metrics={"SR": 1.0}, checkpoint_path="p.zip", lineage="keep"
-    )
-    md = _untested_child_metadata(parent, ProxyMetrics(sr=0.9))
-    assert "last_metrics" not in md and "checkpoint_path" not in md
-    assert md["lineage"] == "keep"
-    assert md["parent_metrics"]["SR"] == pytest.approx(0.9)
-    assert md["refine_kept_previous"] is False

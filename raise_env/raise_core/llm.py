@@ -411,49 +411,21 @@ class OllamaLLMClient(VLLMLLMClient):
 
 class SeedVariantLLMClient(LLMClient):
     """
-    Always emits a valid ``compute_reward`` variant of a domain seed.
+    Always emits a valid highway ``compute_reward`` variant (no API key).
 
-    Used for dry-runs / ``--llm seed`` so Algorithm 1 can execute without
-    an API key or a huge scripted completion list.
+    Used for dry-runs / ``--llm seed`` (guarded by ``--allow-seed-llm`` for
+    real runs) so the pipeline executes without an LLM.
     """
 
     provider = "seed"
 
     def __init__(self, base_code: Optional[str] = None) -> None:
-        from domains.crowdnav.prompts import D5_SEED_FUNCTION
-
-        self._base = (base_code or D5_SEED_FUNCTION).strip()
+        self._base = (base_code or "").strip()
         self._n = 0
-        self._highway = "state.ego" in self._base or "state.progress" in self._base
 
     def complete(self, prompt: str, *, max_tokens: Optional[int] = None) -> str:
         self._n += 1
-        if self._highway:
-            return self._highway_variant(self._n)
-        pot = 2.0 + 0.05 * ((self._n % 20) - 10)
-        # Tiny localized tweak so Stage I/II/III see distinct codes.
-        code = (
-            "```python\n"
-            "def compute_reward(state, memory):\n"
-            "    success_reward = 10.0\n"
-            "    collision_penalty = -20.0\n"
-            f"    pot_factor = {pot:.4f}\n"
-            "    if state.reaching_goal:\n"
-            "        return float(success_reward)\n"
-            "    if state.collision:\n"
-            "        return float(collision_penalty)\n"
-            "    dist = ((state.robot.px - state.robot.gx) ** 2 + "
-            "(state.robot.py - state.robot.gy) ** 2) ** 0.5\n"
-            "    prev = memory.get('prev_dist')\n"
-            "    if prev is None:\n"
-            "        memory['prev_dist'] = dist\n"
-            "        return float(0.0)\n"
-            "    progress = float(prev) - dist\n"
-            "    memory['prev_dist'] = dist\n"
-            "    return float(pot_factor * progress)\n"
-            "```\n"
-        )
-        return code
+        return self._highway_variant(self._n)
 
     def _highway_variant(self, n: int) -> str:
         """Structural diversity: clearance / lane / speed-band / crawl / coef."""

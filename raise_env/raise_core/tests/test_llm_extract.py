@@ -7,7 +7,7 @@ from raise_core.llm import (
     extract_python_code,
     split_reward_function_sources,
 )
-from domains.crowdnav.prompts import format_d1_initial_batch
+from domains.highway.prompts import format_d1_initial_batch
 
 
 def test_extract_python_code_strips_fences_and_prose():
@@ -41,7 +41,8 @@ def test_split_reward_function_sources_multiple_defs():
 def test_format_d1_initial_batch_asks_for_n_functions():
     prompt = format_d1_initial_batch(8)
     assert "8 diverse" in prompt
-    assert "compute_reward_v8" in prompt
+    assert "compute_reward_vK" in prompt
+    assert "all 8 functions" in prompt
 
 
 def test_extract_all_python_blocks_multiple_fences():

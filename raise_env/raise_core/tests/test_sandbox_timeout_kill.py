@@ -7,14 +7,11 @@ import time
 
 import pytest
 
+from domains.highway.reward_checks import make_highway_validator
+from domains.highway.state import default_smoke_states
 from raise_core.sandbox.config import SandboxConfig
 from raise_core.sandbox.errors import RewardSandboxError
-from raise_core.sandbox.runtime import (
-    default_smoke_states,
-    run_with_timeout,
-    smoke_test_compute,
-)
-from raise_core.sandbox.validator import RewardValidator
+from raise_core.sandbox.runtime import run_with_timeout, smoke_test_compute
 
 
 def _sleep_forever() -> int:
@@ -55,12 +52,7 @@ def compute_reward(state, memory):
 def test_validator_still_accepts_fast_reward():
     code = """
 def compute_reward(state, memory):
-    return float(state.progress) if hasattr(state, 'progress') else 0.0
+    return float(state.progress)
 """
-    # CrowdNav RewardState has no progress — use dmin path.
-    code = """
-def compute_reward(state, memory):
-    return float(state.dmin)
-"""
-    rw = RewardValidator().validate_code(code)
+    rw = make_highway_validator().validate_code(code)
     assert rw is not None

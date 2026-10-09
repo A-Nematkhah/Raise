@@ -13,8 +13,9 @@ import logging
 import os
 import sys
 import time
+import warnings
 from contextlib import contextmanager
-from typing import Any, Iterable, Iterator, Optional, Sequence
+from typing import Any, Iterable, Iterator, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -54,12 +55,9 @@ def configure_run_logging(*, verbose: bool = False) -> None:
     """
     Readable default logs: INFO for RAISE, quiet HTTP/SDK noise.
 
-    ``--verbose`` turns on DEBUG for ``crowd_nav`` / ``crowd_sim`` only —
-    not httpx/groq full request dumps (those made 1h runs unreadable).
+    ``--verbose`` turns on DEBUG for RAISE packages only — not httpx/groq
+    full request dumps (those made 1h runs unreadable).
     """
-    import logging
-    import warnings
-
     root_level = logging.INFO
     logging.basicConfig(
         level=root_level,
@@ -69,7 +67,7 @@ def configure_run_logging(*, verbose: bool = False) -> None:
     )
     set_verbose(bool(verbose))
     pkg_level = logging.DEBUG if verbose else logging.INFO
-    for name in ("crowd_nav", "crowd_sim", "rl", "domains", "raise_core", "domains.highway"):
+    for name in ("domains", "raise_core"):
         logging.getLogger(name).setLevel(pkg_level)
 
     # Third-party chatter (Groq/httpx dump entire prompts at DEBUG).
@@ -245,77 +243,6 @@ def progress(
     return tqdm(**kwargs)
 
 
-def stage1_gen_summary(
-    generation: int,
-    total_gens: int,
-    ranked: Sequence[Any],
-    *,
-    global_best: Optional[Any] = None,
-) -> None:
-    """Print a one-screen Stage I generation result."""
-    if not ranked:
-        status(f"Gen {generation}/{total_gens} - empty population", stage="Stage I")
-        return
-    best = ranked[0]
-    worst = ranked[-1]
-    best_s = getattr(best, "score", None)
-    worst_s = getattr(worst, "score", None)
-    gb = global_best or best
-    gb_s = getattr(gb, "score", None)
-    status(
-        f"Gen {generation}/{total_gens} summary - "
-        f"best={getattr(best, 'candidate_id', '?')} "
-        f"score={_fmt_score(best_s)} | "
-        f"worst={getattr(worst, 'candidate_id', '?')} "
-        f"score={_fmt_score(worst_s)} | "
-        f"global_best={getattr(gb, 'candidate_id', '?')} "
-        f"score={_fmt_score(gb_s)}",
-        stage="Stage I",
-    )
-
-
-def stage_round_summary(
-    stage: str,
-    round_index: int,
-    total_rounds: int,
-    records: Sequence[Any],
-) -> None:
-    """Print Stage II/III round metrics (SR/CR/TR) for scanability."""
-    if not records:
-        status(f"Round {round_index + 1}/{total_rounds} - no records", stage=stage)
-        return
-    lines = [
-        f"Round {round_index + 1}/{total_rounds} metrics:",
-        f"  {'candidate':<16} {'SR':>6} {'CR':>6} {'TR':>6} {'scalar':>8} refined",
-    ]
-    best_id = None
-    best_scalar = float("-inf")
-    for rec in records:
-        m = getattr(rec, "metrics", None)
-        if m is None:
-            continue
-        sr = float(getattr(m, "sr", 0.0))
-        cr = float(getattr(m, "cr", 0.0))
-        tr = float(getattr(m, "tr", 0.0))
-        scalar = sr - cr - 0.5 * tr
-        cid = str(getattr(rec, "candidate_id", "?"))
-        refined = "yes" if getattr(rec, "refined", False) else (
-            "kept" if getattr(rec, "kept_previous", False) else "-"
-        )
-        lines.append(
-            f"  {cid:<16} {sr:6.3f} {cr:6.3f} {tr:6.3f} {scalar:8.3f} {refined}"
-        )
-        if scalar > best_scalar:
-            best_scalar = scalar
-            best_id = cid
-    if best_id is not None:
-        lines.append(
-            f"  best this round: {best_id} (SR-CR-0.5TR={best_scalar:.3f})"
-        )
-    for line in lines:
-        status(line, stage=stage)
-
-
 def final_run_summary(
     *,
     output_dir: str,
@@ -323,21 +250,9 @@ def final_run_summary(
     best_stage1: Optional[Any] = None,
     best_stage2: Optional[Any] = None,
     best_stage3: Optional[Any] = None,
-    closed_loop: bool = False,
 ) -> None:
     banner("RAISE - finished")
     status(f"Total wall-clock: {format_seconds(wall_seconds)}")
-    if closed_loop:
-        status("mode: closed_loop_v1 (innovation)")
-        try:
-            from raise_core.raise_loop.report import (
-                build_closed_loop_report,
-            )
-
-            for line in build_closed_loop_report(output_dir).strip().splitlines():
-                status(line, stage="closed-loop")
-        except Exception as exc:  # noqa: BLE001
-            warn(f"closed-loop report unavailable: {exc}", stage="pipeline")
     for label, cand in (
         ("Stage I best", best_stage1),
         ("Stage II best", best_stage2),
@@ -360,16 +275,10 @@ def final_run_summary(
             extra = f"  Score1={_fmt_score(score)}"
         status(f"{label}: {getattr(cand, 'candidate_id', '?')}{extra}")
     status(f"Artifacts: {os.path.abspath(output_dir)}")
-    if closed_loop:
-        status(
-            "Key files: closed_loop/REPORT.txt, closed_loop/epochs.jsonl, "
-            "manifest.json, best_stage3.json, plots/"
-        )
-    else:
-        status(
-            "Key files: manifest.json, final_candidate.json, "
-            "best_stage1.json, best_stage2.json, best_stage3.json"
-        )
+    status(
+        "Key files: closed_loop/REPORT.txt, closed_loop/epochs.jsonl, "
+        "manifest.json, best_stage3.json, final_candidate.json"
+    )
 
 
 def _fmt_score(value: Any) -> str:

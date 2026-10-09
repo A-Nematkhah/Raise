@@ -1,4 +1,4 @@
-"""Skip highway tests cleanly when requirements_highway.txt is not installed."""
+"""Skip highway tests cleanly when the env / PPO dependencies are not installed."""
 
 from __future__ import annotations
 

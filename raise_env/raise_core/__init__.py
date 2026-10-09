@@ -1,23 +1,6 @@
 """
-Pluggable reward search types for CrowdNav++.
+RAISE reward search core (LLM reward evolution on highway-env).
 
-Termination / safety (done, episode_info) stay env-owned. Candidate reward
-code may only read RewardState and return a scalar float.
+Termination / safety stay env-owned. Candidate reward code may only read the
+domain reward state and return a scalar float (or highway component tuple).
 """
-
-from domains.crowdnav.state import (
-    HumanObservable,
-    LegacyReward,
-    RewardFunction,
-    RewardState,
-    RobotRewardState,
-)
-
-__all__ = [
-    "HumanObservable",
-    "LegacyReward",
-    "RewardFunction",
-    "RewardState",
-    "RobotRewardState",
-]
-

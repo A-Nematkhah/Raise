@@ -121,7 +121,7 @@ def default_smoke_states() -> tuple[HighwayRewardState, ...]:
         _state(timeout=True, progress=0.1, speed=10.0, global_time=40.0),
         # Idle / stop
         _state(progress=0.0, speed=0.0, action=0, global_time=0.2),
-        # Crawl survivor (Score1 / surrogate must distinguish from cruise)
+        # Crawl survivor (Score1 must distinguish from cruise)
         _state(progress=0.3, speed=6.0, others=nearby, global_time=12.0),
         # High-speed cruise
         _state(progress=3.5, speed=30.0, others=nearby, global_time=3.0, x=90.0),
@@ -147,8 +147,8 @@ def fingerprint_smoke_states(
     """
     Behavior-fingerprint states: smoke suite + optional Stage I traj frames.
 
-    Extra frames (crawl / cruise / crash) make surrogate fingerprints more
-    discriminative without changing FEATURE_SCHEMA_VERSION.
+    Extra frames (crawl / cruise / crash) make sandbox smoke tests more
+    discriminative.
     """
     base = list(default_smoke_states())
     if not dataset_path:

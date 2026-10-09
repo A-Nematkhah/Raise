@@ -1,8 +1,8 @@
 """
 Sandbox configuration.
 
-Ported from mobile_robot_env.rewards.sandbox.config. CrowdNav candidates
-receive a RewardState argument named ``state``.
+Ported from mobile_robot_env.rewards.sandbox.config. Candidates receive the
+domain reward state as an argument named ``state``.
 """
 
 from __future__ import annotations
@@ -99,9 +99,9 @@ class SandboxConfig:
     allow_while: bool = False
     allow_imports: bool = False
     # When set (e.g. highway), only these Attribute names + SAFE_METHOD_ATTRIBUTES
-    # are allowed. None = CrowdNav / legacy (only underscore ban).
+    # are allowed. None = only the underscore ban.
     allowed_attributes: Optional[Tuple[str, ...]] = None
     # When True (highway), module-level assignments may only bind constant
     # expressions and bare expressions may only be docstrings: no calls,
-    # lambdas or comprehensions run at import time. False = CrowdNav / legacy.
+    # lambdas or comprehensions run at import time.
     restrict_top_level: bool = False

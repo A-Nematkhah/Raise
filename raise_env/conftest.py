@@ -1,18 +1,8 @@
-"""Pytest root conftest: domain runtime path + stub rvo2 when unavailable."""
+"""Pytest root conftest: put raise_env on sys.path."""
 
 from __future__ import annotations
 
-import sys
-from unittest.mock import MagicMock
-
-
-import raise_paths  # noqa: F401 — arms domains/crowdnav/runtime on sys.path
-
-try:
-    import rvo2  # noqa: F401
-except ImportError:
-    if "rvo2" not in sys.modules:
-        sys.modules["rvo2"] = MagicMock()
+import raise_paths  # noqa: F401 — puts raise_env root on sys.path
 
 
 def pytest_configure(config):

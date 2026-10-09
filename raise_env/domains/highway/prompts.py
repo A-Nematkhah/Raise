@@ -5,48 +5,31 @@ from __future__ import annotations
 from typing import Optional
 
 from domains.highway.action_config import action_space_prompt_block
-from domains.highway.sandbox_fields import HIGHWAY_FORBIDDEN_HALLUCINATIONS
 
 DOMAIN_NAME = "highway"
 
 _SELECTION_OBJECTIVE = (
     "Your reward function is judged by training a PPO policy and evaluating it "
-    "on held-out rollouts. Among policies that survive at least one holdout "
-    "episode (SR > 0), candidates are ranked by Pareto dominance across: "
-    "collision rate and off-road rate (lower is better); forward progress, "
-    "mean speed, lane_change_rate (lane changes per step; more active lane "
-    "use counts as better), and overtakes_per_km (successful passes of a "
-    "vehicle that was ahead) (higher is better). Survival rate is used only "
-    "as the feasibility gate "
-    "(SR > 0), not as a separate ranked objective, because with exclusive "
-    "outcomes it is redundant with collision/off-road rates. A candidate is "
-    "only worse than another if it is equal-or-worse on every ranked "
-    "objective and strictly worse on at least one (collision/off-road rate "
-    "gaps within ~2 standard errors of the holdout episode count do not "
-    "count; the other objectives are compared as measured) — there is no fixed weighting between "
-    "safety, speed, and overtaking, and there is no preferred target speed. "
-    "Pure low-speed lane-keeping that never passes slower traffic is not "
-    "automatically preferred. Reason about these trade-offs directly from "
-    "the evidence given to you."
+    "on held-out rollouts. Candidates are ranked by one holdout fitness "
+    "score (higher is better) that combines survival (survival rate minus "
+    "collision rate minus half the off-road rate, scaled by a speed gate that "
+    "grows as the policy drives closer to free-flowing traffic speed), "
+    "forward progress and mean speed, minus penalties for lagging, degenerate "
+    "or very slow driving. Pure low-speed lane-keeping is therefore not "
+    "preferred, and crashing at high speed is not either. Reason about these "
+    "trade-offs directly from the evidence given to you."
 )
 
 _DIAGNOSIS_BEFORE_CODE = (
     "Before writing code:\n"
     "1) In 2-4 sentences, based ONLY on the evidence given above (not on any "
     "assumption about what 'usually' goes wrong), diagnose what is currently "
-    "limiting the holdout objectives / Pareto standing — e.g. an unexploited "
-    "safety/speed trade-off, a degenerate strategy visible in the numbers, or "
-    "something else you notice. When reward-component trends are present, use "
-    "them together with the task metrics.\n"
+    "limiting the holdout fitness — e.g. an unexploited safety/speed "
+    "trade-off, a degenerate strategy visible in the numbers, or something "
+    "else you notice.\n"
     "2) Then revise the reward function to address your own diagnosis.\n"
-    "Interpretation principles for reward-component trends (EUREKA):\n"
     "- If the survival/success rate is always near zero, rewrite the entire "
     "reward function.\n"
-    "- If a component's value is nearly identical across all checkpoints, "
-    "RL was not able to optimize it as written — consider changing its "
-    "scale/temperature, rewriting it, or discarding it.\n"
-    "- If one component's magnitude is significantly larger than the others, "
-    "rescale it to a comparable range.\n"
     "Output your diagnosis as plain text BEFORE the code fence. The code fence "
     "must contain ONLY the function, no diagnosis text inside it.\n"
     "A 'small precise change' can still mean removing or replacing a constant "
@@ -134,7 +117,7 @@ Negative examples (DO NOT write these — they fail validation):
 # BAD — hallucinated fields
 state.lane_position   # use state.ego.lane_index
 state.distance        # compute ((v.x)**2+(v.y)**2)**0.5 for v in state.others
-state.robot.px        # CrowdNav-only; use state.ego.x
+state.robot.px        # does not exist; use state.ego.x
 state.humans          # does not exist; use state.others
 ```
 - Output Format: only the Python function in a single code block.
@@ -209,37 +192,6 @@ Mutation Task:
 """ + _DIAGNOSIS_BEFORE_CODE + """
 """
 
-D3_SYSTEM_PROMPT = (
-    "You are a senior researcher in autonomous driving and RL. "
-    + _SELECTION_OBJECTIVE
-    + " "
-    + _BASE_MODEL_SPEED_PRIOR
-    + "IMPORTANT SCHEMA: def compute_reward(state, memory): — memory is a plain dict. "
-    "state.ego has .x .y .vx .vy .heading .speed .lane_index .on_road. "
-    "state.others is a tuple; iterate with 'for v in state.others:'. "
-    "state.ego.x/y are absolute; v.x/v.y/v.vx/v.vy are ego-relative "
-    "(v.x > 0 ahead, v.x < 0 behind) — compare v.x with 0, never with state.ego.x. "
-    "state.collision / state.off_road / state.timeout (bool; timeout = survived "
-    "to the time limit, a success). "
-    "state.progress and state.speed are available. "
-    "NO state.robot, NO state.humans, NO state.gx, NO state.lane_position, NO state.distance. "
-    "SANDBOX: never getattr/hasattr/__import__/eval; use ** 0.5; "
-    "return (total_reward: float, reward_components: dict[str, float]) — "
-    "flat component dict ≤12 str keys, finite floats, no nesting. "
-    "Write a short diagnosis as plain text, then a single Python fenced code block "
-    "containing ONLY the revised function."
-)
-
-D3_USER_PROMPT = """Current score (best so far): {last_score:.4f} (higher is better)
-Evidence / focus note:
-{feedback}
-{extra_context_if_any}
-""" + _DIAGNOSIS_BEFORE_CODE + """
-Revise the function below.
-Maintain signature def compute_reward(state, memory): and return (total_reward, reward_components).
-{current_code}
-"""
-
 D4_EXTERNAL_KNOWLEDGE = f"""# External Knowledge — Highway Fast
 ## Task
 - Domain: multi-lane highway driving (highway-fast-v0)
@@ -249,7 +201,7 @@ D4_EXTERNAL_KNOWLEDGE = f"""# External Knowledge — Highway Fast
 - SR: fraction of episodes survived without collision/off-road
 - CR: collision rate; TR: off-road rate
 - mean_speed / mean_progress / lane_change_rate / overtakes_per_km as logged on holdout
-- soft_success: logged diagnostic only (not a Pareto / selection objective —
+- soft_success: small fitness bonus only (not a primary objective —
   do not design the reward specifically to hit this indicator)
 """
 
@@ -401,76 +353,4 @@ def format_d2_mutation(
             func_name=func_name,
             reward_state_access=_REWARD_STATE_ACCESS,
         ),
-    )
-
-
-def format_d3_refinement(
-    current_code: str,
-    *,
-    last_score: float,
-    feedback: str = "",
-    extra_context_if_any: str = "",
-) -> str:
-    return D3_USER_PROMPT.format(
-        last_score=float(last_score),
-        feedback=feedback.strip() or "(none)",
-        extra_context_if_any=extra_context_if_any,
-        current_code=current_code.rstrip(),
-    )
-
-
-def format_d3_repair(
-    *,
-    bad_code: str,
-    validation_error: str,
-) -> str:
-    blob = f"{bad_code}\n{validation_error}".lower()
-    seen = [name for name in HIGHWAY_FORBIDDEN_HALLUCINATIONS if name in blob]
-    remap = {
-        "lane_position": "state.ego.lane_index",
-        "distance": "((v.x)**2 + (v.y)**2) ** 0.5 for v in state.others",
-        "robot": "state.ego (e.g. state.ego.x, state.ego.speed)",
-        "humans": "state.others",
-        "gx": "(no goal x — use state.progress / state.ego.x)",
-        "gy": "(no goal y — use state.ego.y)",
-        "px": "state.ego.x",
-        "py": "state.ego.y",
-        "history": "memory dict only",
-        "reaching_goal": "(no goal flag — use progress/speed shaping)",
-        "position": "state.ego.x / state.ego.y",
-        "velocity": "state.ego.vx / state.ego.vy or state.speed",
-        "vehicles": "state.others",
-        "nearby": "state.others",
-        "lane_id": "state.ego.lane_index",
-        "ego_vehicle": "state.ego",
-        "vx_ego": "state.ego.vx",
-    }
-    fix_lines = []
-    for name in seen:
-        alt = remap.get(name, "a documented HighwayRewardState field")
-        fix_lines.append(f"- Replace `{name}` → {alt}")
-    if not fix_lines:
-        fix_lines.append(
-            "- If ERROR mentions an attribute, delete it and use only "
-            "state.ego.* / state.others / state.collision|off_road|timeout / "
-            "state.progress / state.speed / memory."
-        )
-    fix_block = "\n".join(fix_lines)
-    return (
-        "The following highway reward failed validation. Repair it in ONE shot.\n\n"
-        f"ERROR: {validation_error}\n\n"
-        f"ORIGINAL CODE:\n{bad_code}\n\n"
-        "MANDATORY FIELD FIXES (hallucinated names are rejected by AST allowlist):\n"
-        f"{fix_block}\n\n"
-        "Allowed fields only:\n"
-        "  state.ego.{x,y,vx,vy,heading,speed,lane_index,on_road}\n"
-        "  state.others → for v in state.others: v.{x,y,vx,vy,heading}\n"
-        "  state.collision, state.off_road, state.timeout\n"
-        "  state.progress, state.speed, state.action, state.time_step, "
-        "state.global_time, state.time_limit\n"
-        "  memory.get / memory['key']\n\n"
-        "Keep signature def compute_reward(state, memory):. "
-        "No imports, getattr, hasattr, comprehensions. "
-        "Return (total_reward: float, reward_components: dict[str, float]). "
-        "Output only the fixed function (no markdown)."
     )

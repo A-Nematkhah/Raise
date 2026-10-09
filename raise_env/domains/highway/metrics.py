@@ -152,11 +152,8 @@ def _lag_penalty(sr: float, mean_speed: float) -> float:
 
 
 def highway_fitness(metrics: Optional[Mapping[str, Any]]) -> float:
-    # LEGACY: human-facing diagnostic scalar only. NOT used for evolutionary
-    # selection (see domains/highway/pareto_rank.py) and MUST NOT be surfaced to
-    # the LLM (see raise_core/raise_loop/proxy_feedback.py::evidence_block).
     """
-    Legacy diagnostic scalar (higher better). Prefer holdout metrics when present.
+    Selection fitness (higher better). Prefer holdout metrics when present.
 
         v_eff = speed_p10 if present else mean_speed
         if v_eff < v_floor:  return −hack_penalty   # hard disqualify
@@ -281,7 +278,7 @@ def attach_fitness(metrics: Dict[str, Any]) -> Dict[str, Any]:
     out["domain"] = "highway"
     value = float(highway_fitness(out))
     out["fitness"] = value
-    # Alias kept so CrowdNav-era readers / old JSONL still work.
+    # Alias read by selection helpers and older run JSON.
     out["selection_scalar"] = value
     comps = fitness_components(out)
     out["fitness_gate"] = float(comps.get("gate", 0.0))
