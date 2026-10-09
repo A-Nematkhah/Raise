@@ -6,9 +6,6 @@ domains/highway/data/stage1_dataset/
 domains/highway/data/stage1_dataset_*/
 !domains/highway/data/README.md
 
-# Untracked data from the removed CrowdNav domain (left on disk, never commit)
-domains/crowdnav/
-
 # Legacy path aliases (if someone still writes under raise_env/data/)
 data/stage1_dataset/
 data/highway_stage1_dataset/
