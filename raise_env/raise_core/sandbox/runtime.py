@@ -271,7 +271,7 @@ def _smoke_worker(
 
 
 def smoke_test_compute(
-    compute_fn: ComputeFn,
+    compute_fn: Optional[ComputeFn],
     states: Sequence[RewardState],
     config: SandboxConfig,
     *,
@@ -329,6 +329,9 @@ def smoke_test_compute(
         if status == "err":
             raise payload
         return
+
+    if compute_fn is None:
+        raise RewardSandboxError("smoke test needs either compute_fn or source_code")
 
     def _run() -> None:
         memory: Dict[str, Any] = {}

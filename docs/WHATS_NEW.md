@@ -405,6 +405,14 @@ CrowdNav همچنان frozen؛ همهٔ تغییرات رفتاری فقط highw
 - **Prompt/Spec:** معنای `state.timeout` (= بقا)، نوع `state.action`، جهت
   `lane_change_rate` و حاشیهٔ نویز (فقط CR/TR) صریح شد.
 - **CI:** job هایوی با torch CPU؛ تست‌های هایوی بدون deps skip می‌شوند.
+- **Sandbox:** کد کاندید اول در child process (با timeout) اجرا می‌شود و بعد در
+  پروسهٔ اصلی؛ ورودی خصمانه (تودرتویی عمیق، null byte) رد می‌شود نه crash.
+  در highway، سطح ماژول فقط ثابت می‌پذیرد (`restrict_top_level`) و
+  `make_highway_validator()` پیش‌فرض smoke stateهای highway را دارد.
+- **Score1 highway:** در worker دائمی با timeout (پیش‌فرض ۶۰s)؛ کاندید گیرکرده
+  با `score1_timeout` رد می‌شود و worker دوباره بالا می‌آید.
+- **Watchdog PPO:** اگر `highway_stall_seconds` (پیش‌فرض ۳۰۰) هیچ env stepی
+  نیاید، thread آموزش قطع و label شکست‌خورده ثبت می‌شود (ران ادامه می‌یابد).
 
 ---
 

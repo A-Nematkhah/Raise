@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from typing import Optional, Sequence
 
 from raise_core.sandbox.config import SandboxConfig
@@ -13,6 +14,7 @@ from domains.highway.action_config import (
     check_target_speed_literals,
     warn_inline_speed_literals,
 )
+from domains.highway.state import default_smoke_states
 
 logger = logging.getLogger(__name__)
 
@@ -63,9 +65,14 @@ class HighwayRewardValidator(RewardValidator):
         config: Optional[SandboxConfig] = None,
         smoke_states: Optional[Sequence[object]] = None,
     ) -> None:
+        cfg = config if config is not None else SandboxConfig()
+        if not cfg.restrict_top_level:
+            cfg = replace(cfg, restrict_top_level=True)
         super().__init__(
-            config=config,
-            smoke_states=smoke_states,
+            config=cfg,
+            smoke_states=(
+                smoke_states if smoke_states is not None else default_smoke_states()
+            ),
             allow_components=True,
         )
 

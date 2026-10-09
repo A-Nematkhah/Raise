@@ -60,14 +60,16 @@ class RewardValidator:
         tree = parse_reward_code(code, self.config)
         check_structure(tree, self.config)
         check_interface(tree, self.config)
-        compute_fn = compile_compute_reward(code, self.config)
+        # The killable child compiles and runs the source first, so module-level
+        # code that hangs or blows up never executes in this process.
         smoke_test_compute(
-            compute_fn,
+            None,
             self.smoke_states,
             self.config,
             source_code=code,
             allow_components=self.allow_components,
         )
+        compute_fn = compile_compute_reward(code, self.config)
         return SandboxedReward(
             compute_fn,
             self.config,
@@ -85,3 +87,5 @@ class RewardValidator:
             # Domain validators may ast.parse before the shared AST policy;
             # never let a bad LLM fragment kill the closed-loop run.
             return None, f"syntax error: {exc}"
+        except (ValueError, RecursionError, MemoryError) as exc:
+            return None, f"unparseable source ({type(exc).__name__}: {exc})"

@@ -575,6 +575,20 @@ def make_llm_client(
     raise ValueError(f"Unknown LLM provider: {provider!r}")
 
 
+# Above the sandbox's max_code_length; anything longer is rejected later anyway.
+_MAX_PARSE_CHARS = 50_000
+
+
+def _safe_parse(text: str) -> Optional[ast.Module]:
+    """``ast.parse`` that never raises on hostile LLM output (None instead)."""
+    if len(text) > _MAX_PARSE_CHARS:
+        return None
+    try:
+        return ast.parse(text, mode="exec")
+    except (SyntaxError, ValueError, RecursionError, MemoryError):
+        return None
+
+
 _FENCE_BLOCK_RE = re.compile(r"```(?:python)?\s*\n(.*?)```", re.DOTALL | re.IGNORECASE)
 
 
@@ -624,8 +638,6 @@ def split_reward_function_sources(
 
     Used for Appendix D.1 batch generation (one call, several ``def`` bodies).
     """
-    import ast
-
     blocks = extract_all_python_blocks(completion)
     if not blocks:
         blocks = [extract_python_code(completion, max_tokens=max_tokens)]
@@ -634,9 +646,8 @@ def split_reward_function_sources(
         block = block.strip()
         if not block:
             continue
-        try:
-            tree = ast.parse(block)
-        except SyntaxError:
+        tree = _safe_parse(block)
+        if tree is None:
             pieces.append(normalize_to_compute_reward(block, func_name))
             continue
         func_nodes = [node for node in tree.body if isinstance(node, ast.FunctionDef)]
@@ -765,13 +776,12 @@ def strip_redundant_scalar_subscripts(code: str) -> str:
     text = (code or "").strip()
     if not text:
         return text
-    try:
-        tree = ast.parse(text, mode="exec")
-    except SyntaxError:
+    tree = _safe_parse(text)
+    if tree is None:
         return text
-    new_tree = _StripScalarSubscripts().visit(tree)
-    ast.fix_missing_locations(new_tree)
     try:
+        new_tree = _StripScalarSubscripts().visit(tree)
+        ast.fix_missing_locations(new_tree)
         return ast.unparse(new_tree)
-    except Exception:  # noqa: BLE001 — keep original if unparse fails
+    except Exception:  # noqa: BLE001 — keep original if transform/unparse fails (incl. RecursionError)
         return text

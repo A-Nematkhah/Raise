@@ -147,6 +147,10 @@ def parse_reward_code(code: str, config: SandboxConfig) -> ast.Module:
         tree = ast.parse(code, mode="exec")
     except SyntaxError as exc:
         raise RewardSandboxError(f"syntax error: {exc}") from exc
+    except (ValueError, RecursionError, MemoryError) as exc:
+        raise RewardSandboxError(
+            f"unparseable source ({type(exc).__name__}: {exc})"
+        ) from exc
     if not isinstance(tree, ast.Module):
         raise RewardSandboxError("code must be a module of statements")
     return tree
@@ -154,7 +158,10 @@ def parse_reward_code(code: str, config: SandboxConfig) -> ast.Module:
 
 def check_structure(tree: ast.Module, config: SandboxConfig) -> None:
     visitor = _PolicyVisitor(config)
-    visitor.visit(tree)
+    try:
+        visitor.visit(tree)
+    except RecursionError as exc:
+        raise RewardSandboxError("expression nesting is too deep") from exc
     if visitor.reasons:
         raise RewardSandboxError("; ".join(visitor.reasons))
 
@@ -210,4 +217,62 @@ def check_interface(tree: ast.Module, config: SandboxConfig) -> ast.FunctionDef:
             )
     if fn.args.defaults:
         raise RewardSandboxError("compute_reward must not use default argument values")
+    if config.restrict_top_level:
+        check_top_level_constants(tree)
     return fn
+
+
+_CONSTANT_EXPR_NODES = (
+    ast.Constant,
+    ast.Tuple,
+    ast.List,
+    ast.Dict,
+    ast.Set,
+    ast.UnaryOp,
+    ast.BinOp,
+    ast.Name,
+    ast.Load,
+    ast.Store,
+    ast.unaryop,
+    ast.operator,
+)
+
+
+def _is_math_constant(node: ast.AST) -> bool:
+    return (
+        isinstance(node, ast.Attribute)
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "math"
+        and node.attr in ("pi", "e", "tau", "inf")
+    )
+
+
+def check_top_level_constants(tree: ast.Module) -> None:
+    """Module-level code may only bind constant expressions (no import-time work)."""
+    for node in tree.body:
+        if isinstance(node, ast.Expr):
+            if not (
+                isinstance(node.value, ast.Constant) and isinstance(node.value.value, str)
+            ):
+                raise RewardSandboxError(
+                    "top-level expressions are forbidden (only a docstring is allowed)"
+                )
+            continue
+        if isinstance(node, (ast.Assign, ast.AnnAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            if not all(isinstance(t, ast.Name) for t in targets):
+                raise RewardSandboxError(
+                    "top-level assignments must bind plain names (NAME = constant)"
+                )
+            if node.value is None:
+                continue
+            for sub in ast.walk(node.value):
+                if _is_math_constant(sub):
+                    continue
+                if isinstance(sub, ast.Name) and sub.id == "math":
+                    continue
+                if not isinstance(sub, _CONSTANT_EXPR_NODES):
+                    raise RewardSandboxError(
+                        "top-level assignments may only bind constant expressions "
+                        f"(found {type(sub).__name__}); move logic into compute_reward"
+                    )

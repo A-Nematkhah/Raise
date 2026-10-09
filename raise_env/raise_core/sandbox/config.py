@@ -101,3 +101,7 @@ class SandboxConfig:
     # When set (e.g. highway), only these Attribute names + SAFE_METHOD_ATTRIBUTES
     # are allowed. None = CrowdNav / legacy (only underscore ban).
     allowed_attributes: Optional[Tuple[str, ...]] = None
+    # When True (highway), module-level assignments may only bind constant
+    # expressions and bare expressions may only be docstrings: no calls,
+    # lambdas or comprehensions run at import time. False = CrowdNav / legacy.
+    restrict_top_level: bool = False

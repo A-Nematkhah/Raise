@@ -11,10 +11,8 @@ from domains.highway.adapter import (
     make_stage2_trainer,
     make_stage3_trainer,
 )
-from domains.highway.stage1 import (
-    DEFAULT_STAGE1_DATASET,
-    make_score_fn as highway_make_score_fn,
-)
+from domains.highway.score1_worker import make_score_fn as highway_make_score_fn
+from domains.highway.stage1 import DEFAULT_STAGE1_DATASET
 from domains.highway.sandbox_fields import highway_sandbox_config
 from domains.highway.state import fingerprint_smoke_states
 

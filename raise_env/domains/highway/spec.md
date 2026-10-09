@@ -85,6 +85,16 @@ before smoke. D.1 includes negative few-shots; D.3 repair maps them to
 legal substitutes. SeedVariant rotates clearance / lane / speed-band /
 crawl structures (not only coef tweaks).
 
+Runaway code is contained at every stage:
+
+- Validation compiles and smoke-tests in a killable child before the parent
+  ever executes the source; module level may only bind constants
+  (`restrict_top_level`), so nothing heavy runs at import time.
+- Dataset Score1 runs in a persistent child worker (`score1_worker.py`,
+  60 s per candidate); a timeout rejects the candidate (`score1_timeout`).
+- PPO labels run under a stall watchdog (`watchdog.py`): no env step for
+  `highway_stall_seconds` (default 300) fails the label, not the run.
+
 ## Closed-loop / Stage III (Phase 4)
 
 - Hard Surrogate gate (highway profile): `n_labeled ≥ 16` **or** mean val
@@ -147,8 +157,10 @@ are the six listed above.
 | `prompts.py` | D1/D2/D3/D5 templates for HighwayRewardState |
 | `state.py` | Dataclasses + smoke states |
 | `stage1.py` | Score1 / smoke factory |
+| `score1_worker.py` | Dataset Score1 in a killable child (pack entry) |
 | `env_wrapper.py` | Obs → state + reward injection |
 | `adapter.py` | Stage II/III SB3 trainers |
+| `watchdog.py` | PPO stall watchdog |
 | `pack.py` | `get_pack()` |
 
 ## Dependencies

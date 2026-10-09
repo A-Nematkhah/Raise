@@ -17,6 +17,7 @@ from domains.highway.state import (
     NearbyVehicle,
     lane_index_from_y,
 )
+from domains.highway.watchdog import beat as watchdog_beat
 
 ENV_ID = "highway-fast-v0"
 DEFAULT_DURATION = 40  # seconds
@@ -289,6 +290,7 @@ class RewardInjectedHighwayEnv(_gym_wrapper_base()):  # type: ignore[misc,valid-
         return obs, info
 
     def step(self, action):
+        watchdog_beat()
         obs, _native_r, terminated, truncated, info = self.env.step(action)
         info = dict(info or {})
         collision = bool(info.get("crashed", False))

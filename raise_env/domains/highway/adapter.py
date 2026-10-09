@@ -11,6 +11,7 @@ from typing import Any, Dict, Optional
 
 from domains.highway.overtake import OvertakeTracker
 from domains.highway.state import lane_index_from_y
+from domains.highway.watchdog import StallWatchdog, stall_seconds_from_config
 from raise_core.refine import ProxyMetrics, StubPolicyTrainer
 
 logger = logging.getLogger(__name__)
@@ -457,6 +458,22 @@ class HighwayPPOTrainer:
         self.stage = stage
 
     def train_and_eval(
+        self,
+        candidate: Any,
+        *,
+        round_index: int,
+        config: Any,
+        **kwargs: Any,
+    ) -> Any:
+        with StallWatchdog(
+            stall_seconds_from_config(config),
+            label=str(getattr(candidate, "candidate_id", "")),
+        ):
+            return self._train_and_eval(
+                candidate, round_index=round_index, config=config, **kwargs
+            )
+
+    def _train_and_eval(
         self,
         candidate: Any,
         *,

@@ -54,6 +54,7 @@ HIGHWAY_FORBIDDEN_HALLUCINATIONS: Tuple[str, ...] = (
 
 def highway_sandbox_config(**overrides) -> SandboxConfig:
     """SandboxConfig with Attribute allowlist for highway-fast-v0 rewards."""
+    overrides.setdefault("restrict_top_level", True)
     return SandboxConfig(
         allowed_attributes=HIGHWAY_STATE_ATTRIBUTES,
         **overrides,
