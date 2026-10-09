@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from domains.highway.env_wrapper import HOLDOUT_VEHICLES, holdout_env_config
+from domains.highway.env_wrapper import (
+    HOLDOUT_VEHICLES,
+    HOLDOUT_VEHICLES_DENSITY,
+    holdout_env_config,
+    training_env_config,
+)
 from domains.highway.metrics import (
     HACK_PENALTY,
     V_FLOOR,
@@ -17,7 +22,10 @@ from domains.highway.metrics import (
 def test_holdout_env_denser_than_default():
     cfg = holdout_env_config()
     assert int(cfg["vehicles_count"]) == int(HOLDOUT_VEHICLES)
-    assert int(cfg["vehicles_count"]) > 20
+    assert float(cfg["vehicles_density"]) == float(HOLDOUT_VEHICLES_DENSITY)
+    assert float(cfg["vehicles_density"]) > float(
+        training_env_config().get("vehicles_density", 1.0)
+    )
 
 
 def test_speed_thresholds_match_spec():

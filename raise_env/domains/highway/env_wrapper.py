@@ -25,7 +25,10 @@ DEFAULT_POLICY_FREQ = 5
 DEFAULT_VEHICLES = 20
 MAX_OTHERS = 5
 # Denser traffic + distinct seed band for selection / anti-hacking eval.
-HOLDOUT_VEHICLES = 32
+# highway-env spawns each vehicle ahead of the front-most one with a gap scaled
+# by 1/vehicles_density, so density (not vehicles_count) controls local traffic.
+HOLDOUT_VEHICLES = 20
+HOLDOUT_VEHICLES_DENSITY = 1.5
 HOLDOUT_SEED_OFFSET = 50_003
 
 
@@ -92,6 +95,7 @@ def holdout_env_config() -> Dict[str, Any]:
     """
     cfg = training_env_config()
     cfg["vehicles_count"] = int(HOLDOUT_VEHICLES)
+    cfg["vehicles_density"] = float(HOLDOUT_VEHICLES_DENSITY)
     cfg["lanes_count"] = int(DEFAULT_LANES)
     return cfg
 
