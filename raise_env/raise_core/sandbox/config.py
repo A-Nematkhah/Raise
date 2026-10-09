@@ -137,3 +137,6 @@ class SandboxConfig:
     mean_call_window: int = 100
     # Smoke states run alone in a child process, so a tighter cap is safe.
     smoke_max_call_seconds: float = 0.1
+    # Per-step |total reward| bound: PPO runs without reward normalization, so
+    # huge scales wreck the value loss regardless of the reward's idea.
+    max_abs_reward: float = 1e4

@@ -5,9 +5,18 @@ from __future__ import annotations
 from typing import Optional
 
 from domains.highway.action_config import action_space_prompt_block
-from raise_core.sandbox.config import SAFE_MATH_ATTRIBUTES, SAFE_MATH_CONSTANTS
+from raise_core.sandbox.config import (
+    SAFE_MATH_ATTRIBUTES,
+    SAFE_MATH_CONSTANTS,
+    SandboxConfig,
+)
 
 DOMAIN_NAME = "highway"
+
+_MAGNITUDE_RULE = (
+    f"Keep every per-step total reward within +/-{SandboxConfig().max_abs_reward:g} "
+    "(larger values are rejected)."
+)
 
 _MATH_RULE = (
     "Math: `math` is pre-injected - never write `import math`. Allowed: "
@@ -117,6 +126,7 @@ def compute_reward(state, memory):
 Constraints (CRITICAL):
 - Hyperparameters must be local variables inside the function body.
 - No module-level lists/dicts/sets (they would survive episode resets); keep cross-step state in memory.
+- """ + _MAGNITUDE_RULE + """
 - Signature: exactly one function def {func_name}(state, memory): returning (finite float, dict[str, float]).
 - Sandbox: no import/from, no classes, no while loops, no list/dict/set comprehensions or generator expressions, no reflection builtins.
 - Access fields only via dot notation. Iterate others with `for v in state.others:`.
@@ -173,6 +183,7 @@ Sandbox rules (CRITICAL — invalid code is discarded):
 {reward_state_access}
 - Hyperparameters as locals only; no extra args beyond (state, memory).
 - No module-level lists/dicts/sets (they would survive episode resets).
+- """ + _MAGNITUDE_RULE + """
 - Put diagnosis as plain text BEFORE the fence; the fenced block must contain ONLY the function.
 """
 

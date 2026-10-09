@@ -159,6 +159,15 @@ def unpack_reward_return(
     return total, comps
 
 
+def require_bounded_reward(total: float, config: SandboxConfig) -> float:
+    if abs(total) > config.max_abs_reward:
+        raise RewardSandboxError(
+            f"reward magnitude too large: {total:.3g} "
+            f"(keep per-step rewards within +/-{config.max_abs_reward:g})"
+        )
+    return total
+
+
 def _strip_import_nodes(tree: ast.AST) -> ast.AST:
     """Remove every Import/ImportFrom anywhere in the tree (math is injected)."""
 
@@ -283,7 +292,8 @@ def _smoke_worker(
                     f"(limit {config.smoke_max_call_seconds}s per step); "
                     "avoid loops whose length grows with the state"
                 )
-            unpack_reward_return(value, allow_components=bool(allow_components))
+            total, _ = unpack_reward_return(value, allow_components=bool(allow_components))
+            require_bounded_reward(total, config)
         queue.put(("ok", None))
     except BaseException as exc:  # noqa: BLE001
         queue.put(("err", exc))
@@ -443,6 +453,7 @@ class SandboxedReward(RewardFunction):
         total, comps = unpack_reward_return(
             value, allow_components=self._allow_components
         )
+        require_bounded_reward(total, self._config)
         # Stash last step only — never accumulate here (diagnostics callback owns trends).
         self._last_components = comps
         return total
