@@ -14,6 +14,7 @@ from domains.highway.action_config import (
 )
 from domains.highway.state import (
     DEFAULT_LANES,
+    LANE_WIDTH_M,
     EgoVehicle,
     HighwayRewardState,
     NearbyVehicle,
@@ -33,9 +34,16 @@ HOLDOUT_VEHICLES = 20
 HOLDOUT_VEHICLES_DENSITY = 1.5
 HOLDOUT_SEED_OFFSET = 50_003
 
+# Policy observation scales (ego-centric, roughly unit range).
+OBS_X_SCALE = 100.0  # m; half the 200 m perception range
+OBS_Y_SCALE = LANE_WIDTH_M * (DEFAULT_LANES - 1)  # m; outer lane centres
+OBS_V_SCALE = 40.0  # m/s; Vehicle.MAX_SPEED
+OBS_DV_SCALE = 20.0  # m/s; relative speeds
+
 
 def _base_env_config(action: Dict[str, Any]) -> Dict[str, Any]:
     # absolute=True: ego x is world frame so progress = Δx is well-defined.
+    # RewardInjectedHighwayEnv hands PPO policy_observation(obs), not this raw obs.
     return {
         "observation": {
             "type": "Kinematics",
@@ -213,6 +221,49 @@ def kinematics_to_state(
     return state, ego_x
 
 
+def policy_observation(obs: Any) -> np.ndarray:
+    """
+    Ego-centric, scaled view of the absolute Kinematics obs for the PPO policy.
+
+    Row 0 (ego): ``[1, 0, y/Y, vx/V, vy/V, heading]`` — lateral position stays
+    absolute so the policy knows its lane; world x is dropped (it only grows).
+    Rows 1..: ``[1, dx/X, dy/Y, dvx/DV, dvy/DV, heading]`` relative to ego.
+    Absent vehicles stay all-zero. Shape and dtype match the env obs space.
+    """
+    arr = np.asarray(obs, dtype=np.float32)
+    out = np.zeros_like(arr)
+    if arr.ndim != 2 or arr.shape[0] == 0 or not _row_presence(arr[0]):
+        return out
+    ego = arr[0]
+    out[0, 0] = 1.0
+    out[0, 2] = ego[2] / OBS_Y_SCALE
+    out[0, 3] = ego[3] / OBS_V_SCALE
+    out[0, 4] = ego[4] / OBS_V_SCALE
+    out[0, 5] = ego[5]
+    present = arr[1:, 0] > 0.5
+    rows = arr[1:][present]
+    if rows.size:
+        rel = np.zeros_like(rows)
+        rel[:, 0] = 1.0
+        rel[:, 1] = (rows[:, 1] - ego[1]) / OBS_X_SCALE
+        rel[:, 2] = (rows[:, 2] - ego[2]) / OBS_Y_SCALE
+        rel[:, 3] = (rows[:, 3] - ego[3]) / OBS_DV_SCALE
+        rel[:, 4] = (rows[:, 4] - ego[4]) / OBS_DV_SCALE
+        rel[:, 5] = rows[:, 5]
+        out[1:][present] = rel
+    return out
+
+
+def nearest_gap(state: HighwayRewardState) -> Optional[float]:
+    """Euclidean distance (m) to the closest observed vehicle, or None."""
+    best: Optional[float] = None
+    for v in state.others:
+        dist = float((v.x * v.x + v.y * v.y) ** 0.5)
+        if best is None or dist < best:
+            best = dist
+    return best
+
+
 def action_for_state(action: Any, action_space: Any) -> Any:
     """Plain Python ``state.action``: ``int`` for Discrete, tuple of floats for Box.
 
@@ -272,12 +323,14 @@ class RewardInjectedHighwayEnv(gym.Wrapper):
         if options is not None:
             kwargs["options"] = options
         obs, info = self.env.reset(**kwargs)
+        info = dict(info or {})
         arr = np.asarray(obs, dtype=np.float64)
         if arr.ndim == 2 and arr.shape[0] > 0 and _row_presence(arr[0]):
             self._ego_x = float(arr[0][1])
+            info["raise_lane_index"] = int(lane_index_from_y(float(arr[0][2])))
         else:
             self._ego_x = 0.0
-        return obs, info
+        return policy_observation(obs), info
 
     def step(self, action):
         watchdog_beat()
@@ -314,5 +367,7 @@ class RewardInjectedHighwayEnv(gym.Wrapper):
         info["raise_progress"] = float(state.progress)
         info["raise_speed"] = float(state.speed)
         info["raise_ego_x"] = float(self._ego_x if self._ego_x is not None else 0.0)
+        info["raise_lane_index"] = int(state.ego.lane_index)
+        info["raise_nearest_gap"] = nearest_gap(state)
         info["raise_reward_components"] = comps
-        return obs, reward, bool(terminated), bool(truncated), info
+        return policy_observation(obs), reward, bool(terminated), bool(truncated), info

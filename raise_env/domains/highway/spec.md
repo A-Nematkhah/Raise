@@ -21,12 +21,27 @@ iterate, do not index)
 Flags: `collision`, `off_road`, `timeout`, `action`, `time_step`, `global_time`, `time_limit`  
 - `timeout` is True only on the last step of an episode truncated at the time
   limit **without** collision/off-road, i.e. a survived (successful) episode.
-- `action` is the integer meta-action index (DiscreteMetaAction:
-  0=LANE_LEFT, 1=IDLE, 2=LANE_RIGHT, 3=FASTER, 4=SLOWER) or the raw numeric
-  array under ContinuousAction.
+- `action` is a plain `int` meta-action index (DiscreteMetaAction:
+  0=LANE_LEFT, 1=IDLE, 2=LANE_RIGHT, 3=FASTER, 4=SLOWER) or a tuple of floats
+  `(acceleration[, steering])` under ContinuousAction (speed clamped to
+  `[0, 40]` m/s). Smoke states follow the active action mode.
+- Lane 0 is the leftmost lane; LANE_LEFT lowers `lane_index`. Headings are
+  absolute radians.
 
 Shaping helpers: `progress` (forward m since last frame), `speed`  
 Episode memory: plain `dict` cleared on reset.
+
+## Environment and policy observation
+
+- Kinematics obs: ego + 5 nearest vehicles (`see_behind`), absolute and
+  unnormalized — used only to build `HighwayRewardState`.
+- PPO sees `policy_observation(obs)`: same `(6, 6)` shape, ego-centric and
+  scaled (ego row keeps `y` for lane awareness and drops world `x`; other rows
+  are `dx/100, dy/12, dvx/20, dvy/20`).
+- Train traffic: 4 lanes, 20 vehicles, 40 s at 5 Hz (200 steps).
+- Holdout (selection) traffic: 20 vehicles at `vehicles_density=1.5`.
+  highway-env spawns vehicles one after another ahead of the ego, so density —
+  not `vehicles_count` — controls how close traffic is.
 
 ## Design principles
 

@@ -18,7 +18,6 @@ from domains.highway.action_config import (
 from domains.highway.metrics import attach_fitness, format_highway_metrics_line
 from domains.highway.objective_constants import V_TARGET
 from domains.highway.overtake import OvertakeTracker
-from domains.highway.state import lane_index_from_y
 from domains.highway.watchdog import StallWatchdog, stall_seconds_from_config
 from raise_core import console
 from raise_core.refine import ProxyMetrics, StubPolicyTrainer
@@ -160,7 +159,8 @@ def _eval_metrics(
 
     for ep in range(n_eps):
         # Offset well above train seeds so eval scenarios differ from train.
-        obs, _info = env.reset(seed=base + offset + ep * 97)
+        obs, reset_info = env.reset(seed=base + offset + ep * 97)
+        prev_lane = reset_info.get("raise_lane_index")
         done = False
         ep_t = 0.0
         ep_dist = 0.0
@@ -174,13 +174,13 @@ def _eval_metrics(
         overtake_tracker.observe(env)
         while not done:
             action, _ = model.predict(obs, deterministic=deterministic)
-            prev_lane = _lane_index_from_obs(obs)
             obs, reward, terminated, truncated, info = env.step(action)
             # Lane-change from lane index Δ (works for Discrete + Continuous).
             # Continuous lateral=False never changes lane → rate stays 0.
-            cur_lane = _lane_index_from_obs(obs)
+            cur_lane = info.get("raise_lane_index")
             if prev_lane is not None and cur_lane is not None and prev_lane != cur_lane:
                 ep_lane_chg += 1
+            prev_lane = cur_lane
 
             dt = float(getattr(env, "_time_step", 0.2))
             ep_t += dt
@@ -190,7 +190,7 @@ def _eval_metrics(
             ep_speed_sum += spd
             ep_steps += 1
 
-            gap = _nearest_gap_from_obs(obs)
+            gap = info.get("raise_nearest_gap")
             if gap is not None:
                 ep_gap_sum += gap
 
@@ -260,33 +260,6 @@ def _eval_metrics(
         "outcome_unique": int(len(set(outcomes))),
     }
     return metrics
-
-
-def _nearest_gap_from_obs(obs: Any) -> Optional[float]:
-    arr = np.asarray(obs, dtype=np.float64)
-    if arr.ndim != 2 or arr.shape[0] < 2 or arr.shape[1] < 3:
-        return None
-    best = None
-    for row in arr[1:]:
-        if float(row[0]) <= 0.5:
-            continue
-        # Absolute kinematics: distance in xy to ego row0.
-        dx = float(row[1]) - float(arr[0][1])
-        dy = float(row[2]) - float(arr[0][2])
-        dist = float((dx * dx + dy * dy) ** 0.5)
-        if best is None or dist < best:
-            best = dist
-    return best
-
-
-def _lane_index_from_obs(obs: Any) -> Optional[int]:
-    """Discrete lane index from kinematics y (same mapping as kinematics_to_state)."""
-    arr = np.asarray(obs, dtype=np.float64)
-    if arr.ndim != 2 or arr.shape[0] < 1 or arr.shape[1] < 3:
-        return None
-    if float(arr[0][0]) <= 0.5:
-        return None
-    return lane_index_from_y(float(arr[0][2]))
 
 
 def metrics_to_highway_dict(metrics: ProxyMetrics) -> Dict[str, float]:
