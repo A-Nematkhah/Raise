@@ -13,6 +13,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 import numpy as np
 
 from domains.highway.action_config import ActionModeSettings, get_action_settings
+from domains.highway.objective_constants import LAG_SPEED_MPS, PPO_GAMMA
 from domains.highway.state import (
     EgoVehicle,
     HighwayRewardState,
@@ -295,67 +296,52 @@ def _traj_mean_progress(traj: HighwayTrajectoryRecord) -> float:
     return float(sum(float(s.progress) for s in traj.states))
 
 
-def _rule_score_at_frame(traj: HighwayTrajectoryRecord, frame: int) -> float:
-    """
-    Highway analytical preference along a trajectory (higher = better).
-
-    Rewards instantaneous progress and cruise speed and collapses on collision / off-road frames.
-    """
-    idx = min(frame, len(traj.states) - 1)
-    st = traj.states[idx]
-    if st.collision:
-        return -1e6 - float(idx)
-    if st.off_road:
-        return -5e5 - float(idx)
-
-    # Dense shaping: forward progress + band-limited speed + position trend.
+def _step_rule(st: HighwayRewardState) -> float:
+    """Analytical per-step preference on a surviving frame (higher = better)."""
     speed = float(st.speed)
-    progress = float(st.progress)
     speed_term = float(np.clip(speed / 25.0, 0.0, 1.5))
-    # Lag behind traffic (~20 m/s) is the crawl / decoy failure mode.
+    # Lag behind traffic (~20 m/s) is the crawl failure mode.
     crawl = max(0.0, 18.0 - speed) / 18.0
-    # Include ego.x so within-traj ranks are non-constant when progress is flat.
-    return float(
-        3.0 * progress + 2.0 * speed_term - 1.5 * crawl + 0.05 * float(st.ego.x)
-    )
+    return float(3.0 * float(st.progress) + 2.0 * speed_term - 1.5 * crawl)
 
 
-def _reward_cumulatives(reward_fn: Any, traj: HighwayTrajectoryRecord) -> List[float]:
+def _step_rewards(reward_fn: Any, traj: HighwayTrajectoryRecord) -> List[float]:
     if hasattr(reward_fn, "reset"):
         reward_fn.reset()
-    cum = 0.0
-    vals: List[float] = []
-    for st in traj.states:
-        cum += float(reward_fn.compute(st))
-        vals.append(cum)
-    return vals
+    return [float(reward_fn.compute(st)) for st in traj.states]
 
 
-def _episode_return(reward_fn: Any, traj: HighwayTrajectoryRecord) -> float:
-    vals = _reward_cumulatives(reward_fn, traj)
-    return float(vals[-1]) if vals else 0.0
+def _discounted_return(rewards: Sequence[float], gamma: float = PPO_GAMMA) -> float:
+    """The quantity PPO maximizes from the first frame of the episode."""
+    if not rewards:
+        return 0.0
+    return float(np.dot(np.asarray(rewards, dtype=float), gamma ** np.arange(len(rewards))))
 
 
-def _spearman_component(
-    reward_fn: Any, trajectories: Sequence[HighwayTrajectoryRecord]
+def _step_spearman(
+    steps: Dict[str, List[float]], trajectories: Sequence[HighwayTrajectoryRecord]
 ) -> Tuple[float, float, int, int]:
-    """Return (mean_rho, deg_frac, n_pairs, n_deg)."""
-    pair_scores: List[float] = []
+    """Mean within-trajectory Spearman(step reward, step rule) on surviving frames.
+
+    Returns (mean_rho, deg_frac, n_trajs, n_deg); a reward that is constant
+    along a trajectory has no defined rank correlation there (degenerate).
+    """
+    rhos: List[float] = []
     n_deg = 0
-    n_pairs = 0
     for traj in trajectories:
-        rules = [_rule_score_at_frame(traj, f) for f in range(len(traj.states))]
-        rewards = _reward_cumulatives(reward_fn, traj)
-        rho = spearman_correlation(rules, rewards)
-        n_pairs += 1
-        if rho is None or (isinstance(rho, float) and (rho != rho)):
+        frames = [
+            (r, _step_rule(st))
+            for r, st in zip(steps[traj.trajectory_id], traj.states)
+            if not (st.collision or st.off_road)
+        ]
+        rho = spearman_correlation([f[0] for f in frames], [f[1] for f in frames])
+        if rho is None or rho != rho:
             n_deg += 1
             continue
-        pair_scores.append(float(rho))
-    deg_frac = float(n_deg) / float(max(1, n_pairs))
-    if not pair_scores:
-        return 0.0, deg_frac, n_pairs, n_deg
-    return float(np.mean(pair_scores)), deg_frac, n_pairs, n_deg
+        rhos.append(float(rho))
+    n = len(trajectories)
+    deg_frac = float(n_deg) / float(max(1, n))
+    return (float(np.mean(rhos)) if rhos else 0.0), deg_frac, n, n_deg
 
 
 def _preference_auc(
@@ -363,10 +349,12 @@ def _preference_auc(
     trajectories: Sequence[HighwayTrajectoryRecord],
 ) -> float:
     """
-    Pairwise preference: success ≻ timeout ≻ collision on episode returns.
+    Pairwise preference success ≻ timeout ≻ collision on ``returns``, as ``2·AUC − 1``.
 
-    Returns fraction of correctly ordered pairs in [-1, 1] mapped to [0, 1]
-    then shifted to roughly [-1, 1] via ``2*auc - 1`` for mixing.
+    With discounted returns this asks whether PPO's objective ranks a survived
+    episode above a failed one. A positive per-step reward already favours
+    survival (termination forfeits future reward); a crash bonus that outweighs
+    the discounted tail does not.
     """
     by_label: Dict[str, List[float]] = {"success": [], "timeout": [], "collision": []}
     for traj in trajectories:
@@ -451,81 +439,62 @@ def _overtake_alignment(
     return float(rho)
 
 
-def _is_positive_success(traj: HighwayTrajectoryRecord) -> bool:
-    """Cruise / overtake / mid-gear successes (not crawl/lag decoys)."""
+TRAJECTORY_ROLES = ("positive", "neutral", "lag", "failure")
+
+
+def trajectory_role(traj: HighwayTrajectoryRecord) -> str:
+    """``metadata["role"]`` if set, else inferred for datasets collected before roles.
+
+    positive: a success at traffic speed (the behaviour we want); neutral: a
+    success that is neither wanted nor a failure (e.g. lowest-gear cruise);
+    lag: a success well below traffic speed; failure: collision or off-road.
+    """
+    role = str((traj.metadata or {}).get("role") or "").strip().lower()
+    if role in TRAJECTORY_ROLES:
+        return role
     if traj.label != "success":
-        return False
+        return "failure"
     beh = str(traj.behavior or "").lower()
-    spd = _traj_mean_speed(traj)
-    if any(tag in beh for tag in ("crawl", "lag", "decoy_lag")):
-        return False
-    if any(tag in beh for tag in ("safe", "fast", "overtake", "cruise")):
-        return True
-    return spd >= 20.0
+    if any(tag in beh for tag in ("crawl", "lag")) or _traj_mean_speed(traj) < LAG_SPEED_MPS:
+        return "lag"
+    if "cruise" in beh:
+        return "neutral"
+    return "positive"
 
 
 def _crawl_penalty(
     returns: Dict[str, float],
     trajectories: Sequence[HighwayTrajectoryRecord],
 ) -> float:
-    """
-    Positive penalty if mean return on lag/crawl successes ≥ fast ones.
-
-    Crawl/lag trajs: behavior contains crawl|lag|decoy_lag, or mean_speed < 18.
-    Positive trajs: safe/fast/cruise/overtake tag or mean_speed ≥ 20.
-    """
-    crawl_rets: List[float] = []
-    fast_rets: List[float] = []
+    """Positive when lag successes earn at least the mean return of positive ones."""
+    lag_rets: List[float] = []
+    pos_rets: List[float] = []
     for t in trajectories:
-        if t.label != "success":
-            continue
-        r = float(returns[t.trajectory_id])
-        spd = _traj_mean_speed(t)
-        beh = str(t.behavior or "").lower()
-        if any(tag in beh for tag in ("crawl", "lag", "decoy_lag")) or spd < 18.0:
-            crawl_rets.append(r)
-        elif _is_positive_success(t):
-            fast_rets.append(r)
-    if not crawl_rets or not fast_rets:
+        role = trajectory_role(t)
+        if role == "lag":
+            lag_rets.append(float(returns[t.trajectory_id]))
+        elif role == "positive":
+            pos_rets.append(float(returns[t.trajectory_id]))
+    if not lag_rets or not pos_rets:
         return 0.0
-    gap = float(np.mean(crawl_rets) - np.mean(fast_rets))
-    # Only punish when crawl/lag is preferred or tied.
-    return float(max(0.0, gap) / (abs(float(np.mean(fast_rets))) + 1.0))
+    gap = float(np.mean(lag_rets) - np.mean(pos_rets))
+    return float(max(0.0, gap) / (abs(float(np.mean(pos_rets))) + 1.0))
 
 
-def _collision_decoy_penalty(
-    returns: Dict[str, float],
-    trajectories: Sequence[HighwayTrajectoryRecord],
-) -> float:
-    """
-    Positive penalty if collision / decoy_crash trajs outscore safe successes.
-
-    Catches rewards that ignore crashes or actively prefer collision bait.
-    """
-    crash_rets: List[float] = []
-    fast_rets: List[float] = []
-    for t in trajectories:
-        r = float(returns[t.trajectory_id])
-        beh = str(t.behavior or "").lower()
-        if t.label == "collision" or "decoy_crash" in beh or "decoy_collision" in beh:
-            crash_rets.append(r)
-        elif _is_positive_success(t):
-            fast_rets.append(r)
-    if not crash_rets or not fast_rets:
-        return 0.0
-    gap = float(np.mean(crash_rets) - np.mean(fast_rets))
-    return float(max(0.0, gap) / (abs(float(np.mean(fast_rets))) + 1.0))
-
-
-# Score1 positive-component weights (sum to 1.0 before decoy penalties).
-# Overtake taken modestly (0.15) from former throughput (0.35→0.20) so
-# preference/Spearman stay dominant while skillful passing is visible.
-_W_SPEARMAN = 0.25
-_W_PREFERENCE = 0.40
-_W_THROUGHPUT = 0.20
-_W_OVERTAKE = 0.15
-_W_CRAWL_PEN = 0.50
-_W_CRASH_PEN = 0.35
+# Score1 = W_SAFETY·safety + W_SAFETY·max(0, safety)·quality − W_CRAWL·crawl.
+# Like the Stage II fitness, driving quality only counts once the reward ranks
+# survival above failure. Quality is a convex mix in [-1, 1]: throughput and
+# overtakes rank whole successful episodes, the step term checks per-frame
+# shaping. The weights are a design choice, not fitted (no labels to fit to).
+_W_SAFETY = 0.5
+_W_THROUGHPUT = 0.40
+_W_OVERTAKE = 0.25
+_W_STEP = 0.35
+_W_CRAWL_PEN = 0.5
+# Hard reject: PPO's discounted objective ranks failed episodes above survived
+# ones more often than the reverse (e.g. a crash bonus, or a negative per-step
+# reward, which makes ending the episode early pay).
+PREFERS_CRASH_SAFETY = 0.0
 
 
 def score_highway_dataset(
@@ -535,71 +504,60 @@ def score_highway_dataset(
     candidate_id: str = "",
 ) -> Score1Result:
     """
-    Hybrid highway Score1 (higher better, roughly in [-1, 1] before reject).
+    Highway Score1: a cheap sanity filter for a candidate reward (in [-1, 1]).
 
-    Components (weights sum to 1 before decoy penalties)::
+    ::
 
-        0.25 · within-traj Spearman(highway_rule, cum_reward)
-        0.40 · preference AUC (success ≻ timeout ≻ collision)
-        0.20 · throughput alignment on success trajs
-        0.15 · overtake alignment on success trajs
-        − 0.50 · crawl/lag_penalty
-        − 0.35 · collision_decoy_penalty
+        safety  = 2·AUC − 1 of success ≻ timeout ≻ collision on discounted returns (γ = PPO's)
+        quality = 0.40·throughput + 0.25·overtake + 0.35·step_spearman
+        Score1  = 0.5·safety + 0.5·max(0, safety)·quality − 0.5·crawl_penalty
+
+    Rejected: ``no_signal`` (no component carries information) or
+    ``prefers_crash`` (safety < PREFERS_CRASH_SAFETY).
     """
     del candidate_id  # reserved for logging / future per-candidate caches
     if not trajectories:
         return Score1Result(score=0.0, degenerate_fraction=1.0, rejected=True, reject_reason="empty")
 
-    spearman_mean, deg_frac, n_pairs, n_deg = _spearman_component(reward_fn, trajectories)
-    returns = {t.trajectory_id: _episode_return(reward_fn, t) for t in trajectories}
-    pref = _preference_auc(returns, trajectories)
+    steps = {t.trajectory_id: _step_rewards(reward_fn, t) for t in trajectories}
+    returns = {tid: _discounted_return(r) for tid, r in steps.items()}
+    step_rho, deg_frac, n_trajs, n_deg = _step_spearman(steps, trajectories)
+    safety = _preference_auc(returns, trajectories)
     thr = _throughput_alignment(returns, trajectories)
     ovt = _overtake_alignment(returns, trajectories)
     crawl = _crawl_penalty(returns, trajectories)
-    crash_decoy = _collision_decoy_penalty(returns, trajectories)
 
-    raw = (
-        _W_SPEARMAN * float(spearman_mean)
-        + _W_PREFERENCE * float(pref)
-        + _W_THROUGHPUT * float(thr)
-        + _W_OVERTAKE * float(ovt)
-        - _W_CRAWL_PEN * float(crawl)
-        - _W_CRASH_PEN * float(crash_decoy)
+    quality = _W_THROUGHPUT * thr + _W_OVERTAKE * ovt + _W_STEP * step_rho
+    raw = float(
+        np.clip(
+            _W_SAFETY * safety + _W_SAFETY * max(0.0, safety) * quality - _W_CRAWL_PEN * crawl,
+            -1.0,
+            1.0,
+        )
     )
-    # Keep a bit of headroom; clamp for stability in evolution logs.
-    score = float(np.clip(raw, -1.5, 1.5))
 
-    # Hybrid Score1: do not hard-reject solely on within-traj Spearman
-    # degeneracy when preference/throughput still provide signal.
-    rejected = False
     reject_reason = None
-    if (
-        deg_frac >= 0.95
-        and abs(pref) < 1e-9
-        and abs(thr) < 1e-9
-        and abs(ovt) < 1e-9
-    ):
-        rejected = True
+    if deg_frac >= 0.95 and max(abs(safety), abs(thr), abs(ovt)) < 1e-9:
         reject_reason = "no_signal"
-        score = -1.0
+    elif safety < PREFERS_CRASH_SAFETY:
+        reject_reason = "prefers_crash"
 
-    scenario_scores = {
-        "spearman": float(spearman_mean),
-        "preference_auc": float(pref),
-        "throughput": float(thr),
-        "overtake_alignment": float(ovt),
-        "crawl_penalty": float(crawl),
-        "collision_decoy_penalty": float(crash_decoy),
-    }
     return Score1Result(
-        score=score if not rejected else -1.0,
+        score=-1.0 if reject_reason else raw,
         degenerate_fraction=deg_frac,
-        n_pairs=n_pairs,
+        n_pairs=n_trajs,
         n_degenerate=n_deg,
-        rejected=rejected,
+        rejected=reject_reason is not None,
         reject_reason=reject_reason,
-        raw_score=float(np.clip(raw, -1.5, 1.5)),
-        scenario_scores=scenario_scores,
+        raw_score=raw,
+        scenario_scores={
+            "safety": float(safety),
+            "quality": float(quality),
+            "step_spearman": float(step_rho),
+            "throughput": float(thr),
+            "overtake_alignment": float(ovt),
+            "crawl_penalty": float(crawl),
+        },
     )
 
 

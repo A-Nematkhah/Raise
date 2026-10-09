@@ -1,12 +1,20 @@
-"""Hybrid highway Score1 discriminates crawl vs cruise rewards."""
+"""Highway Score1: discounted safety preference, driving quality, sanity rejects."""
 
 from __future__ import annotations
 
+import os
+from dataclasses import replace
+
+import pytest
+
 from domains.highway.prompts import D5_SEED_FUNCTION
 from domains.highway.stage1 import (
+    DEFAULT_STAGE1_DATASET,
     HighwayTrajectoryRecord,
+    load_highway_dataset,
     make_smoke_score_fn,
     score_highway_dataset,
+    trajectory_role,
 )
 from domains.highway.state import EgoVehicle, HighwayRewardState, NearbyVehicle
 from raise_core.domains import load_domain, make_validator_for_domain
@@ -165,9 +173,8 @@ def compute_reward(state, memory):
     s_crawl = score_highway_dataset(crawl_fn, trajs)
     assert float(s_seed.score) > float(s_crawl.score) + 0.05
     assert s_seed.scenario_scores is not None
-    assert "preference_auc" in s_seed.scenario_scores
-    assert "collision_decoy_penalty" in s_seed.scenario_scores
-    assert "overtake_alignment" in s_seed.scenario_scores
+    for key in ("safety", "quality", "step_spearman", "throughput", "overtake_alignment"):
+        assert key in s_seed.scenario_scores
 
 
 def test_overtake_aware_beats_passive_crawl_on_toy():
@@ -221,41 +228,65 @@ def compute_reward(state, memory):
     )
 
 
-def test_hybrid_penalizes_collision_loving_reward():
-    pack = load_domain("highway")
-    validator = make_validator_for_domain(pack)
-    seed_fn = validator.validate_code(D5_SEED_FUNCTION)
-    crash_code = """
-def compute_reward(state, memory):
-    if state.collision:
-        return 50.0
-    if state.off_road:
-        return -1.0
-    return float(0.1 * state.progress)
-"""
-    crash_fn = validator.validate_code(crash_code)
-    trajs = _toy_dataset()
-    # Tag collisions as decoy_crash so collision_decoy_penalty fires clearly.
-    tagged = []
-    for t in trajs:
-        if t.label == "collision":
-            tagged.append(
-                HighwayTrajectoryRecord(
-                    trajectory_id=t.trajectory_id,
-                    scenario_id=t.scenario_id,
-                    seed=t.seed,
-                    states=t.states,
-                    label=t.label,
-                    behavior="decoy_crash",
-                    metadata=t.metadata,
-                )
+def _fn(body: str):
+    validator = make_validator_for_domain(load_domain("highway"))
+    return validator.validate_code(f"def compute_reward(state, memory):\n    {body}\n")
+
+
+def test_collision_loving_reward_is_rejected():
+    crash_fn = _fn("return 50.0 if state.collision else 0.1 * state.progress")
+    res = score_highway_dataset(crash_fn, _toy_dataset())
+    assert res.rejected and res.reject_reason == "prefers_crash"
+    assert res.scenario_scores["safety"] < 0.0
+
+
+def test_safety_uses_discounted_returns():
+    """A crash bonus below the undiscounted survival tail but above the discounted one."""
+    trajs = []
+    for i in range(3):
+        trajs.append(
+            HighwayTrajectoryRecord(
+                trajectory_id=f"ok_{i}", scenario_id="ok", seed=i,
+                states=tuple(_frames(speed=22.0, progress=4.5, n=400)), label="success",
             )
-        else:
-            tagged.append(t)
-    s_seed = score_highway_dataset(seed_fn, tagged)
-    s_crash = score_highway_dataset(crash_fn, tagged)
-    assert float(s_seed.score) > float(s_crash.score) + 0.1
-    assert float(s_crash.scenario_scores["collision_decoy_penalty"]) > 0.0
+        )
+        trajs.append(
+            HighwayTrajectoryRecord(
+                trajectory_id=f"crash_{i}", scenario_id="crash", seed=i,
+                states=tuple(_frames(speed=25.0, progress=3.0, n=11, crash_at=10)), label="collision",
+            )
+        )
+    # Undiscounted: 400 > 10 + 120. Discounted (γ=0.99): ≈98 < ≈9.6 + 120·0.90.
+    res = score_highway_dataset(_fn("return 120.0 if state.collision else 1.0"), trajs)
+    assert res.scenario_scores["safety"] == -1.0
+    assert res.reject_reason == "prefers_crash"
+
+
+def test_constant_and_zero_rewards_carry_no_quality():
+    trajs = _toy_dataset()
+    zero = score_highway_dataset(_fn("return 0.0"), trajs)
+    assert zero.rejected and zero.reject_reason == "no_signal"
+    alive = score_highway_dataset(_fn("return 1.0"), trajs)
+    assert not alive.rejected
+    assert alive.scenario_scores["quality"] == 0.0
+    assert alive.degenerate_fraction == 1.0
+    assert alive.score == pytest.approx(0.5 * alive.scenario_scores["safety"])
+    seed = score_highway_dataset(make_validator_for_domain(load_domain("highway")).validate_code(D5_SEED_FUNCTION), trajs)
+    assert seed.score > alive.score
+
+
+def test_role_metadata_overrides_behavior_inference():
+    trajs = _toy_dataset()
+    assert {trajectory_role(t) for t in trajs if t.behavior == "safe_cruise"} == {"neutral"}
+    assert {trajectory_role(t) for t in trajs if t.behavior == "crawl"} == {"lag"}
+    assert {trajectory_role(t) for t in trajs if t.label != "success"} == {"failure"}
+    relabeled = [
+        replace(t, metadata={**t.metadata, "role": "positive"}) if t.behavior == "crawl" else t
+        for t in trajs
+    ]
+    slow = _fn("return -1.0 if state.collision else 2.0 - state.speed / 25.0")
+    assert score_highway_dataset(slow, trajs).scenario_scores["crawl_penalty"] > 0.0
+    assert score_highway_dataset(slow, relabeled).scenario_scores["crawl_penalty"] == 0.0
 
 
 def test_hybrid_spread_on_toy_rewards():
@@ -280,6 +311,33 @@ def compute_reward(state, memory):
         fn = validator.validate_code(code)
         scores.append(float(score_highway_dataset(fn, trajs).score))
     assert max(scores) - min(scores) >= 0.15
+
+
+@pytest.mark.skipif(
+    not os.path.isfile(os.path.join(DEFAULT_STAGE1_DATASET, "trajectories.jsonl")),
+    reason="Stage I dataset not collected (gitignored)",
+)
+def test_score1_properties_on_real_dataset():
+    trajs = load_highway_dataset(DEFAULT_STAGE1_DATASET)
+
+    def score(body: str):
+        return score_highway_dataset(_fn(body), trajs)
+
+    assert score("return 0.0").reject_reason == "no_signal"
+    assert score("return 10.0 if state.collision else 0.1").reject_reason == "prefers_crash"
+    assert score("return -1.0").reject_reason == "prefers_crash"
+    alive = score("return 1.0")
+    slow = score("return -100.0 if state.collision else 2.0 - state.speed / 25.0")
+    good = score(
+        "if state.collision or state.off_road:\n        return -50.0\n"
+        "    return 0.05 * state.progress + 1.0 - abs(state.speed - 24.0) / 10.0"
+    )
+    seed = score_highway_dataset(
+        make_validator_for_domain(load_domain("highway")).validate_code(D5_SEED_FUNCTION), trajs
+    )
+    assert not (alive.rejected or slow.rejected or good.rejected or seed.rejected)
+    assert slow.score < 0.0 < alive.score < good.score
+    assert seed.score > alive.score
 
 
 def test_smoke_score_still_finite():

@@ -32,3 +32,7 @@ SOFT_PROGRESS_M = 400.0
 # than a survived episode earns, else crash-prone slow policies score positive.
 CRASH_WEIGHT = 2.0
 OFF_ROAD_WEIGHT = 1.0
+
+# PPO discount. Stage I Score1 ranks dataset trajectories by the same
+# discounted return, so the two must not diverge.
+PPO_GAMMA = 0.99

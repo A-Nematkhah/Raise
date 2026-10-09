@@ -21,7 +21,7 @@ from domains.highway.metrics import (
     episode_fitness_fields,
     format_highway_metrics_line,
 )
-from domains.highway.objective_constants import SOFT_PROGRESS_M, V_TARGET
+from domains.highway.objective_constants import PPO_GAMMA, SOFT_PROGRESS_M, V_TARGET
 from domains.highway.overtake import OvertakeTracker
 from domains.highway.watchdog import StallWatchdog, stall_seconds_from_config
 from raise_core import console
@@ -526,6 +526,7 @@ class HighwayPPOTrainer:
             n_steps=n_steps,
             batch_size=batch_size,
             n_epochs=n_epochs,
+            gamma=PPO_GAMMA,
             learning_rate=3e-4,
             ent_coef=float(getattr(config, "highway_ent_coef", 0.0) or 0.0),
         )
