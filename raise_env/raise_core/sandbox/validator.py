@@ -60,10 +60,9 @@ class RewardValidator:
         # The killable child compiles and runs the source first, so module-level
         # code that hangs or blows up never executes in this process.
         smoke_test_compute(
-            None,
+            code,
             self.smoke_states,
             self.config,
-            source_code=code,
             allow_components=self.allow_components,
         )
         compute_fn = compile_compute_reward(code, self.config)

@@ -18,6 +18,7 @@ import multiprocessing as mp
 import time
 from abc import ABC, abstractmethod
 from collections import deque
+from queue import Empty as QueueEmpty
 from typing import Any, Callable, Dict, Optional, Sequence, Tuple
 
 from raise_core.sandbox.config import SandboxConfig
@@ -213,57 +214,6 @@ def compile_compute_reward(code: str, config: SandboxConfig) -> ComputeFn:
     return fn
 
 
-def _timeout_worker(queue: Any, fn: Callable[[], object]) -> None:
-    """Child-process entry for ``run_with_timeout`` (must stay top-level for spawn)."""
-    try:
-        queue.put(("ok", fn()))
-    except BaseException as exc:  # noqa: BLE001 — surface any failure to parent
-        queue.put(("err", exc))
-
-
-def run_with_timeout(fn: Callable[[], object], timeout_seconds: float) -> object:
-    """
-    Run ``fn()`` in a child process; kill it on timeout.
-
-    Granularity: called once per **candidate smoke validation** (a handful of
-    states), not once per env step — so process spawn cost is acceptable.
-    ``fn`` must be picklable under the spawn start method (top-level function
-    or equivalently reconstructible payload). Raises ``RewardSandboxError``
-    on timeout; the worker process is terminated and joined.
-    """
-    if timeout_seconds <= 0.0:
-        raise RewardSandboxError("timeout_seconds must be positive")
-
-    ctx = mp.get_context("spawn")
-    queue: mp.Queue = ctx.Queue(maxsize=1)
-    proc = ctx.Process(target=_timeout_worker, args=(queue, fn))
-    proc.start()
-    proc.join(timeout=timeout_seconds)
-    if proc.is_alive():
-        proc.terminate()
-        proc.join(timeout=2.0)
-        if proc.is_alive():
-            try:
-                proc.kill()
-            except AttributeError:
-                pass
-            proc.join(timeout=2.0)
-        raise RewardSandboxError(f"execution exceeded timeout of {timeout_seconds}s")
-    if proc.exitcode not in (0, None) and queue.empty():
-        raise RewardSandboxError(
-            f"sandbox worker exited with code {proc.exitcode}"
-        )
-    try:
-        status, payload = queue.get(timeout=1.0)
-    except Exception as exc:  # noqa: BLE001
-        raise RewardSandboxError(
-            f"sandbox worker returned no result: {type(exc).__name__}: {exc}"
-        ) from exc
-    if status == "err":
-        raise payload
-    return payload
-
-
 def _smoke_worker(
     queue: Any,
     source_code: str,
@@ -275,7 +225,16 @@ def _smoke_worker(
     try:
         compute_fn = compile_compute_reward(source_code, config)
         memory: Dict[str, Any] = {}
+        prev_time: Optional[float] = None
         for state in states:
+            # Smoke states come from unrelated episodes. Time that does not move
+            # forward marks an episode boundary, where the env would reset memory.
+            now = getattr(state, "global_time", None)
+            if now is not None:
+                now = float(now)
+                if prev_time is not None and now <= prev_time:
+                    memory.clear()
+                prev_time = now
             started = time.perf_counter()
             try:
                 value = compute_fn(state, memory)
@@ -299,83 +258,72 @@ def _smoke_worker(
         queue.put(("err", exc))
 
 
+def _stop_process(proc: Any) -> None:
+    if proc.is_alive():
+        proc.terminate()
+        proc.join(timeout=2.0)
+    if proc.is_alive():
+        proc.kill()
+        proc.join(timeout=2.0)
+
+
+def _await_smoke_result(proc: Any, queue: Any, timeout_seconds: float) -> Tuple[str, Any]:
+    """Read the worker's result before joining (a full pipe would block its exit)."""
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        try:
+            return queue.get(timeout=0.05)
+        except QueueEmpty:
+            pass
+        if not proc.is_alive():
+            try:
+                return queue.get(timeout=0.5)
+            except QueueEmpty:
+                raise RewardSandboxError(
+                    f"smoke worker exited with code {proc.exitcode} without a result"
+                ) from None
+        if time.monotonic() >= deadline:
+            raise RewardSandboxError(f"execution exceeded timeout of {timeout_seconds}s")
+
+
 def smoke_test_compute(
-    compute_fn: Optional[ComputeFn],
+    source_code: str,
     states: Sequence[Any],
     config: SandboxConfig,
     *,
-    source_code: Optional[str] = None,
     allow_components: bool = False,
 ) -> None:
     """
-    Call compute_fn on each smoke state with a fresh memory dict.
-
-    When ``source_code`` is provided (preferred), runs in a killable child
-    process. Without source, falls back to ``run_with_timeout`` on a local
-    closure (must be picklable — prefer passing source_code from the validator).
+    Compile ``source_code`` in a killable spawned child and run every smoke state.
 
     ``allow_components`` (highway only): accept ``(float, dict[str, float])``
     returns in addition to bare floats (compatibility shim).
     """
     if not states:
         raise RewardSandboxError("smoke test requires at least one state")
+    if not source_code:
+        raise RewardSandboxError("smoke test requires source_code")
+    if config.timeout_seconds <= 0.0:
+        raise RewardSandboxError("timeout_seconds must be positive")
 
-    if source_code:
-        if config.timeout_seconds <= 0.0:
-            raise RewardSandboxError("timeout_seconds must be positive")
-        ctx = mp.get_context("spawn")
-        queue: mp.Queue = ctx.Queue(maxsize=1)
-        proc = ctx.Process(
-            target=_smoke_worker,
-            args=(
-                queue,
-                str(source_code),
-                config,
-                tuple(states),
-                bool(allow_components),
-            ),
+    ctx = mp.get_context("spawn")
+    queue: mp.Queue = ctx.Queue(maxsize=1)
+    proc = ctx.Process(
+        target=_smoke_worker,
+        args=(queue, str(source_code), config, tuple(states), bool(allow_components)),
+    )
+    proc.start()
+    try:
+        status, payload = _await_smoke_result(
+            proc, queue, float(config.timeout_seconds)
         )
-        proc.start()
-        proc.join(timeout=float(config.timeout_seconds))
-        if proc.is_alive():
-            proc.terminate()
-            proc.join(timeout=2.0)
-            if proc.is_alive():
-                try:
-                    proc.kill()
-                except AttributeError:
-                    pass
-                proc.join(timeout=2.0)
-            raise RewardSandboxError(
-                f"execution exceeded timeout of {config.timeout_seconds}s"
-            )
-        try:
-            status, payload = queue.get(timeout=1.0)
-        except Exception as exc:  # noqa: BLE001
-            raise RewardSandboxError(
-                f"smoke worker returned no result: {type(exc).__name__}: {exc}"
-            ) from exc
-        if status == "err":
-            raise payload
-        return
-
-    if compute_fn is None:
-        raise RewardSandboxError("smoke test needs either compute_fn or source_code")
-
-    def _run() -> None:
-        memory: Dict[str, Any] = {}
-        for state in states:
-            try:
-                value = compute_fn(state, memory)
-            except RewardSandboxError:
-                raise
-            except Exception as exc:
-                raise RewardSandboxError(
-                    f"runtime error during smoke test: {type(exc).__name__}: {exc}"
-                ) from exc
-            unpack_reward_return(value, allow_components=bool(allow_components))
-
-    run_with_timeout(_run, config.timeout_seconds)
+        proc.join(timeout=2.0)
+    finally:
+        _stop_process(proc)
+        queue.close()
+        proc.close()
+    if status == "err":
+        raise payload
 
 
 class SandboxedReward(RewardFunction):
