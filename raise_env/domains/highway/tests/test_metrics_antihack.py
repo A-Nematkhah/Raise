@@ -214,6 +214,28 @@ def test_crash_costs_more_than_survival_earns():
     assert all_crash < half
 
 
+def test_lane_locked_below_target_penalized_at_moderate_sr():
+    """always-SLOWER on a lucky seed (SR 0.8) must still pay the lane-lock cost."""
+    locked = {
+        "SR": 0.8,
+        "CR": 0.2,
+        "TR": 0.0,
+        "mean_speed": 20.5,
+        "PL": 682.0,
+        "soft_success": 0.0,
+        "lane_change_rate": 0.0,
+        "speed_p10": 20.3,
+        "speed_p90": 20.7,
+        "progress_std": 90.0,
+        "outcome_unique": 2,
+    }
+    weaving = {**locked, "lane_change_rate": 0.05}
+    assert highway_fitness(weaving) - highway_fitness(locked) >= 0.15 - 1e-9
+    fast_locked = {**locked, "mean_speed": float(V_TARGET) + 1.0}
+    fast_weaving = {**fast_locked, "lane_change_rate": 0.05}
+    assert abs(highway_fitness(fast_locked) - highway_fitness(fast_weaving)) < 1e-9
+
+
 def test_soft20_cruise_loses_to_traffic_matching_mid():
     """Run fingerprint: locked soft@20 must not beat a mid policy at ~24 m/s."""
     cruise20 = {

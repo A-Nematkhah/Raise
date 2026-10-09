@@ -53,6 +53,10 @@ _CRUISE_PROGRESS_STD_MAX = 1.0
 _CRUISE_SPEED_SPREAD_MAX = 0.35
 _CONSTANT_CRUISE_PENALTY = 0.35
 
+# Lane changes per step below this count as "never changes lane".
+_LANE_LOCK_RATE = 0.02
+_LANE_LOCK_PENALTY = 0.15
+
 
 def _finite(x: Any, default: float = 0.0) -> float:
     try:
@@ -85,9 +89,16 @@ def _degeneracy_penalty(metrics: Mapping[str, Any]) -> float:
     Uses fields logged by ``adapter._eval_metrics`` when present.
     """
     sr = _finite(metrics.get("SR", metrics.get("sr", 0.0)))
-    if sr < 0.5:
-        return 0.0
+    lc = metrics.get("lane_change_rate")
+    lane_locked = lc is not None and _finite(lc) < _LANE_LOCK_RATE
+    speed = _finite(metrics.get("mean_speed", metrics.get("ITR", 0.0)))
     pen = 0.0
+    # Never changing lane is suspicious with perfect survival, and is the
+    # always-SLOWER exploit when traffic is faster — at any SR.
+    if lane_locked and (sr >= 0.9 or speed < V_TARGET):
+        pen += _LANE_LOCK_PENALTY
+    if sr < 0.5:
+        return float(pen)
     p10 = metrics.get("speed_p10")
     p90 = metrics.get("speed_p90")
     spread = None
@@ -96,10 +107,6 @@ def _degeneracy_penalty(metrics: Mapping[str, Any]) -> float:
         # Near-constant speed band while surviving → likely idle cruise hack.
         if spread < _CRUISE_SPEED_SPREAD_MAX:
             pen += 0.25 * (1.0 - spread / _CRUISE_SPEED_SPREAD_MAX)
-    lc = metrics.get("lane_change_rate")
-    if lc is not None and _finite(lc) < 0.02 and sr >= 0.9:
-        # Perfect survival with almost no lane changes on dense holdout is suspicious.
-        pen += 0.15
     ou = metrics.get("outcome_unique")
     if ou is not None and int(_finite(ou)) <= 1 and sr >= 0.99:
         pen += 0.10
@@ -110,7 +117,7 @@ def _degeneracy_penalty(metrics: Mapping[str, Any]) -> float:
         and _finite(pstd) <= _CRUISE_PROGRESS_STD_MAX
         and sr >= 0.95
         and (spread is None or spread < _CRUISE_SPEED_SPREAD_MAX)
-        and (lc is None or _finite(lc) < 0.02)
+        and (lc is None or lane_locked)
     ):
         pen += float(_CONSTANT_CRUISE_PENALTY)
     return float(min(0.85, pen))
