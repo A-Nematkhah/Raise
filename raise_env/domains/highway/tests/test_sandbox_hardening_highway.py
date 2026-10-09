@@ -7,14 +7,17 @@ import time
 
 import pytest
 
+from domains.highway.action_config import ActionModeSettings
 from domains.highway.reward_checks import make_highway_validator
 from domains.highway.score1_worker import Score1TimeoutWorker
 from domains.highway.stage1 import (
     save_highway_dataset,
     score_highway_dataset,
     smoke_trajectories,
+    with_action_mode,
 )
 from domains.highway.watchdog import StallWatchdog, beat
+from raise_core.sandbox.errors import RewardSandboxError
 from raise_core.sandbox.runtime import SandboxedReward, compile_compute_reward
 from domains.highway.sandbox_fields import highway_sandbox_config
 
@@ -113,6 +116,41 @@ def test_score1_worker_matches_in_process_and_kills_hangs(tmp_path):
 
         again = worker(good, candidate_id="good2")
         assert again.score == pytest.approx(expected.score)
+    finally:
+        worker.close()
+
+
+def test_score1_worker_maps_dataset_actions_to_continuous_mode(tmp_path):
+    trajs = smoke_trajectories()
+    save_highway_dataset(str(tmp_path), trajs)
+    settings = ActionModeSettings(mode="continuous")
+    worker = Score1TimeoutWorker(
+        str(tmp_path),
+        with_action_mode(trajs, settings),
+        timeout_seconds=30.0,
+        action_settings=settings,
+    )
+    try:
+        res = worker(
+            _reward("def compute_reward(state, memory):\n    return 1.0 - abs(state.action[0])\n"),
+            candidate_id="cont",
+        )
+        assert res.reject_reason is None
+    finally:
+        worker.close()
+
+
+def test_score1_worker_reraises_dataset_only_sandbox_error(tmp_path):
+    trajs = smoke_trajectories()
+    save_highway_dataset(str(tmp_path), trajs)
+    # speed 21 occurs in the fixture trajectories but in no smoke state.
+    code = "def compute_reward(state, memory):\n    return 1.0 / (state.speed - 21.0)\n"
+    reward, reason = make_highway_validator().try_validate(code)
+    assert reason is None, reason
+    worker = Score1TimeoutWorker(str(tmp_path), trajs, timeout_seconds=30.0)
+    try:
+        with pytest.raises(RewardSandboxError, match="ZeroDivisionError"):
+            worker(_reward(code), candidate_id="div0")
     finally:
         worker.close()
 

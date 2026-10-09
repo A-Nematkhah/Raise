@@ -6,7 +6,7 @@ import math
 from dataclasses import dataclass, replace
 from typing import Any, Tuple
 
-from domains.highway.action_config import get_action_settings
+from domains.highway.action_config import ActionModeSettings, get_action_settings
 
 # highway-env StraightLane.DEFAULT_WIDTH; lane i is centred at y = i * width.
 LANE_WIDTH_M = 4.0
@@ -76,17 +76,26 @@ class HighwayRewardState:
     speed: float  # ego speed duplicate for convenience
 
 
-def smoke_action(meta_action: int) -> Any:
-    """``state.action`` for a smoke state in the active action mode.
+def action_for_mode(meta_action: Any, settings: ActionModeSettings) -> Any:
+    """``state.action`` for a recorded meta action index under ``settings``.
 
     Matches what ``RewardInjectedHighwayEnv`` passes: an ``int`` for
-    DiscreteMetaAction, a tuple of floats for ContinuousAction.
+    DiscreteMetaAction, a tuple of floats for ContinuousAction. A missing or
+    non-integer index maps to IDLE.
     """
-    settings = get_action_settings()
+    try:
+        meta = int(meta_action)
+    except (TypeError, ValueError):
+        meta = 1
     if settings.mode != "continuous":
-        return int(meta_action)
-    accel, steer = _META_TO_CONTINUOUS.get(int(meta_action), (0.0, 0.0))
+        return meta
+    accel, steer = _META_TO_CONTINUOUS.get(meta, (0.0, 0.0))
     return (accel, steer) if settings.continuous_lateral else (accel,)
+
+
+def smoke_action(meta_action: Any) -> Any:
+    """``state.action`` for a smoke state in the active action mode."""
+    return action_for_mode(meta_action, get_action_settings())
 
 
 def default_smoke_states() -> tuple[HighwayRewardState, ...]:
@@ -216,8 +225,4 @@ def fingerprint_smoke_states(
 
 def _with_smoke_action(state: HighwayRewardState) -> HighwayRewardState:
     """Stage I frames store meta action indices; map them to the active mode."""
-    try:
-        meta = int(state.action)
-    except (TypeError, ValueError):
-        meta = 1
-    return replace(state, action=smoke_action(meta))
+    return replace(state, action=smoke_action(state.action))

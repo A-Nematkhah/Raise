@@ -19,13 +19,16 @@ import threading
 import weakref
 from typing import Any, Callable, Optional, Sequence, Tuple
 
+from domains.highway.action_config import ActionModeSettings, get_action_settings
 from domains.highway.stage1 import (
     HighwayTrajectoryRecord,
     load_highway_dataset,
     make_score_fn as stage1_make_score_fn,
     resolve_dataset_path,
     score_highway_dataset,
+    with_action_mode,
 )
+from raise_core.sandbox.errors import RewardSandboxError
 from raise_core.scoring import Score1Result
 
 logger = logging.getLogger(__name__)
@@ -35,10 +38,13 @@ DEFAULT_SCORE1_TIMEOUT_SECONDS = 60.0
 _STARTUP_TIMEOUT_SECONDS = 120.0
 
 
-def _worker_main(conn: Any, dataset_path: str) -> None:
-    """Child entry (top-level for spawn): score candidates until told to stop."""
+def _worker_main(conn: Any, dataset_path: str, action_settings: ActionModeSettings) -> None:
+    """Child entry (top-level for spawn): score candidates until told to stop.
+
+    The child starts with default action settings, so the parent's are passed in.
+    """
     try:
-        dataset = load_highway_dataset(dataset_path)
+        dataset = with_action_mode(load_highway_dataset(dataset_path), action_settings)
     except BaseException as exc:  # noqa: BLE001
         conn.send(("init_err", repr(exc)))
         return
@@ -58,7 +64,8 @@ def _worker_main(conn: Any, dataset_path: str) -> None:
             try:
                 conn.send(("err", exc))
             except Exception:  # noqa: BLE001 — unpicklable exception
-                conn.send(("err", RuntimeError(f"{type(exc).__name__}: {exc}")))
+                wrapper = RewardSandboxError if isinstance(exc, RewardSandboxError) else RuntimeError
+                conn.send(("err", wrapper(f"{type(exc).__name__}: {exc}")))
 
 
 def _stop_process(proc: Any, conn: Any) -> None:
@@ -94,11 +101,13 @@ class Score1TimeoutWorker:
         dataset: Sequence[HighwayTrajectoryRecord],
         *,
         timeout_seconds: float = DEFAULT_SCORE1_TIMEOUT_SECONDS,
+        action_settings: Optional[ActionModeSettings] = None,
     ) -> None:
         if timeout_seconds <= 0.0:
             raise ValueError("timeout_seconds must be positive")
         self.dataset_path = str(dataset_path)
         self.dataset = dataset
+        self.action_settings = action_settings or get_action_settings()
         self.timeout_seconds = float(timeout_seconds)
         self.restarts = 0
         self._lock = threading.Lock()
@@ -168,7 +177,7 @@ class Score1TimeoutWorker:
         parent_conn, child_conn = ctx.Pipe()
         proc = ctx.Process(
             target=_worker_main,
-            args=(child_conn, self.dataset_path),
+            args=(child_conn, self.dataset_path, self.action_settings),
             daemon=True,
             name="highway-score1",
         )
@@ -199,12 +208,16 @@ def make_score_fn(
     timeout_seconds: float = DEFAULT_SCORE1_TIMEOUT_SECONDS,
 ) -> Tuple[Callable[..., Any], Optional[Any]]:
     """Pack entry: :func:`stage1.make_score_fn`, with dataset Score1 in the timeout worker."""
-    score_fn, dataset = stage1_make_score_fn(mode=mode, dataset_path=dataset_path)
+    settings = get_action_settings()
+    score_fn, dataset = stage1_make_score_fn(
+        mode=mode, dataset_path=dataset_path, action_settings=settings
+    )
     if dataset is None:
         return score_fn, dataset
     worker = Score1TimeoutWorker(
         os.path.abspath(resolve_dataset_path(dataset_path)),
         dataset,
         timeout_seconds=timeout_seconds,
+        action_settings=settings,
     )
     return worker, dataset

@@ -6,16 +6,18 @@ import json
 import logging
 import os
 import shutil
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
+from domains.highway.action_config import ActionModeSettings, get_action_settings
 from domains.highway.state import (
     EgoVehicle,
     HighwayRewardState,
     NearbyVehicle,
+    action_for_mode,
     lane_index_from_y,
 )
 from raise_core.rules import (
@@ -250,6 +252,27 @@ def load_highway_dataset(path: str) -> List[HighwayTrajectoryRecord]:
                 )
             )
     return out
+
+
+def with_action_mode(
+    trajectories: Sequence[HighwayTrajectoryRecord], settings: ActionModeSettings
+) -> List[HighwayTrajectoryRecord]:
+    """Map the recorded meta action indices to ``state.action`` of ``settings``' mode.
+
+    The dataset is collected with DiscreteMetaAction; a continuous-mode reward
+    reads ``state.action[0]`` and would fail on every int frame.
+    """
+    if settings.mode != "continuous":
+        return list(trajectories)
+    return [
+        replace(
+            traj,
+            states=tuple(
+                replace(st, action=action_for_mode(st.action, settings)) for st in traj.states
+            ),
+        )
+        for traj in trajectories
+    ]
 
 
 def _traj_mean_speed(traj: HighwayTrajectoryRecord) -> float:
@@ -747,7 +770,9 @@ def make_score_fn(
     *,
     mode: str = "dataset",
     dataset_path: Optional[str] = None,
+    action_settings: Optional[ActionModeSettings] = None,
 ) -> Tuple[Callable[..., Any], Optional[Any]]:
+    """Score1 over the dataset with actions in ``action_settings``' mode (default: active)."""
     key = str(mode).strip().lower()
     if key == "smoke":
         logger.warning("Highway Stage I using smoke score (not real dataset)")
@@ -760,7 +785,7 @@ def make_score_fn(
             f"Highway Stage I dataset not found at {path}. "
             f"Run: python scripts/collect_highway_stage1_dataset.py --out {path}"
         )
-    dataset = load_highway_dataset(path)
+    dataset = with_action_mode(load_highway_dataset(path), action_settings or get_action_settings())
     logger.info("Loaded highway Stage I dataset from %s (%d trajs)", path, len(dataset))
 
     def _fn(reward_fn: Any, *, candidate_id: str = "") -> Score1Result:

@@ -32,6 +32,7 @@ from raise_core.scoring import Score1Result
 from raise_core import console
 from raise_core.rejection_log import categorize_validation_error
 from raise_core.sandbox import RewardValidator
+from raise_core.sandbox.errors import RewardSandboxError
 from raise_core.sandbox.runtime import RewardFunction, SandboxedReward
 
 logger = logging.getLogger(__name__)
@@ -532,6 +533,15 @@ class StageIEvolver:
                 raw = self.score_fn(
                     cand.as_reward_function(),
                     candidate_id=cand.candidate_id,
+                )
+            except RewardSandboxError as exc:
+                # The smoke states cannot cover every dataset frame; a reward
+                # that fails on one is rejected like a Stage II training failure.
+                raw = Score1Result(
+                    score=-1.0,
+                    degenerate_fraction=1.0,
+                    rejected=True,
+                    reject_reason=f"score1_error: {type(exc).__name__}: {exc}"[:300],
                 )
             except Exception as exc:  # noqa: BLE001
                 console.fail(

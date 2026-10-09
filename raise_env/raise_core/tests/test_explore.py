@@ -30,6 +30,7 @@ from raise_core.llm import (
     make_llm_client,
     normalize_to_compute_reward,
 )
+from raise_core.sandbox.errors import RewardSandboxError
 
 
 def _valid_code(value: float) -> str:
@@ -118,6 +119,27 @@ def test_gen0_batch_scores_and_ranks():
     scores = [c.score for c in ranked]
     assert all(s is not None for s in scores)
     assert scores == sorted(scores, reverse=True)
+
+
+def test_score1_sandbox_error_rejects_candidate_and_continues():
+    batch_body = "\n\n".join(_valid_code(float(i)) for i in range(8, 0, -1))
+    evolver = _evolver(ScriptedLLMClient([batch_body]), population_size=8)
+    pop = evolver.initialize_population()
+    bad_id = pop[1].candidate_id
+
+    def _score(reward_fn, *, candidate_id: str = ""):
+        if candidate_id == bad_id:
+            raise RewardSandboxError("runtime error in sandboxed compute(): ZeroDivisionError")
+        return _score_by_smoke(reward_fn)
+
+    evolver.score_fn = _score
+    ranked = evolver.score_population(pop)
+    assert len(ranked) == 8
+    bad = next(c for c in ranked if c.candidate_id == bad_id)
+    assert bad.score == float("-inf")
+    assert bad.metadata["score1_rejected"]
+    assert bad.metadata["score1_reject_reason"].startswith("score1_error: RewardSandboxError")
+    assert all(c.score > float("-inf") for c in ranked if c.candidate_id != bad_id)
 
 
 def test_gen0_replaces_invalid_with_extra_draws(tmp_path):
