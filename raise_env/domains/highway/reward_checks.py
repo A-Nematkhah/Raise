@@ -15,6 +15,7 @@ from domains.highway.action_config import (
     check_target_speed_literals,
     warn_inline_speed_literals,
 )
+from domains.highway.sandbox_fields import highway_sandbox_config
 from domains.highway.state import default_smoke_states
 
 logger = logging.getLogger(__name__)
@@ -65,7 +66,7 @@ class HighwayRewardValidator(RewardValidator):
         config: Optional[SandboxConfig] = None,
         smoke_states: Optional[Sequence[object]] = None,
     ) -> None:
-        cfg = config if config is not None else SandboxConfig()
+        cfg = config if config is not None else highway_sandbox_config()
         if not cfg.restrict_top_level:
             cfg = replace(cfg, restrict_top_level=True)
         super().__init__(
