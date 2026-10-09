@@ -21,7 +21,7 @@ from domains.highway.metrics import (
     episode_fitness_fields,
     format_highway_metrics_line,
 )
-from domains.highway.objective_constants import V_TARGET
+from domains.highway.objective_constants import SOFT_PROGRESS_M, V_TARGET
 from domains.highway.overtake import OvertakeTracker
 from domains.highway.watchdog import StallWatchdog, stall_seconds_from_config
 from raise_core import console
@@ -112,6 +112,21 @@ class HighwayStage3Trainer:
         )
 
 
+_cuda_fallback_logged = False
+
+
+def _log_cuda_fallback_once(requested: str) -> None:
+    global _cuda_fallback_logged
+    if _cuda_fallback_logged:
+        return
+    _cuda_fallback_logged = True
+    logger.info(
+        "Highway PPO: device=%s requested, training on CPU (MLP policy is faster "
+        "there); set RAISE_HIGHWAY_FORCE_CUDA=1 to use the GPU",
+        requested,
+    )
+
+
 def _eval_metrics(
     env: Any,
     model: Any,
@@ -120,7 +135,7 @@ def _eval_metrics(
     seed: int = 0,
     seed_offset: int = 10_003,
     soft_speed_mps: float | None = None,
-    soft_progress_m: float = 400.0,
+    soft_progress_m: float = SOFT_PROGRESS_M,
     deterministic: bool = True,
 ) -> ProxyMetrics:
     """
@@ -461,6 +476,7 @@ class HighwayPPOTrainer:
         )
         if prefer_cpu and device_raw.startswith("cuda"):
             device = "cpu"
+            _log_cuda_fallback_once(device_raw)
         else:
             device = device_raw if device_raw.startswith("cuda") else "cpu"
 

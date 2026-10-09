@@ -25,6 +25,9 @@ LAG_SPEED_MPS = 18.0
 # Progress scale for the fitness progress term (~20 m/s * 40 s episode).
 REF_PROGRESS_M = 800.0
 
+# soft_success also requires this much forward progress (m); diagnostic only.
+SOFT_PROGRESS_M = 400.0
+
 # Survival = SR − CRASH_WEIGHT·CR − OFF_ROAD_WEIGHT·TR. A crash must cost more
 # than a survived episode earns, else crash-prone slow policies score positive.
 CRASH_WEIGHT = 2.0
