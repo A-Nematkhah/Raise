@@ -25,6 +25,21 @@ def test_strip_scalar_subscripts_survives_hostile_input():
     assert strip_redundant_scalar_subscripts(huge) == huge.strip()
 
 
+def test_strip_scalar_subscripts_targets_highway_fields_only():
+    code = (
+        "def compute_reward(state, memory):\n"
+        "    a = state.ego.speed[0] + state.progress[0] + state.ego.lane_index[-1]\n"
+        "    b = state.others[0].x[0]\n"
+        "    c = state.action[0]\n"
+        "    return a + b + c\n"
+    )
+    out = strip_redundant_scalar_subscripts(code)
+    assert "state.ego.speed +" in out and "state.progress +" in out
+    assert "state.ego.lane_index\n" in out
+    assert "state.others[0].x\n" in out
+    assert "state.action[0]" in out
+
+
 def test_split_sources_survives_hostile_input():
     completion = f"```python\ndef compute_reward(state, memory):\n    return {_DEEP_EXPR}\n```"
     pieces = split_reward_function_sources(completion)

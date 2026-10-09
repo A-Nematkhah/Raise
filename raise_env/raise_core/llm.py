@@ -649,8 +649,8 @@ def normalize_to_compute_reward(code: str, target_name: str = "compute_reward") 
     Renames common paper aliases (cal_reward, *_v2, seed_reward_func) and
     upgrades a single-arg ``(state)`` signature to ``(state, memory)`` so
     older completions still validate under the episode-memory contract.
-    Also strips redundant ``[0]``/``[1]``/``[-1]`` on known scalar RewardState
-    fields (LLMs often treat ``state.robot.px`` like a batched tensor).
+    Also strips redundant ``[0]``/``[1]``/``[-1]`` on known scalar state
+    fields (LLMs often treat ``state.ego.speed`` like a batched tensor).
     """
     text = code.strip()
     match = re.search(r"^def\s+(\w+)\s*\(", text, re.MULTILINE)
@@ -685,25 +685,25 @@ def normalize_to_compute_reward(code: str, target_name: str = "compute_reward") 
     return strip_redundant_scalar_subscripts(text)
 
 
-# Scalar RewardState / HumanObservable / RobotRewardState fields — never arrays.
+# Scalar HighwayRewardState / EgoVehicle / NearbyVehicle fields — never arrays.
+# ``action`` is deliberately absent (a tuple in continuous mode).
 _SCALAR_FIELD_ATTRS = frozenset(
     {
-        "px",
-        "py",
+        "x",
+        "y",
         "vx",
         "vy",
-        "radius",
-        "gx",
-        "gy",
-        "v_pref",
-        "dmin",
-        "discomfort_dist",
+        "heading",
+        "speed",
+        "lane_index",
+        "on_road",
+        "progress",
+        "collision",
+        "off_road",
+        "timeout",
         "time_step",
         "global_time",
         "time_limit",
-        "collision",
-        "reaching_goal",
-        "timeout",
     }
 )
 
@@ -724,7 +724,7 @@ def _is_trivial_int_index(slice_node: ast.AST) -> bool:
 
 
 class _StripScalarSubscripts(ast.NodeTransformer):
-    """Rewrite ``state.robot.px[0]`` → ``state.robot.px`` (and nested repeats)."""
+    """Rewrite ``state.ego.speed[0]`` → ``state.ego.speed`` (and nested repeats)."""
 
     def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
         node = self.generic_visit(node)
@@ -740,9 +740,9 @@ class _StripScalarSubscripts(ast.NodeTransformer):
 
 def strip_redundant_scalar_subscripts(code: str) -> str:
     """
-    Drop ``[0]``/``[1]``/``[-1]`` on known float/bool RewardState fields.
+    Drop ``[0]``/``[1]``/``[-1]`` on known float/bool state fields.
 
-    Does **not** touch ``state.action[...]`` (action may be a tuple/ActionXY).
+    Does **not** touch ``state.action[...]`` (a tuple in continuous mode).
     On parse failure, returns ``code`` unchanged.
     """
     text = (code or "").strip()
