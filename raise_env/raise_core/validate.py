@@ -71,12 +71,16 @@ class Stage3Record:
     candidate_id: str
     metrics: Dict[str, Any]
     checkpoint_path: Optional[str] = None
+    status: str = "ok"
+    error: Optional[str] = None
 
     def as_dict(self) -> Dict[str, Any]:
         return {
             "candidate_id": self.candidate_id,
             "metrics": dict(self.metrics),
             "checkpoint_path": self.checkpoint_path,
+            "status": self.status,
+            "error": self.error,
         }
 
 
@@ -248,6 +252,21 @@ class Stage3Runner:
             )
         return trained
 
+    def _record_failure(self, candidate: RewardCandidate, exc: Exception) -> None:
+        error = f"{type(exc).__name__}: {exc}"
+        logger.exception("Stage III train+eval failed for %s", candidate.candidate_id)
+        console.warn(
+            f"{candidate.candidate_id} failed ({error}); skipping", stage="Stage III"
+        )
+        self.history.append(
+            Stage3Record(
+                candidate_id=str(candidate.candidate_id),
+                metrics={},
+                status="failed",
+                error=error,
+            )
+        )
+
     def _restore(self, payload: Dict[str, Any]) -> None:
         self.trained = deserialize_population(
             payload.get("trained"), validator=self.validator
@@ -257,6 +276,8 @@ class Stage3Runner:
                 candidate_id=str(row.get("candidate_id", "")),
                 metrics=dict(row.get("metrics") or {}),
                 checkpoint_path=row.get("checkpoint_path"),
+                status=str(row.get("status") or "ok"),
+                error=row.get("error"),
             )
             for row in (payload.get("history") or [])
             if isinstance(row, dict)
@@ -302,10 +323,14 @@ class Stage3Runner:
             console.status(
                 f"candidate {cand.candidate_id} ({i + 1}/{n})", stage="Stage III"
             )
-            bundle = self.trainer.train_and_eval(
-                cand, round_index=0, config=self.config
-            )
-            self._record(cand, bundle)
+            try:
+                bundle = self.trainer.train_and_eval(
+                    cand, round_index=0, config=self.config
+                )
+            except Exception as exc:  # noqa: BLE001 - one bad reward must not stop the run
+                self._record_failure(cand, exc)
+            else:
+                self._record(cand, bundle)
             self._persist(status="running", population=pop, next_index=i + 1)
 
         self._persist(status="done", population=pop, next_index=n)
