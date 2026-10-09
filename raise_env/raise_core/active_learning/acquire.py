@@ -7,21 +7,12 @@ from __future__ import annotations
 import json
 import logging
 import os
-from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from raise_core.active_learning.query import QueryItem
+from raise_core.json_io import utc_now_z
 
 logger = logging.getLogger(__name__)
-
-
-def _utc_now() -> str:
-    return (
-        datetime.now(timezone.utc)
-        .replace(microsecond=0)
-        .isoformat()
-        .replace("+00:00", "Z")
-    )
 
 
 def _candidate_from_payload(payload: Dict[str, Any], *, validator: Any = None):
@@ -135,7 +126,7 @@ def _execute_stage1_scenario(item: QueryItem, *, config: Dict[str, Any]) -> Dict
         }
 
     request = {
-        "ts": _utc_now(),
+        "ts": utc_now_z(),
         "scenario_ids": scenario_ids,
         "reason": item.reason,
         "status": "pending_collection",
@@ -158,7 +149,7 @@ def _execute_stage1_scenario(item: QueryItem, *, config: Dict[str, Any]) -> Dict
             ids.append(sid)
     man["scenario_ids"] = ids
     man["n_requests"] = int(man.get("n_requests") or 0) + 1
-    man["updated_at"] = _utc_now()
+    man["updated_at"] = utc_now_z()
     with open(manifest_path, "w", encoding="utf-8") as fh:
         json.dump(man, fh, indent=2)
         fh.write("\n")

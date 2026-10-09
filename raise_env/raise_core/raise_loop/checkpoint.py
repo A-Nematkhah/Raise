@@ -6,53 +6,15 @@ Used for crash-safe resume (``RESUME.json`` + ``checkpoint.json`` under the run 
 
 from __future__ import annotations
 
-import json
 import os
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, Optional, Sequence
 
-from raise_core.explore import RewardCandidate
-from raise_core.json_io import atomic_write_json
-from domains.crowdnav.reporting import candidate_to_dict, load_candidate_dict
+from raise_core.json_io import atomic_write_json, read_json_dict, utc_now_z
+from raise_core.population_io import deserialize_population, serialize_population
+from domains.crowdnav.reporting import candidate_to_dict
 
 _CHECKPOINT_NAME = "checkpoint.json"
 _RESUME_NAME = "RESUME.json"
-
-
-def _utc_now() -> str:
-    return (
-        datetime.now(timezone.utc)
-        .replace(microsecond=0)
-        .isoformat()
-        .replace("+00:00", "Z")
-    )
-
-
-def _serialize_pop(population: Optional[Sequence[Any]]) -> List[Dict[str, Any]]:
-    if not population:
-        return []
-    out: List[Dict[str, Any]] = []
-    for cand in population:
-        if hasattr(cand, "candidate_id"):
-            out.append(candidate_to_dict(cand))
-        elif isinstance(cand, dict):
-            out.append(dict(cand))
-    return out
-
-
-def deserialize_population(
-    rows: Optional[Sequence[Dict[str, Any]]],
-    *,
-    validator: Any = None,
-) -> List[RewardCandidate]:
-    """Rebuild ``RewardCandidate`` objects (re-validates code with ``validator``)."""
-    if not rows:
-        return []
-    return [
-        load_candidate_dict(dict(row), validator=validator)
-        for row in rows
-        if isinstance(row, dict)
-    ]
 
 
 def build_checkpoint(
@@ -80,9 +42,9 @@ def build_checkpoint(
         "phase": str(phase),
         "epoch": int(epoch),
         "next_epoch": int(next_epoch),
-        "population": _serialize_pop(population),
-        "ranked": _serialize_pop(ranked),
-        "to_label": _serialize_pop(to_label),
+        "population": serialize_population(population),
+        "ranked": serialize_population(ranked),
+        "to_label": serialize_population(to_label),
         "labeled_ids_this_epoch": [str(x) for x in (labeled_ids_this_epoch or [])],
         "global_best": candidate_to_dict(global_best) if global_best is not None else None,
         "reflection": str(reflection or ""),
@@ -90,7 +52,7 @@ def build_checkpoint(
         "n_labeled": int(n_labeled),
         "history": list(history or []),
         "config": dict(config or {}),
-        "updated_at": _utc_now(),
+        "updated_at": utc_now_z(),
     }
     if extra:
         payload["extra"] = dict(extra)
@@ -106,7 +68,7 @@ def save_checkpoint(run_dir: str, payload: Dict[str, Any]) -> str:
         "status": payload.get("status"),
         "phase": payload.get("phase"),
         "epoch": payload.get("epoch"),
-        "updated_at": payload.get("updated_at") or _utc_now(),
+        "updated_at": payload.get("updated_at") or utc_now_z(),
     }
     atomic_write_json(os.path.join(run_dir, _RESUME_NAME), resume)
     return path
@@ -114,9 +76,12 @@ def save_checkpoint(run_dir: str, payload: Dict[str, Any]) -> str:
 
 def load_checkpoint(run_dir: str) -> Optional[Dict[str, Any]]:
     """Load checkpoint from ``run_dir`` if present."""
-    path = os.path.join(run_dir, _CHECKPOINT_NAME)
-    if not os.path.isfile(path):
-        return None
-    with open(path, "r", encoding="utf-8") as fh:
-        data = json.load(fh)
-    return data if isinstance(data, dict) else None
+    return read_json_dict(os.path.join(run_dir, _CHECKPOINT_NAME))
+
+
+__all__ = [
+    "build_checkpoint",
+    "deserialize_population",
+    "load_checkpoint",
+    "save_checkpoint",
+]

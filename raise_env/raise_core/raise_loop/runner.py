@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import math
 import os
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional
@@ -16,8 +15,24 @@ from raise_core.raise_loop.checkpoint import (
     save_checkpoint,
 )
 from raise_core.raise_loop.config import ClosedLoopConfig
+from raise_core.raise_loop.evolve_rank import (
+    parse_evolve_rank,
+    rank_population_for_evolution,
+)
 from raise_core.raise_loop.epoch import select_to_label
+from raise_core.raise_loop.gate_policy import epoch_population_stats
 from raise_core.raise_loop.ledger import write_generation_ledger
+from raise_core.raise_loop.parallel_label import (
+    attach_warm_start_checkpoints,
+    label_candidates_parallel,
+)
+from raise_core.raise_loop.proxy_feedback import (
+    apply_in_loop_d3,
+    attach_proxy_feedback,
+    nav_scalar,
+    select_for_in_loop_d3,
+)
+from raise_core.raise_loop.report import format_epoch_summary, write_closed_loop_report
 from raise_core.raise_loop.logging_io import (
     append_al_step,
     append_epoch_record,
@@ -25,9 +40,16 @@ from raise_core.raise_loop.logging_io import (
     write_json,
 )
 from raise_core import console
+from raise_core.domains import (
+    load_domain,
+    make_stage2_trainer_for_domain,
+    make_validator_for_domain,
+)
 from raise_core.explore import RewardCandidate, StageIConfig, StageIEvolver
 from raise_core.llm import LLMClient, make_llm_client
-from domains.crowdnav.reporting import candidate_to_dict, load_candidate_dict
+from raise_core.refine import Stage2Config
+from raise_core.selection import candidate_fitness
+from domains.crowdnav.reporting import load_candidate_dict
 from raise_core.surrogate.bootstrap import label_and_append_candidate
 from raise_core.surrogate.dataset_io import (
     existing_example_ids,
@@ -40,7 +62,9 @@ from raise_core.surrogate.gate import (
     predict_population,
     surrogate_model_ready,
 )
+from raise_core.surrogate.features import set_behavior_smoke_states
 from raise_core.surrogate.model import SurrogateModel
+from raise_core.surrogate.targets import filter_ok_examples, target_keys_for_domain
 
 logger = logging.getLogger(__name__)
 
@@ -130,36 +154,9 @@ def _resume_known_ids(ckpt: Dict[str, Any], stage2_root: str) -> List[str]:
     return ids
 
 
-def _serialize_highway_elite(runner: Any) -> Optional[Dict[str, Any]]:
-    elite = getattr(runner, "_highway_pareto_elite", None)
-    best = getattr(runner, "_highway_best_ever_cand", None)
-    if elite is None and best is None:
-        return None
-    fit = getattr(runner, "_highway_best_ever_fitness", None)
-    return {
-        "pareto_elite": candidate_to_dict(elite) if elite is not None else None,
-        "best_ever_cand": candidate_to_dict(best) if best is not None else None,
-        "best_ever_fitness": (
-            float(fit) if fit is not None and math.isfinite(float(fit)) else None
-        ),
-    }
-
-
-def _restore_highway_elite(
-    runner: Any, saved: Optional[Dict[str, Any]], *, validator: Any
-) -> None:
-    if not isinstance(saved, dict):
-        return
-    if isinstance(saved.get("pareto_elite"), dict):
-        runner._highway_pareto_elite = load_candidate_dict(
-            dict(saved["pareto_elite"]), validator=validator
-        )
-    if isinstance(saved.get("best_ever_cand"), dict):
-        runner._highway_best_ever_cand = load_candidate_dict(
-            dict(saved["best_ever_cand"]), validator=validator
-        )
-    if saved.get("best_ever_fitness") is not None:
-        runner._highway_best_ever_fitness = float(saved["best_ever_fitness"])
+# Checkpoint ``extra`` key for DomainPack evolve-hook state (name kept from
+# the highway-only era so existing run checkpoints still resume).
+_EVOLVE_HOOKS_CKPT_KEY = "highway_elite"
 
 
 def _refit_surrogate(
@@ -170,8 +167,6 @@ def _refit_surrogate(
     use_stub: bool,
     domain: str = "crowdnav",
 ) -> Dict[str, Any]:
-    from raise_core.surrogate.targets import filter_ok_examples, target_keys_for_domain
-
     feats, labs = load_table(dataset_dir)
     if len(feats) < 1:
         raise RuntimeError("closed-loop refit: surrogate dataset is empty")
@@ -207,38 +202,10 @@ class ClosedLoopRunner:
         self.score_fn = score_fn
         self.trainer = trainer
         self.validator = validator
-
-    def _highway_ambient_traffic(self, cfg: ClosedLoopConfig) -> Optional[Dict[str, float]]:
-        """Cached non-ego traffic speed stats (``env_measured``; informational)."""
-        if hasattr(self, "_highway_ambient_cache"):
-            return self._highway_ambient_cache
-        self._highway_ambient_cache: Optional[Dict[str, float]] = None
-        path = os.path.join(closed_loop_dir(cfg.output_dir), "ambient_traffic.json")
-        if os.path.isfile(path):
-            try:
-                with open(path, "r", encoding="utf-8") as fh:
-                    self._highway_ambient_cache = dict(json.load(fh) or {}) or None
-                return self._highway_ambient_cache
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("Failed to load ambient_traffic.json (%s)", exc)
-        if bool(cfg.use_stub):
-            return None
-        try:
-            from domains.highway.pareto_rank import collect_ambient_traffic_stats
-
-            stats = collect_ambient_traffic_stats(seed=int(cfg.seed))
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Ambient traffic measurement failed (%s)", exc)
-            return None
-        if stats:
-            write_json(path, stats)
-            self._highway_ambient_cache = stats
-        return self._highway_ambient_cache
+        # Pack evolve hooks (highway Pareto/elite state); persists across run().
+        self._evolve_hooks: Any = None
 
     def run(self) -> ClosedLoopResult:
-        from raise_core.domains import load_domain, make_stage2_trainer_for_domain
-        from raise_core.refine import Stage2Config
-
         cfg = self.cfg
         if cfg.use_stub:
             cfg.apply_fast_profile()
@@ -255,11 +222,10 @@ class ClosedLoopRunner:
 
         pack = load_domain(str(getattr(cfg, "domain", "crowdnav") or "crowdnav"))
         if str(getattr(pack, "name", "")).lower() == "highway":
+            # Pack modules load only for their own domain (core stays pack-agnostic).
             from domains.highway.action_config import configure_action_mode_from_config
 
             configure_action_mode_from_config(cfg)
-        from raise_core.surrogate.features import set_behavior_smoke_states
-
         if pack.smoke_states_fn is not None:
             set_behavior_smoke_states(pack.smoke_states_fn())
         else:
@@ -274,9 +240,9 @@ class ClosedLoopRunner:
         if self.trainer is None:
             self.trainer = make_stage2_trainer_for_domain(pack, use_stub=cfg.use_stub)
         if self.validator is None:
-            from raise_core.domains import make_validator_for_domain
-
             self.validator = make_validator_for_domain(pack)
+        if self._evolve_hooks is None and pack.make_evolve_hooks is not None:
+            self._evolve_hooks = pack.make_evolve_hooks()
         if self.llm is None:
             self.llm = make_llm_client(
                 cfg.llm_provider,
@@ -338,6 +304,7 @@ class ClosedLoopRunner:
 
         domain_key = str(getattr(cfg, "domain", "crowdnav") or "crowdnav").strip().lower()
         if domain_key == "crowdnav":
+            # Pack modules load only for their own domain (core stays pack-agnostic).
             from domains.crowdnav.regime import env_name_for_predict_method
 
             env_name = env_name_for_predict_method(str(cfg.predict_method))
@@ -417,9 +384,11 @@ class ClosedLoopRunner:
                 "generations": generations,
             }
             run_state: Dict[str, Any] = {"id_counter": evolver.id_counter}
-            highway_elite = _serialize_highway_elite(self)
-            if highway_elite is not None:
-                run_state["highway_elite"] = highway_elite
+            hook_state = (
+                self._evolve_hooks.state_dict() if self._evolve_hooks is not None else None
+            )
+            if hook_state is not None:
+                run_state[_EVOLVE_HOOKS_CKPT_KEY] = hook_state
             payload = build_checkpoint(
                 status=status,
                 phase=phase,
@@ -459,9 +428,10 @@ class ClosedLoopRunner:
                 ckpt_extra.get("id_counter"),
                 existing_ids=_resume_known_ids(ckpt, stage2_cfg.output_root),
             )
-            _restore_highway_elite(
-                self, ckpt_extra.get("highway_elite"), validator=self.validator
-            )
+            if self._evolve_hooks is not None:
+                self._evolve_hooks.load_state_dict(
+                    ckpt_extra.get(_EVOLVE_HOOKS_CKPT_KEY), validator=self.validator
+                )
             if str(ckpt.get("phase") or "") == "labeling" and start_epoch < generations:
                 resumed_to_label = deserialize_population(
                     ckpt.get("to_label"), validator=self.validator
@@ -558,9 +528,7 @@ class ClosedLoopRunner:
                 if os.path.isfile(metrics_path):
                     try:
                         with open(metrics_path, encoding="utf-8") as fh:
-                            import json as _json
-
-                            loaded_fit_metrics = _json.load(fh)
+                            loaded_fit_metrics = json.load(fh)
                     except Exception:  # noqa: BLE001
                         loaded_fit_metrics = None
 
@@ -624,8 +592,6 @@ class ClosedLoopRunner:
             for c in ranked:
                 m = (c.metadata or {}).get("last_metrics")
                 if isinstance(m, dict) and "SR" in m:
-                    from raise_core.raise_loop.proxy_feedback import nav_scalar
-
                     pop_sc.append(nav_scalar(m))
 
             def _process_label_result(
@@ -647,11 +613,6 @@ class ClosedLoopRunner:
                     n_labeled = len(known_ids)
                 metrics = (cand.metadata or {}).get("last_metrics")
                 if isinstance(metrics, dict) and metrics:
-                    from raise_core.raise_loop.proxy_feedback import (
-                        attach_proxy_feedback,
-                        nav_scalar,
-                    )
-
                     pop_sc.append(nav_scalar(metrics))
                     if cand.score is not None:
                         pop_s1.append(float(cand.score))
@@ -685,11 +646,6 @@ class ClosedLoopRunner:
                 else 1
             )
             if domain_key == "highway":
-                from raise_core.raise_loop.parallel_label import (
-                    attach_warm_start_checkpoints,
-                    label_candidates_parallel,
-                )
-
                 stage2_cfg.highway_eval_seed_base = int(cfg.seed) + int(g) * 1000
 
                 attach_warm_start_checkpoints(
@@ -765,11 +721,6 @@ class ClosedLoopRunner:
                 and int(g) >= 1
                 and int(n_labeled) >= int(getattr(cfg, "proxy_feedback_min_labels", 16))
             ):
-                from raise_core.raise_loop.proxy_feedback import (
-                    apply_in_loop_d3,
-                    select_for_in_loop_d3,
-                )
-
                 targets = select_for_in_loop_d3(to_label, max_n=d3_n)
                 for old in targets:
                     d3_diag: Dict[str, Any] = {}
@@ -833,12 +784,6 @@ class ClosedLoopRunner:
                 except Exception as exc:  # noqa: BLE001
                     logger.exception("closed-loop refit failed: %s", exc)
 
-            from raise_core.raise_loop.evolve_rank import (
-                parse_evolve_rank,
-                rank_population_for_evolution,
-            )
-            from raise_core.selection import candidate_fitness
-
             evolve_mode = parse_evolve_rank(
                 getattr(cfg, "evolve_rank", None),
                 domain=str(getattr(cfg, "domain", "crowdnav") or "crowdnav"),
@@ -846,214 +791,36 @@ class ClosedLoopRunner:
             w_raw = getattr(cfg, "evolve_rank_score1_weight", None)
             w = 0.4 if w_raw is None else float(w_raw)
 
-            pareto_ref = None
-            calib_mode = None
-            pareto_objectives = None
-            ambient = None
-            if domain_key == "highway":
-                from domains.highway.pareto_rank import (
-                    ParetoObjectives,
-                    parse_calibration_mode,
-                )
-
-                calib_mode = parse_calibration_mode(
-                    getattr(cfg, "highway_calibration_mode", None)
-                )
-                pareto_objectives = ParetoObjectives(
-                    progress=bool(getattr(cfg, "highway_pareto_use_progress", True)),
-                    lane_change=bool(
-                        getattr(cfg, "highway_pareto_use_lane_change", True)
-                    ),
-                    overtake=bool(getattr(cfg, "highway_pareto_use_overtake", True)),
-                )
-            if (
-                evolve_mode == "pareto"
-                and domain_key == "highway"
-                and calib_mode == "env_measured"
-            ):
-                ambient = self._highway_ambient_traffic(cfg)
-            if (
-                evolve_mode == "pareto"
-                and domain_key == "highway"
-                and calib_mode == "population"
-            ):
-                # One-shot SLOWER/FASTER env reference (cached). IDLE is useless
-                # here (CR≈1); gear endpoints come from the action space itself.
-                if not hasattr(self, "_highway_pareto_ref"):
-                    self._highway_pareto_ref = None
-                    ref_path = os.path.join(
-                        closed_loop_dir(cfg.output_dir), "pareto_reference.json"
-                    )
-                    if os.path.isfile(ref_path):
-                        try:
-                            from domains.highway.pareto_rank import ReferenceStats
-
-                            with open(ref_path, "r", encoding="utf-8") as fh:
-                                payload = json.load(fh) or {}
-                            self._highway_pareto_ref = ReferenceStats(
-                                v_floor=float(payload["v_floor"]),
-                                cr_ceiling=float(payload["cr_ceiling"]),
-                                tr_ceiling=float(payload["tr_ceiling"]),
-                                source=str(
-                                    payload.get("source")
-                                    or "gear_endpoints_slower_faster"
-                                ),
-                                se_margin=bool(payload.get("se_margin", True)),
-                            )
-                        except Exception as exc:  # noqa: BLE001
-                            logger.warning(
-                                "Failed to load pareto_reference.json (%s)", exc
-                            )
-                            self._highway_pareto_ref = None
-                    if self._highway_pareto_ref is None and not bool(cfg.use_stub):
-                        try:
-                            from domains.highway.pareto_rank import (
-                                calibrate_from_gear_endpoints,
-                                collect_gear_endpoint_reference_stats,
-                            )
-
-                            (
-                                slow_s,
-                                slow_cr,
-                                slow_tr,
-                                fast_s,
-                                fast_cr,
-                                fast_tr,
-                            ) = collect_gear_endpoint_reference_stats(
-                                n_episodes=4, seed=int(cfg.seed)
-                            )
-                            self._highway_pareto_ref = calibrate_from_gear_endpoints(
-                                slow_s,
-                                slow_cr,
-                                slow_tr,
-                                fast_s,
-                                fast_cr,
-                                fast_tr,
-                            )
-                            write_json(
-                                ref_path,
-                                {
-                                    "v_floor": self._highway_pareto_ref.v_floor,
-                                    "cr_ceiling": self._highway_pareto_ref.cr_ceiling,
-                                    "tr_ceiling": self._highway_pareto_ref.tr_ceiling,
-                                    "source": self._highway_pareto_ref.source,
-                                    "se_margin": self._highway_pareto_ref.se_margin,
-                                    "slower_cr": float(slow_cr),
-                                    "faster_cr": float(fast_cr),
-                                    "n_slower_samples": int(len(slow_s)),
-                                    "n_faster_samples": int(len(fast_s)),
-                                },
-                            )
-                        except Exception as exc:  # noqa: BLE001
-                            logger.warning(
-                                "Pareto SLOWER/FASTER reference failed (%s); "
-                                "falling back to per-generation percentiles",
-                                exc,
-                            )
-                            self._highway_pareto_ref = None
-                pareto_ref = getattr(self, "_highway_pareto_ref", None)
-
+            hooks = self._evolve_hooks
+            rank_inputs: Dict[str, Any] = (
+                hooks.ranking_inputs(cfg, evolve_mode)
+                if hooks is not None
+                else {
+                    "pareto_ref": None,
+                    "calibration_mode": None,
+                    "pareto_objectives": None,
+                    "ambient": None,
+                }
+            )
             ranked_for_evo = rank_population_for_evolution(
                 ranked,
                 mode=evolve_mode,
                 hybrid_score1_weight=w,
-                pareto_ref=pareto_ref,
-                calibration_mode=calib_mode,
-                pareto_objectives=pareto_objectives,
-                ambient=ambient,
+                **rank_inputs,
             )
-            # Highway: demote identical Stage-II metric clones before breeding.
             elite_id: Optional[str] = None
-            if domain_key == "highway":
-                from raise_core.raise_loop.diversity import diversify_ranking
-                from raise_core.raise_loop.evolve_rank import (
-                    resolve_elite_archive_mode,
-                    select_pareto_elite,
+            if hooks is not None:
+                ranked_for_evo, elite_id = hooks.after_ranking(
+                    ranked_for_evo, cfg, rank_inputs
                 )
-
-                ranked_for_evo = diversify_ranking(ranked_for_evo)
-                elite_mode = resolve_elite_archive_mode(
-                    getattr(cfg, "highway_elite_archive", "auto"), calib_mode
-                )
-                # Legacy fitness is still tracked for epoch logs.
-                for c in ranked_for_evo:
-                    fit = float(candidate_fitness(c))
-                    if fit > float(
-                        getattr(self, "_highway_best_ever_fitness", float("-inf"))
-                    ):
-                        self._highway_best_ever_fitness = fit
-                        self._highway_best_ever_cand = c
-                if elite_mode == "pareto":
-                    self._highway_pareto_elite = select_pareto_elite(
-                        ranked_for_evo,
-                        getattr(self, "_highway_pareto_elite", None),
-                        calibration_mode=str(calib_mode),
-                        objectives=pareto_objectives,
-                        ambient=ambient,
-                    )
-                    elite = self._highway_pareto_elite
-                else:
-                    elite = getattr(self, "_highway_best_ever_cand", None)
-                if elite is not None and bool(cfg.keep_runtime_elite):
-                    eid = str(elite.candidate_id)
-                    rest = [
-                        c
-                        for c in ranked_for_evo
-                        if str(c.candidate_id) != eid
-                    ]
-                    # Prefer live copy from this epoch if still present.
-                    live = next(
-                        (
-                            c
-                            for c in ranked_for_evo
-                            if str(c.candidate_id) == eid
-                        ),
-                        elite,
-                    )
-                    ranked_for_evo = [live] + rest
-                    elite_id = eid
-
-            # Refresh LLM evidence with stamped pareto_* (label-time attach
-            # runs before stamp_pareto_ranks) and build reflection from the
-            # same list used for breeding.
-            if domain_key == "highway":
-                from raise_core.raise_loop.proxy_feedback import (
-                    refresh_highway_evidence_after_pareto,
-                )
-
-                refresh_highway_evidence_after_pareto(ranked_for_evo)
             evolver.reflection = evolver._build_reflection(
                 ranked_for_evo, generation=g
             )
-
-            pareto_summary = None
-            if domain_key == "highway" and evolve_mode == "pareto":
-                front0_ids = []
-                n_feas = 0
-                for c in ranked_for_evo:
-                    md = c.metadata or {}
-                    if md.get("pareto_feasible"):
-                        n_feas += 1
-                    if md.get("pareto_front0") or md.get("pareto_front") == 0:
-                        front0_ids.append(str(c.candidate_id))
-                pareto_summary = {
-                    "calibration_mode": calib_mode,
-                    "objectives": (
-                        list(pareto_objectives.names())
-                        if pareto_objectives is not None
-                        else None
-                    ),
-                    "elite_id": (
-                        str(self._highway_pareto_elite.candidate_id)
-                        if getattr(self, "_highway_pareto_elite", None) is not None
-                        else None
-                    ),
-                    "n_feasible": n_feas,
-                    "n_population": len(ranked_for_evo),
-                    "front0_ids": front0_ids,
-                    "front0_n": len(front0_ids),
-                    "evolve_order": [str(c.candidate_id) for c in ranked_for_evo],
-                }
+            pareto_summary = (
+                hooks.pareto_summary(ranked_for_evo, evolve_mode, rank_inputs)
+                if hooks is not None
+                else None
+            )
 
             epoch_rec = {
                 "epoch": g,
@@ -1078,8 +845,8 @@ class ClosedLoopRunner:
                 "evolve_best_nav": (
                     candidate_fitness(ranked_for_evo[0]) if ranked_for_evo else None
                 ),
-                "best_ever_fitness": getattr(
-                    self, "_highway_best_ever_fitness", None
+                "best_ever_fitness": (
+                    hooks.best_ever_fitness if hooks is not None else None
                 ),
                 "gate": gate_report,
                 "al": al_report,
@@ -1114,16 +881,12 @@ class ClosedLoopRunner:
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("ledger write failed: %s", exc)
             try:
-                from raise_core.raise_loop.gate_policy import epoch_population_stats
-
                 epoch_rec["stats"] = epoch_population_stats(ranked)
             except Exception:  # noqa: BLE001
                 pass
             if epoch_resumed:
                 # Counts cover only the labels this process produced.
                 epoch_rec["resumed"] = True
-            from raise_core.raise_loop.report import format_epoch_summary
-
             append_epoch_record(cfg.output_dir, epoch_rec)
             history.append(epoch_rec)
             write_json(
@@ -1202,8 +965,6 @@ class ClosedLoopRunner:
             result_manifest,
         )
         try:
-            from raise_core.raise_loop.report import write_closed_loop_report
-
             write_closed_loop_report(cfg.output_dir, manifest=result_manifest)
         except Exception as exc:  # noqa: BLE001
             logger.warning("closed-loop report failed: %s", exc)

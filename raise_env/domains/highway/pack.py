@@ -19,6 +19,14 @@ from domains.highway.state import fingerprint_smoke_states
 _PACK_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
+def _make_evolve_hooks():
+    # Deferred: evolve_hooks -> pareto_rank -> env_wrapper needs gymnasium,
+    # which get_pack(with_adapter=False) must not require.
+    from domains.highway.evolve_hooks import HighwayEvolveHooks
+
+    return HighwayEvolveHooks()
+
+
 def get_pack(*, with_adapter: bool = True) -> DomainPack:
     adapter = HighwayAdapter() if with_adapter else None
     return DomainPack(
@@ -38,6 +46,7 @@ def get_pack(*, with_adapter: bool = True) -> DomainPack:
         sandbox_config=highway_sandbox_config(),
         make_stage2_trainer=make_stage2_trainer if with_adapter else None,
         make_stage3_trainer=make_stage3_trainer if with_adapter else None,
+        make_evolve_hooks=_make_evolve_hooks,
         selection_scalar_name="highway_fitness",
         metadata={
             "env_id": "highway-fast-v0",

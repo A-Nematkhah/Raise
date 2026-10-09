@@ -13,10 +13,8 @@ scale up on a GPU cluster for paper-faithful runs.
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import os
-import re
 import sys
 import time
 from abc import ABC, abstractmethod
@@ -47,7 +45,13 @@ from raise_core.selection import (
     candidate_nav_scalar,
     is_same_genome,
 )
-from raise_core.refine import ProxyMetrics, evaluate_proxy_policy
+from raise_core.refine import (
+    ProxyMetrics,
+    _next_revision_id,
+    _stable_code_hash,
+    _unique_trained_snapshot_id,
+    evaluate_proxy_policy,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -160,25 +164,9 @@ class HumanSweepReport:
         return "\n".join(lines)
 
 
-def _stable_code_hash(code: str) -> int:
-    return int(hashlib.md5(code.encode("utf-8")).hexdigest(), 16) % 10_000
-
-
-def _next_revision_id(candidate_id: str, *, stage_tag: str = "v3") -> str:
-    m = re.search(r"_v(\d+)$", candidate_id)
-    if m:
-        return f"{candidate_id[: m.start()]}_v{int(m.group(1)) + 1}"
-    n = 3 if stage_tag == "v3" else 2
-    return f"{candidate_id}_v{n}"
-
-
 def _v3_candidate_id(candidate_id: str) -> str:
     """Tag a successfully refined Stage-III revision (incrementing ``_vN``)."""
     return _next_revision_id(candidate_id, stage_tag="v3")
-
-
-def _unique_trained_snapshot_id(candidate_id: str, *, round_index: int, snap_index: int) -> str:
-    return f"{candidate_id}__r{int(round_index)}_s{int(snap_index)}"
 
 
 def _resolve_horizon(config: Stage3Config, env_config) -> int:

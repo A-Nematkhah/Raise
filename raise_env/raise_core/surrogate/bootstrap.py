@@ -10,10 +10,10 @@ import json
 import logging
 import os
 import time
-from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from raise_core.explore import RewardCandidate
+from raise_core.json_io import utc_now_z
 from raise_core.selection import navigation_scalar
 from raise_core.surrogate import feature_schema_version_for_domain
 from raise_core.surrogate.dataset_io import (
@@ -35,14 +35,6 @@ logger = logging.getLogger(__name__)
 
 LABEL_BUDGET = "stage2_short"
 
-
-def _utc_now() -> str:
-    return (
-        datetime.now(timezone.utc)
-        .replace(microsecond=0)
-        .isoformat()
-        .replace("+00:00", "Z")
-    )
 
 
 def _stage1_dataset_ready(path: str) -> bool:
@@ -529,7 +521,7 @@ def run_bootstrap(
         "llm_provider": str(llm_provider),
         "num_processes": int(nproc),
         "seed": int(seed),
-        "created_at": _utc_now(),
+        "created_at": utc_now_z(),
         "model_dir": model_dir,
         "fit_metrics": fit_metrics,
     }

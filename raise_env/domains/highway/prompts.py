@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from typing import Optional
 
+from domains.highway.action_config import action_space_prompt_block
+from domains.highway.sandbox_fields import HIGHWAY_FORBIDDEN_HALLUCINATIONS
+
 DOMAIN_NAME = "highway"
 
 _SELECTION_OBJECTIVE = (
@@ -291,8 +294,6 @@ def format_d1_initial(
     include_external_knowledge: bool = True,
     reflection: str = "",
 ) -> str:
-    from domains.highway.action_config import action_space_prompt_block
-
     seed_block = ""
     if include_seed:
         seed_block = (
@@ -339,8 +340,6 @@ def format_d1_initial_batch(
     include_external_knowledge: bool = True,
     reflection: str = "",
 ) -> str:
-    from domains.highway.action_config import action_space_prompt_block
-
     if n < 1:
         raise ValueError("batch size n must be >= 1")
     seed_block = ""
@@ -425,8 +424,6 @@ def format_d3_repair(
     bad_code: str,
     validation_error: str,
 ) -> str:
-    from domains.highway.sandbox_fields import HIGHWAY_FORBIDDEN_HALLUCINATIONS
-
     blob = f"{bad_code}\n{validation_error}".lower()
     seen = [name for name in HIGHWAY_FORBIDDEN_HALLUCINATIONS if name in blob]
     remap = {

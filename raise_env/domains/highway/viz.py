@@ -10,6 +10,8 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
+from raise_core.domains import load_domain, make_validator_for_domain
+
 logger = logging.getLogger(__name__)
 
 
@@ -208,7 +210,6 @@ def visualize_best_policy(
     if not code.strip():
         return {"ok": False, "reason": "empty reward code"}
 
-    from raise_core.domains import load_domain, make_validator_for_domain
     from stable_baselines3 import PPO
 
     pack = load_domain("highway")

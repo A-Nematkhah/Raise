@@ -23,6 +23,13 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence
 import numpy as np
 from stable_baselines3.common.callbacks import BaseCallback, CallbackList
 
+from domains.highway.adapter import _eval_metrics
+from domains.highway.env_wrapper import (
+    HOLDOUT_SEED_OFFSET,
+    RewardInjectedHighwayEnv,
+    holdout_env_config,
+)
+
 logger = logging.getLogger(__name__)
 
 # SB3 LoggerRecorder keys vary slightly by version; try prefixed then bare.
@@ -309,13 +316,6 @@ class GroundTruthCheckpointCallback(BaseCallback):
 
     def _run_and_log(self, steps: int) -> None:
         try:
-            from domains.highway.adapter import _eval_metrics
-            from domains.highway.env_wrapper import (
-                HOLDOUT_SEED_OFFSET,
-                RewardInjectedHighwayEnv,
-                holdout_env_config,
-            )
-
             env = RewardInjectedHighwayEnv(
                 self.reward_fn,
                 seed=self.seed + 7,

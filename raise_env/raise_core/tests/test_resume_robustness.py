@@ -22,9 +22,7 @@ from raise_core.raise_loop.parallel_label import label_candidates_parallel
 from raise_core.raise_loop.runner import (
     ClosedLoopRunner,
     _load_ckpt,
-    _restore_highway_elite,
     _resume_known_ids,
-    _serialize_highway_elite,
 )
 from raise_core.refine import ProxyMetrics, _untested_child_metadata
 from raise_core.sandbox.validator import RewardValidator
@@ -103,24 +101,6 @@ def test_resume_known_ids_reads_checkpoint_and_train_dirs(tmp_path):
     ids = set(_resume_known_ids(ckpt, str(stage2)))
     assert {"ini_0001", "cro_0007", "ran_0009", "mut_0042"} <= ids
     assert "notes" not in ids
-
-
-def test_highway_elite_roundtrip():
-    class _Runner:
-        pass
-
-    src = _Runner()
-    assert _serialize_highway_elite(src) is None
-    src._highway_pareto_elite = _cand("ini_0001")
-    src._highway_best_ever_cand = _cand("cro_0002")
-    src._highway_best_ever_fitness = 0.75
-    saved = json.loads(json.dumps(_serialize_highway_elite(src)))
-
-    dst = _Runner()
-    _restore_highway_elite(dst, saved, validator=RewardValidator())
-    assert dst._highway_pareto_elite.candidate_id == "ini_0001"
-    assert dst._highway_best_ever_cand.reward_fn is not None
-    assert dst._highway_best_ever_fitness == 0.75
 
 
 def test_dataset_nan_becomes_none(tmp_path):

@@ -15,28 +15,20 @@ Layout under the run output dir::
 
 from __future__ import annotations
 
-import json
 import os
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, Optional, Sequence
 
-from raise_core.explore import RewardCandidate
-from raise_core.json_io import atomic_write_json
-from domains.crowdnav.reporting import candidate_to_dict, load_candidate_dict
+from raise_core.json_io import atomic_write_json, read_json_dict, utc_now_z
+from raise_core.population_io import (  # noqa: F401 — deserialize_population is re-exported
+    deserialize_population,
+    serialize_population,
+)
+from domains.crowdnav.reporting import candidate_to_dict
 
 _CHECKPOINT_NAME = "checkpoint.json"
 _RESUME_NAME = "RESUME.json"
 _TRAIN_PROGRESS_NAME = "train_progress.json"
 _SCHEMA_VERSION = "1"
-
-
-def _utc_now() -> str:
-    return (
-        datetime.now(timezone.utc)
-        .replace(microsecond=0)
-        .isoformat()
-        .replace("+00:00", "Z")
-    )
 
 
 def stage3_dir_from_train_root(output_root: str) -> str:
@@ -46,32 +38,6 @@ def stage3_dir_from_train_root(output_root: str) -> str:
     if base == "stage3_train" and parent:
         return os.path.join(parent, "stage3")
     return os.path.join(root, "stage3")
-
-
-def _serialize_pop(population: Optional[Sequence[Any]]) -> List[Dict[str, Any]]:
-    if not population:
-        return []
-    out: List[Dict[str, Any]] = []
-    for cand in population:
-        if hasattr(cand, "candidate_id"):
-            out.append(candidate_to_dict(cand))
-        elif isinstance(cand, dict):
-            out.append(dict(cand))
-    return out
-
-
-def deserialize_population(
-    rows: Optional[Sequence[Dict[str, Any]]],
-    *,
-    validator: Any = None,
-) -> List[RewardCandidate]:
-    if not rows:
-        return []
-    return [
-        load_candidate_dict(dict(row), validator=validator)
-        for row in rows
-        if isinstance(row, dict)
-    ]
 
 
 def build_checkpoint(
@@ -98,17 +64,17 @@ def build_checkpoint(
         "round_index": int(round_index),
         "candidate_index": int(candidate_index),
         "rounds": int(rounds),
-        "round_input_population": _serialize_pop(round_input_population),
-        "round_output_partial": _serialize_pop(round_output_partial),
+        "round_input_population": serialize_population(round_input_population),
+        "round_output_partial": serialize_population(round_output_partial),
         "history": list(history or []),
         "best_trained": (
             candidate_to_dict(best_trained) if best_trained is not None else None
         ),
-        "trained_snapshots": _serialize_pop(trained_snapshots),
+        "trained_snapshots": serialize_population(trained_snapshots),
         "run_h_sweep": bool(run_h_sweep),
         "train_progress": dict(train_progress) if train_progress else None,
         "config": dict(config or {}),
-        "updated_at": _utc_now(),
+        "updated_at": utc_now_z(),
     }
     if extra:
         payload["extra"] = dict(extra)
@@ -124,19 +90,14 @@ def save_checkpoint(run_dir: str, payload: Dict[str, Any]) -> str:
         "phase": payload.get("phase"),
         "round_index": payload.get("round_index"),
         "candidate_index": payload.get("candidate_index"),
-        "updated_at": payload.get("updated_at") or _utc_now(),
+        "updated_at": payload.get("updated_at") or utc_now_z(),
     }
     atomic_write_json(os.path.join(run_dir, _RESUME_NAME), resume)
     return path
 
 
 def load_checkpoint(run_dir: str) -> Optional[Dict[str, Any]]:
-    path = os.path.join(run_dir, _CHECKPOINT_NAME)
-    if not os.path.isfile(path):
-        return None
-    with open(path, "r", encoding="utf-8") as fh:
-        data = json.load(fh)
-    return data if isinstance(data, dict) else None
+    return read_json_dict(os.path.join(run_dir, _CHECKPOINT_NAME))
 
 
 def history_record_to_dict(
@@ -176,18 +137,13 @@ def save_train_progress(
         "update_j": int(update_j),
         "num_updates": int(num_updates),
         "weights_path": str(weights_path),
-        "updated_at": _utc_now(),
+        "updated_at": utc_now_z(),
     }
     return atomic_write_json(path, payload)
 
 
 def load_train_progress(out_dir: str) -> Optional[Dict[str, Any]]:
-    path = os.path.join(out_dir, _TRAIN_PROGRESS_NAME)
-    if not os.path.isfile(path):
-        return None
-    with open(path, "r", encoding="utf-8") as fh:
-        data = json.load(fh)
-    return data if isinstance(data, dict) else None
+    return read_json_dict(os.path.join(out_dir, _TRAIN_PROGRESS_NAME))
 
 
 def clear_train_progress(out_dir: str) -> None:

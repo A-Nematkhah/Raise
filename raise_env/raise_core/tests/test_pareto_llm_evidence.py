@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 import domains.highway.prompts as hwy_prompts
 from domains.crowdnav.prompts import D5_SEED_FUNCTION
 from raise_core.explore import RewardCandidate, StageIEvolver
@@ -12,6 +14,10 @@ from raise_core.raise_loop.proxy_feedback import (
     refresh_highway_evidence_after_pareto,
 )
 from raise_core.sandbox.validator import RewardValidator
+
+_EVOLVE_HOOKS_PATH = os.path.join(
+    os.path.dirname(hwy_prompts.__file__), "evolve_hooks.py"
+)
 
 
 def _metrics(**extra):
@@ -223,7 +229,12 @@ def test_runner_builds_reflection_after_ranked_for_evo():
     src = inspect.getsource(runner_mod)
     assert "evolver.reflection = evolver._build_reflection(ranked, generation=g)" not in src
     i_rank = src.index("ranked_for_evo = rank_population_for_evolution")
+    i_hooks = src.index("hooks.after_ranking(")
     i_refl = src.index("evolver.reflection = evolver._build_reflection")
-    assert i_rank < i_refl
+    assert i_rank < i_hooks < i_refl
     assert "ranked_for_evo, generation=g" in src
-    assert "refresh_highway_evidence_after_pareto" in src
+    # Highway evidence refresh runs inside the pack hook, before reflection.
+    with open(_EVOLVE_HOOKS_PATH, encoding="utf-8") as fh:
+        hooks_src = fh.read()
+    after_ranking = hooks_src[hooks_src.index("def after_ranking") :]
+    assert "refresh_highway_evidence_after_pareto(ranked_for_evo)" in after_ranking

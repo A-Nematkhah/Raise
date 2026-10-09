@@ -161,6 +161,7 @@ are the six listed above.
 | `env_wrapper.py` | Obs → state + reward injection |
 | `adapter.py` | Stage II/III SB3 trainers |
 | `watchdog.py` | PPO stall watchdog |
+| `evolve_hooks.py` | Closed-loop Pareto calibration + elite archive (`DomainPack.make_evolve_hooks`) |
 | `pack.py` | `get_pack()` |
 
 ## Dependencies

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Optional, Sequence, Tuple
 
+from raise_core.llm import normalize_to_compute_reward
 from raise_core.sandbox.ast_policy import (
     check_interface,
     check_structure,
@@ -53,8 +54,6 @@ class RewardValidator:
 
         # Normalize aliases / missing memory arg before AST checks so prompt
         # examples and LLM outputs share one sandbox contract.
-        from raise_core.llm import normalize_to_compute_reward
-
         code = normalize_to_compute_reward(str(code))
 
         tree = parse_reward_code(code, self.config)

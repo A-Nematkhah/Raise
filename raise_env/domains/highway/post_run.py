@@ -7,6 +7,8 @@ import logging
 import os
 from typing import Any, Dict
 
+from domains.highway.viz import visualize_best_policy
+
 logger = logging.getLogger(__name__)
 
 
@@ -52,8 +54,6 @@ def write_highway_run_artifacts(
 
     if not skip_viz:
         try:
-            from domains.highway.viz import visualize_best_policy
-
             viz = visualize_best_policy(
                 run_dir,
                 output_dir=os.path.join(plots_dir, "viz"),

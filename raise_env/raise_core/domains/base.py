@@ -61,6 +61,9 @@ class DomainPack:
     # Pack-local Stage II/III trainer factories (preferred over name branches).
     make_stage2_trainer: Optional[Callable[..., Any]] = None
     make_stage3_trainer: Optional[Callable[..., Any]] = None
+    # Optional factory: () -> closed-loop evolution hooks (ranking_inputs /
+    # after_ranking / pareto_summary / state_dict). None = plain ranking.
+    make_evolve_hooks: Optional[Callable[[], Any]] = None
     selection_scalar_name: str = "navigation_scalar"
     metadata: Dict[str, Any] = field(default_factory=dict)
 

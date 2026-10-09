@@ -8,10 +8,10 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime, timezone
 from typing import Any, Dict, List
 
 from raise_core.active_learning.query import QueryItem
+from raise_core.json_io import utc_now_z
 
 _QUEUE = "queue.jsonl"
 _DONE = "done.jsonl"
@@ -22,14 +22,6 @@ _MANIFEST = "manifest.json"
 def _ensure_dir(root: str) -> None:
     os.makedirs(root, exist_ok=True)
 
-
-def _utc_now() -> str:
-    return (
-        datetime.now(timezone.utc)
-        .replace(microsecond=0)
-        .isoformat()
-        .replace("+00:00", "Z")
-    )
 
 
 def _queue_path(root: str) -> str:
@@ -105,7 +97,7 @@ def enqueue(root: str, items: List[QueryItem]) -> None:
         _append_jsonl(_queue_path(root), item.to_dict())
     man = read_manifest(root)
     man["n_enqueued_total"] = int(man.get("n_enqueued_total") or 0) + len(items)
-    man["updated_at"] = _utc_now()
+    man["updated_at"] = utc_now_z()
     write_manifest(root, man)
 
 
@@ -128,7 +120,7 @@ def mark_done(root: str, item: QueryItem, *, result: Dict[str, Any]) -> None:
     """Append a finished query + result blob to ``done.jsonl``."""
     _ensure_dir(root)
     row = {
-        "finished_at": _utc_now(),
+        "finished_at": utc_now_z(),
         "item": item.to_dict(),
         "result": dict(result or {}),
     }
@@ -137,21 +129,21 @@ def mark_done(root: str, item: QueryItem, *, result: Dict[str, Any]) -> None:
     man["n_done_total"] = int(man.get("n_done_total") or 0) + 1
     if str(item.kind) == "stage2_label" and str(result.get("status")) == "ok":
         man["n_done_since_refit"] = int(man.get("n_done_since_refit") or 0) + 1
-    man["updated_at"] = _utc_now()
+    man["updated_at"] = utc_now_z()
     write_manifest(root, man)
 
 
 def append_step(root: str, summary: Dict[str, Any]) -> None:
     _ensure_dir(root)
     row = dict(summary)
-    row.setdefault("ts", _utc_now())
+    row.setdefault("ts", utc_now_z())
     _append_jsonl(_steps_path(root), row)
 
 
 def reset_refit_counter(root: str) -> None:
     man = read_manifest(root)
     man["n_done_since_refit"] = 0
-    man["last_refit_at"] = _utc_now()
+    man["last_refit_at"] = utc_now_z()
     write_manifest(root, man)
 
 

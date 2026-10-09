@@ -6,6 +6,7 @@ import logging
 from dataclasses import replace
 from typing import Optional, Sequence
 
+from raise_core.llm import normalize_to_compute_reward
 from raise_core.sandbox.config import SandboxConfig
 from raise_core.sandbox.runtime import SandboxedReward
 from raise_core.sandbox.validator import RewardValidator
@@ -77,8 +78,6 @@ class HighwayRewardValidator(RewardValidator):
         )
 
     def validate_code(self, code: str) -> SandboxedReward:
-        from raise_core.llm import normalize_to_compute_reward
-
         code = normalize_unicode_punctuation(str(code))
         normalized = normalize_to_compute_reward(code)
         check_target_speed_literals(normalized)

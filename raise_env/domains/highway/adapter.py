@@ -9,10 +9,22 @@ import time
 import warnings
 from typing import Any, Dict, Optional
 
+import numpy as np
+
+from domains.highway.action_config import (
+    configure_action_mode_from_config,
+    is_continuous_mode,
+    spaces_compatible,
+)
+from domains.highway.metrics import attach_fitness, format_highway_metrics_line
+from domains.highway.objective_constants import V_TARGET
 from domains.highway.overtake import OvertakeTracker
 from domains.highway.state import lane_index_from_y
 from domains.highway.watchdog import StallWatchdog, stall_seconds_from_config
+from raise_core import console
 from raise_core.refine import ProxyMetrics, StubPolicyTrainer
+from raise_core.validate import HumanSweepReport, TrainEvalBundle
+from raise_core.validate import StubPolicyTrainer as Stage3StubTrainer
 
 logger = logging.getLogger(__name__)
 
@@ -79,8 +91,6 @@ class HighwayAdapter:
         human_counts: Optional[Any] = None,
     ) -> Any:
         """No-op H-sweep for highway (CrowdNav-only concept)."""
-        from raise_core.validate import HumanSweepReport
-
         return HumanSweepReport(candidate_id=str(candidate.candidate_id), by_human_count={})
 
 
@@ -148,8 +158,6 @@ def _eval_metrics(
     Each episode uses a distinct ``reset(seed=…)`` so SR/CR are real rates
     over varied traffic, not 20 copies of one trajectory.
     """
-    import numpy as np
-
     sr = cr = tr = 0
     times: list[float] = []
     dists: list[float] = []
@@ -169,8 +177,6 @@ def _eval_metrics(
     # a stable aspirational bar for humans reading reports; selection uses
     # continuous mean_speed instead. Do not feed this into pareto_rank or
     # any breeding decision.
-    from domains.highway.objective_constants import V_TARGET
-
     min_speed_for_soft = float(
         V_TARGET if soft_speed_mps is None else soft_speed_mps
     )
@@ -284,8 +290,6 @@ def _eval_metrics(
 
 
 def _nearest_gap_from_obs(obs: Any) -> Optional[float]:
-    import numpy as np
-
     arr = np.asarray(obs, dtype=np.float64)
     if arr.ndim != 2 or arr.shape[0] < 2 or arr.shape[1] < 3:
         return None
@@ -304,8 +308,6 @@ def _nearest_gap_from_obs(obs: Any) -> Optional[float]:
 
 def _lane_index_from_obs(obs: Any) -> Optional[int]:
     """Discrete lane index from kinematics y (same mapping as kinematics_to_state)."""
-    import numpy as np
-
     arr = np.asarray(obs, dtype=np.float64)
     if arr.ndim != 2 or arr.shape[0] < 1 or arr.shape[1] < 3:
         return None
@@ -316,8 +318,6 @@ def _lane_index_from_obs(obs: Any) -> Optional[int]:
 
 def metrics_to_highway_dict(metrics: ProxyMetrics) -> Dict[str, float]:
     """ProxyMetrics.as_dict() + continuous highway fields + official fitness."""
-    from domains.highway.metrics import attach_fitness
-
     payload = metrics.as_dict()
     extras = getattr(metrics, "_highway_extras", None) or {}
     payload.update({k: float(v) for k, v in extras.items()})
@@ -415,8 +415,6 @@ def _ppo_progress_callback(total_timesteps: int, desc: str):
     """SB3 callback that drives ``raise_core.console.progress``."""
     from stable_baselines3.common.callbacks import BaseCallback
 
-    from raise_core import console
-
     bar = console.progress(
         total=max(1, int(total_timesteps)),
         desc=desc,
@@ -490,8 +488,6 @@ class HighwayPPOTrainer:
             ) from exc
 
         from domains.highway.env_wrapper import RewardInjectedHighwayEnv
-        from raise_core import console
-        from raise_core.validate import TrainEvalBundle
 
         if candidate.reward_fn is None:
             raise ValueError(f"Candidate {candidate.candidate_id} has no reward_fn")
@@ -532,11 +528,6 @@ class HighwayPPOTrainer:
             stage=stage_tag,
         )
 
-        from domains.highway.action_config import (
-            configure_action_mode_from_config,
-            is_continuous_mode,
-            spaces_compatible,
-        )
         from domains.highway.env_wrapper import training_env_config
 
         configure_action_mode_from_config(config)
@@ -719,8 +710,6 @@ class HighwayPPOTrainer:
         }
         metrics_dict["n_envs"] = float(n_envs)
         metrics_dict["warm_start"] = 1.0 if warm_path else 0.0
-        from domains.highway.metrics import attach_fitness, format_highway_metrics_line
-
         metrics_dict = attach_fitness(metrics_dict)
 
         console.status(
@@ -788,13 +777,11 @@ def evaluate_saved_policy(
     """
     from stable_baselines3 import PPO
 
-    from domains.highway.action_config import configure_action_mode_from_config
     from domains.highway.env_wrapper import (
         HOLDOUT_SEED_OFFSET,
         RewardInjectedHighwayEnv,
         holdout_env_config,
     )
-    from domains.highway.metrics import attach_fitness
 
     configure_action_mode_from_config(config)
     model = PPO.load(checkpoint_path, device="cpu")
@@ -829,9 +816,7 @@ def make_stage2_trainer(*, use_stub: bool = False) -> HighwayStage2Trainer:
 
 def make_stage3_trainer(*, use_stub: bool = False) -> HighwayStage3Trainer:
     if use_stub:
-        from raise_core.validate import StubPolicyTrainer as S3Stub
-
-        adapter = HighwayAdapter(stage3_delegate=S3Stub())
+        adapter = HighwayAdapter(stage3_delegate=Stage3StubTrainer())
     else:
         adapter = HighwayAdapter()
     return HighwayStage3Trainer(adapter)

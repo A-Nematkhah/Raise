@@ -39,6 +39,7 @@ from domains.highway.env_wrapper import (
     default_env_config,
     make_base_env,
 )
+from domains.highway.metrics import V_FLOOR, V_MIN, V_TARGET
 
 CALIBRATION_MODES = ("population", "env_measured", "no_speed_floor")
 DEFAULT_CALIBRATION_MODE = "no_speed_floor"
@@ -163,12 +164,7 @@ def calibrate_from_population(
     all-crawler generation cannot calibrate itself into mutual feasibility.
     """
     if absolute_v_floor is None:
-        try:
-            from domains.highway.metrics import V_FLOOR as _VF
-
-            absolute_v_floor = float(_VF)
-        except Exception:  # noqa: BLE001
-            absolute_v_floor = 0.0
+        absolute_v_floor = float(V_FLOOR)
     if not population:
         return ReferenceStats(
             v_floor=float(absolute_v_floor),
@@ -180,13 +176,7 @@ def calibrate_from_population(
     crs = np.asarray([m.cr for m in population], dtype=np.float64)
     trs = np.asarray([m.tr for m in population], dtype=np.float64)
     v_raw = float(np.percentile(speeds, floor_percentile))
-    try:
-        from domains.highway.metrics import V_MIN as _VMIN
-        from domains.highway.metrics import V_TARGET as _VT
-
-        v_lo, v_hi = float(_VMIN), float(_VT)
-    except Exception:  # noqa: BLE001
-        v_lo, v_hi = 10.0, 25.0
+    v_lo, v_hi = float(V_MIN), float(V_TARGET)
     v_floor = float(
         min(v_hi, max(float(absolute_v_floor), max(v_lo, v_raw)))
     )

@@ -5,10 +5,30 @@ from __future__ import annotations
 import json
 import os
 import time
-from typing import Any
+from datetime import datetime, timezone
+from typing import Any, Dict, Optional
 
 _REPLACE_RETRIES = 5
 _REPLACE_BACKOFF_S = 0.05
+
+
+def utc_now_z() -> str:
+    """UTC timestamp like ``2026-10-09T12:34:56Z`` (seconds precision)."""
+    return (
+        datetime.now(timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+
+
+def read_json_dict(path: str) -> Optional[Dict[str, Any]]:
+    """Load a JSON object from ``path``; None if missing or not a dict."""
+    if not os.path.isfile(path):
+        return None
+    with open(path, "r", encoding="utf-8") as fh:
+        data = json.load(fh)
+    return data if isinstance(data, dict) else None
 
 
 def atomic_write_json(
@@ -51,4 +71,4 @@ def atomic_write_json(
     return path
 
 
-__all__ = ["atomic_write_json"]
+__all__ = ["atomic_write_json", "read_json_dict", "utc_now_z"]

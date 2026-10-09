@@ -413,6 +413,11 @@ CrowdNav همچنان frozen؛ همهٔ تغییرات رفتاری فقط highw
   با `score1_timeout` رد می‌شود و worker دوباره بالا می‌آید.
 - **Watchdog PPO:** اگر `highway_stall_seconds` (پیش‌فرض ۳۰۰) هیچ env stepی
   نیاید، thread آموزش قطع و label شکست‌خورده ثبت می‌شود (ران ادامه می‌یابد).
+- **نگهداری کد (بدون تغییر رفتار):** منطق Pareto/elite هایوی از
+  `ClosedLoopRunner` به `domains/highway/evolve_hooks.py` رفت
+  (`DomainPack.make_evolve_hooks`؛ CrowdNav = `None`)؛ helperهای تکراری
+  checkpoint و Stage II/III یکی شدند (`json_io`, `population_io`)؛ importهای
+  درون‌تابعی بی‌دلیل به بالای ماژول منتقل شدند. خروجی ران stub قبل و بعد یکسان است.
 
 ---
 
