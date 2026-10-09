@@ -13,6 +13,8 @@
 
 **روش:** کد خط به خط خوانده شد. بعد با اسکریپت‌های آزمایشی، ده‌ها کد پاداش (سالم، مخرب، کند، سرریز، با state سراسری و ...) از همان مسیر واقعی `HighwayRewardValidator` عبور داده شد و رفتار زمان اجرا هم اندازه‌گیری شد. اعداد بخش «شواهد» از همین اجراهاست.
 
+> بخش‌های ۱ تا ۵ وضعیت کد **قبل از اصلاح** را توصیف می‌کنند. اینکه هر یافته چطور اصلاح شد و نتیجه‌ی آزمایش‌های بعد از اصلاح، در بخش ۶ آمده است.
+
 **سطح‌بندی یافته‌ها:**
 
 - **H (بالا):** روی اعتبار نتایج، پایداری pipeline یا بازده حلقه‌ی LLM اثر مستقیم دارد.
@@ -361,5 +363,59 @@ return 0.0                              ACCEPT (sandbox) -> Score1 no_signal -> 
 | L4 | پایین | `proc.close`، ترتیب `join`/`get`، حافظه‌ی مشترک در smoke | کم |
 
 **ترتیب پیشنهادی اصلاح:** H2، H1، M2، M1، M3، و بعد Lها. H2 اول است چون تنها موردی است که می‌تواند کل اجرا را از کار بیندازد.
+
+</div>
+
+---
+
+<div dir="rtl">
+
+## ۶. وضعیت اصلاحات
+
+همه‌ی یافته‌ها به همان ترتیب پیشنهادی اصلاح شدند. هر اصلاح یک commit جدا روی شاخه‌ی `fix/review-findings` دارد. حین کار یک یافته‌ی جدید هم پیدا شد (L5).
+
+| شناسه | وضعیت | commit | چه تغییر کرد |
+|---|---|---|---|
+| H2 | اصلاح شد | `b1a1e26` | حلقه‌ی Stage III خطای `train_and_eval` را می‌گیرد. کاندید با `status="failed"` و متن خطا در `history` ثبت می‌شود، وارد `trained` و انتخاب بهترین نمی‌شود، checkpoint جلو می‌رود و اجرا ادامه پیدا می‌کند. resume وضعیت failed را بازیابی می‌کند. وقفه‌های سطح process (مثل Ctrl+C) همچنان بالا می‌روند. |
+| H1 | اصلاح شد | `d2dc7a6` | `SAFE_MATH_ATTRIBUTES` در `config.py`: ‏`sqrt, exp, log, log1p, log10, tanh, sin, cos, tan, atan, atan2, hypot, fabs, floor, ceil, copysign, isfinite, isnan` و ثابت‌های `pi, e, tau, inf`. هر `math.<x>` دیگری با پیام «math.x is not allowed (allowed: ...)» رد می‌شود. پیام خطای import و هر سه پرامپت از همین ثابت ساخته می‌شوند. |
+| M2 | اصلاح شد | `dad0c26` | `List`، `Dict` و `Set` در سطح ماژول (حتی داخل tuple) با پیام «mutable top-level values ... use the memory dict» رد می‌شوند. تست قبلی که `W = {...}` را مجاز می‌دانست به لیست ردشده‌ها منتقل شد. یک خط هم به پرامپت‌ها اضافه شد. |
+| M1 | اصلاح شد | `d766311` | `SandboxedReward.compute` زمان هر فراخوانی را می‌سنجد: سقف تک‌فراخوانی ۱ ثانیه و سقف میانگین متحرک ۱۰۰ فراخوانی اخیر ۲۰ میلی‌ثانیه. smoke هم هر فراخوانی را با سقف ۰٫۱ ثانیه می‌سنجد. همه‌ی سقف‌ها در `SandboxConfig` قابل تنظیم‌اند. سقف تک‌فراخوانی عمداً شل است، چون Stage II در thread اجرا می‌شود و زمان انتظار GIL هم حساب می‌شود. |
+| M3 | اصلاح شد | `8f5dc36` | `max_abs_reward = 1e4` در `SandboxConfig`. هم در smoke و هم در هر step آموزش، اگر `|total|` بیشتر شد، `RewardSandboxError` با پیام «reward magnitude too large». پرامپت‌ها عدد سقف را از همان config می‌خوانند. |
+| L1 | اصلاح شد | `88585ee` | دسته‌های جدید: `not_on_allowlist`، `forbidden_construct`، `mutable_global`، `too_slow`، `reward_too_large`، `top_level_code`. timeout فقط با عبارت دقیق `execution exceeded timeout of` تشخیص داده می‌شود. تست‌ها دسته‌ها را از پیام‌های واقعی validator می‌سازند، پس اگر متن پیامی عوض شود تست می‌شکند. |
+| L2 | اصلاح شد | `794cab0` | `_SCALAR_FIELD_ATTRS` حالا فیلدهای اسکالر highway است (`x, y, vx, vy, heading, speed, lane_index, on_road, progress, collision, off_road, timeout, time_step, global_time, time_limit`). `action` عمداً در آن نیست. |
+| L3 + L4 | اصلاح شد | `6c001ee` | `smoke_test_compute(source_code, states, config)`: فقط یک مسیر (فرزند spawn شده) باقی ماند. `run_with_timeout` و مسیر fallback حذف شدند. نتیجه **قبل** از `join` خوانده می‌شود، فرزند در `finally` متوقف می‌شود و `queue.close()` و `proc.close()` صدا زده می‌شوند. اگر فرزند بدون نتیجه بمیرد، خطا فوراً گزارش می‌شود و تا پایان timeout صبر نمی‌شود. حافظه‌ی smoke هر بار که `global_time` جلو نرود پاک می‌شود (معادل `reset()` در مرز اپیزود). |
+| L5 (جدید) | اصلاح شد | `1e9e583` | `make_highway_validator()` بدون آرگومان، `SandboxConfig()` معمولی و **بدون allowlist** می‌ساخت. pipeline اصلی مشکلی نداشت، چون pack خودش `highway_sandbox_config()` را می‌دهد. ولی تست‌ها و اسکریپت `collect_highway_stage1_dataset.py` بدون allowlist اجرا می‌شدند و مثلاً `state.lane_position` را می‌پذیرفتند. حالا مقدار پیش‌فرض `highway_sandbox_config()` است. |
+
+**شواهد بعد از اصلاح** (همان اسکریپت‌های آزمایشی بخش ۲، دوباره اجرا شدند):
+
+</div>
+
+```text
+math.exp / tanh / sqrt / log / pi        ACCEPT     (before: REJECT "hallucinated field?")
+escape attempts (dunder, type, getattr,  REJECT     (unchanged)
+  __builtins__, import, while, ...)
+slow loop ~ ego.x  (range(x * 2000))     REJECT at smoke: one call took 0.164s (limit 0.1s)
+1e15 * speed                             REJECT: reward magnitude too large
+HIST = [] + HIST.append                  REJECT: mutable top-level values ...
+dt = global_time - memory["t"]; 1/dt     ACCEPT     (before: false REJECT, ZeroDivisionError,
+                                                     two dataset frames share global_time 20.2)
+return 0.0                               ACCEPT     (left to Score1 "no_signal", by design)
+validation latency per candidate         0.21 s     (before: 0.23 s)
+```
+
+<div dir="rtl">
+
+**درباره‌ی ریسک حافظه‌ی مشترک در smoke (L4):** این ریسک با آزمایش تأیید شد. دو frame از دو trajectory مختلف در داده‌ی Stage I هر دو `global_time = 20.2` دارند. پس پاداشی که بر `dt` تقسیم می‌کند، در smoke با `ZeroDivisionError` رد می‌شد، در حالی که در محیط واقعی `dt` همیشه ۰٫۲ است. بعد از اصلاح پذیرفته می‌شود.
+
+**تست‌ها:** ۲۳۲ تست سریع و تست کند PPO همه پاس می‌شوند. تست‌های جدید:
+
+- `domains/highway/tests/test_sandbox_math.py`
+- `domains/highway/tests/test_sandbox_runtime_limits.py`
+- `domains/highway/tests/test_rejection_categories.py`
+- تست‌های اضافه‌شده به `test_stage3_resume.py`، `test_sandbox_hardening_highway.py`، `test_sandbox_hardening.py` و `test_sandbox_timeout_kill.py`
+
+**موارد باز (بخش‌های دیگر):**
+
+- کاندیدی که Score1 آن را رد کرده باز هم با PPO آموزش داده می‌شود (`_needs_training`). در بخش ۷ بررسی می‌شود.
 
 </div>
