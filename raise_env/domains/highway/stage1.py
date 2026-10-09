@@ -38,7 +38,10 @@ class HighwayTrajectoryRecord:
     scenario_id: str
     seed: Optional[int]
     states: Tuple[HighwayRewardState, ...]
-    label: str  # success | collision | timeout
+    # success | collision | timeout. Label "timeout" is the CrowdNav-shared name
+    # for a non-collision failure (off-road); it is unrelated to state.timeout,
+    # which is True only on the last frame of a survived (truncated) episode.
+    label: str
     behavior: str = ""
     metadata: Dict[str, Any] = field(default_factory=dict)
 
@@ -578,8 +581,8 @@ def score_highway_dataset(
     )
 
 
-def make_smoke_score_fn() -> Callable[..., Score1Result]:
-    """Tiny fixture Score1 for --fast / smoke mode."""
+def smoke_trajectories() -> List[HighwayTrajectoryRecord]:
+    """Fixture trajectories behind :func:`make_smoke_score_fn`."""
 
     def _traj(
         tid: str,
@@ -647,6 +650,8 @@ def make_smoke_score_fn() -> Callable[..., Score1Result]:
         )
         for i in range(3)
     ]
+    # Label "timeout" = non-collision failure (off-road); state.timeout stays
+    # False because the wrapper sets it only for survived, truncated episodes.
     to_frames = [
         HighwayRewardState(
             ego=EgoVehicle(
@@ -657,22 +662,22 @@ def make_smoke_score_fn() -> Callable[..., Score1Result]:
                 heading=0.0,
                 speed=10.0,
                 lane_index=1.0,
-                on_road=True,
+                on_road=(i != 3),
             ),
             others=(),
             collision=False,
-            off_road=False,
-            timeout=(i == 3),
+            off_road=(i == 3),
+            timeout=False,
             action=1,
             time_step=0.2,
             global_time=0.2 * (i + 1),
-            time_limit=0.8,
+            time_limit=40.0,
             progress=2.0,
             speed=10.0,
         )
         for i in range(4)
     ]
-    trajs = [
+    return [
         _traj("smoke_ok", "s0", "success", ok_frames),
         _traj("smoke_ok2", "s0", "success", list(reversed(ok_frames))),
         _traj(
@@ -708,6 +713,11 @@ def make_smoke_score_fn() -> Callable[..., Score1Result]:
         _traj("smoke_crash", "s0", "collision", crash_frames),
         _traj("smoke_to", "s1", "timeout", to_frames),
     ]
+
+
+def make_smoke_score_fn() -> Callable[..., Score1Result]:
+    """Tiny fixture Score1 for --fast / smoke mode."""
+    trajs = smoke_trajectories()
 
     def _fn(reward_fn: Any, *, candidate_id: str = "") -> Score1Result:
         result = score_highway_dataset(reward_fn, trajs, candidate_id=candidate_id)

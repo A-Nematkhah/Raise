@@ -22,9 +22,13 @@ algorithm work — see
 | Highway final pick | `docs/SELECTION.md` |
 
 ```bash
-python scripts/run_raise.py --domain highway --closed-loop
-python scripts/run_raise_highway.py --llm groq
+python scripts/run_raise.py --domain highway --fast                 # stub wiring smoke
+python scripts/run_raise.py --domain highway --closed-loop --llm groq
+python scripts/run_raise_highway.py --llm groq                      # full highway profile
 ```
+
+A non-`--fast` run with the default `--llm seed` (no real LLM) is refused
+unless you pass `--allow-seed-llm` (debug only).
 
 Highway run budget (N, G, K2, K3, …): `raise_core/presets.py` →
 `CLOSED_LOOP_PROFILES["highway"]`.

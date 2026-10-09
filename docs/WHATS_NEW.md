@@ -238,7 +238,7 @@ python scripts/run_raise.py --fast --closed-loop --allow-seed-llm `
 برندینگ و مسیرهای پروژه یکدست روی **RAISE** شدند:
 
 - پوشهٔ محیط: `raise_env/`
-- CLI: `run_raise.py`, `run_raise_paper_scale.py`, `eval_raise_checkpoint.py`, …
+- CLI: `run_raise.py` (paper scale: `run_raise.py --profile paper_scale`), `eval_raise_checkpoint.py`, …
 - API: `RaisePipeline` / `RaiseRunConfig` / `RaiseArtifacts`
 - CI: `.github/workflows/raise-ci.yml`
 - ماژول‌های Stage: `explore` / `refine` / `validate`
@@ -309,8 +309,12 @@ collision-loving و lag پشت ترافیک (~۱۵ m/s) ضعیف پوشش داد
    مطلق `V_FLOOR` تا all-crawler خودش را feasible نکند)
 2. مرتب‌سازی NSGA-II روی متریک خام (SR, −CR, −TR, progress, speed,
    soft_success) + crowding distance
-3. ماژول: `domains/highway/pareto_rank.py`؛ پروفایل 4h و CLI
+3. ماژول: `domains/highway/pareto_rank.py`؛ پروفایل `highway` و CLI
    `--closed-loop-evolve-rank pareto`
+
+> بعداً: `soft_success` از اهداف Pareto حذف شد (فقط diagnostic)، SR فقط
+> gate امکان‌پذیری است، و `lane_change_rate` / `overtakes_per_km` اضافه
+> شدند. فهرست فعلی: `domains/highway/spec.md`.
 
 ترتیب مرجع دمو: balanced → fast_risky → crawler (بدون وزن دستی).
 
@@ -339,7 +343,7 @@ python scripts/run_raise.py --domain highway --closed-loop `
 **قبل:** هر کاندید Stage II سریال، یک env، PPO از صفر؛ eval همیشه train+holdout.
 
 **بعد (فقط highway):**
-- `DummyVecEnv` با `--highway-n-envs` (پروفایل 4h: ۴)
+- `DummyVecEnv` با `--highway-n-envs` (پروفایل `highway` فعلی: ۱)
 - لیبل موازی اختیاری با `--highway-label-workers` (پروفایل پیش‌فرض: ۱؛
   ۲ را فقط بعد از سنجش wall-clock بگذار)
 - warm-start: وزن policy والد روی PPO تازه با `n_steps`/`batch` درست
@@ -372,8 +376,35 @@ crash@۲۵ را ترجیح می‌داد؛ `final_rank`/`fitness` برنده‌�
 
 ```powershell
 python scripts/run_raise_highway.py
-# پیش‌فرض PROFILE: evolve_rank=scalar
+# آن زمان پیش‌فرض PROFILE: evolve_rank=scalar
 ```
+
+> بعداً: پیش‌فرض highway دوباره `evolve_rank=pareto` شد (کالیبراسیون
+> `no_speed_floor`)؛ `scalar` فقط گزینهٔ legacy است.
+
+---
+
+## Highway audit fixes — ۲۰۲۶-۱۰-۰۹
+
+CrowdNav همچنان frozen؛ همهٔ تغییرات رفتاری فقط highway یا افزایشی در core.
+
+- **lane_index:** از `y` محاسبه می‌شود (لاین *i* در `y = 4·i`)؛ دیتاست Stage I
+  با `scripts/migrate_highway_stage1_dataset.py` (با backup) به
+  `state_schema_version=2` ارتقا می‌یابد؛ فریم‌های off-road دیگر `timeout=True`
+  ندارند. feature schema هایوی ← `2` و surrogate قدیمی دوباره لیبل می‌شود.
+- **Stage II:** هر env نسخهٔ مستقل reward (memory جدا)؛ seed holdout برای همهٔ
+  کاندیدهای یک نسل مشترک است.
+- **متریک‌ها:** `overtakes_per_km` خالص (برگشت ماشین جلو، pass را حذف
+  می‌کند)؛ `ep_rew_mean` / `fps` در diagnostics درست؛ NaN در Pareto بدترین
+  مقدار حساب می‌شود.
+- **انتخاب نهایی:** `final_select` تنظیمات Pareto خود ران را می‌خواند؛
+  `eval_raise_checkpoint.py` برای highway، `model.zip` Stage III را روی holdout
+  دوباره ارزیابی می‌کند.
+- **Resume:** نوشتن اتمیک checkpointها؛ شمارندهٔ ID و آرشیو elite ذخیره
+  می‌شوند؛ دیتاست surrogate در برابر NaN / سطر ناقص مقاوم است.
+- **Prompt/Spec:** معنای `state.timeout` (= بقا)، نوع `state.action`، جهت
+  `lane_change_rate` و حاشیهٔ نویز (فقط CR/TR) صریح شد.
+- **CI:** job هایوی با torch CPU؛ تست‌های هایوی بدون deps skip می‌شوند.
 
 ---
 

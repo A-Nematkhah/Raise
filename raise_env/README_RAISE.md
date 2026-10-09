@@ -82,7 +82,10 @@ sibling packages under `domains/`.
 - Guide: [`domains/README.md`](domains/README.md)
 - CLI: `python scripts/run_raise.py --domain crowdnav|highway ...`
 - **Highway (diagnostic):** install `requirements_highway.txt`, then
-  `python scripts/run_raise.py --domain highway --fast`
+  `python scripts/run_raise.py --domain highway --fast` (stub smoke) or
+  `python scripts/run_raise_highway.py --llm groq` (full closed-loop profile).
+  Upgrade Stage I data collected before `state_schema_version=2` with
+  `python scripts/migrate_highway_stage1_dataset.py --dataset <dir>`.
 - Compat: `crowd_nav.reward_search.*` and `crowd_nav.domains.*` still re-export
   the new packages for frozen Score1 / prompt locks.
 
@@ -104,7 +107,7 @@ Older archives may have ~5 unique trajs / 10 (duplicate deterministic ORCA/SF).
 ## Tests
 
 ```bash
-pytest -m "not slow"   # CI default (raise_core + domains)
+pytest -m "not slow"   # CI default (raise_core + domains; highway tests skip without requirements_highway.txt)
 pytest -m slow         # 1 real-env collect test
 ```
 

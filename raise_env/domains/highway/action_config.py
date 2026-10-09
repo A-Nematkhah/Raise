@@ -201,9 +201,17 @@ def action_space_prompt_block(settings: Optional[ActionModeSettings] = None) -> 
             if s.continuous_lateral
             else "Box(1,) = [acceleration] (normalized); lateral control disabled"
         )
+        action_doc = (
+            "state.action[0] (acceleration) and state.action[1] (steering)"
+            if s.continuous_lateral
+            else "state.action[0] (acceleration)"
+        )
         return (
             "Action space (this run):\n"
             f"- ContinuousAction ({axes}).\n"
+            f"- state.action is a numeric array, not a number: read {action_doc} "
+            "as floats, e.g. float(state.action[0]). Never use the whole array in "
+            "a comparison or `if` (ambiguous truth value -> the reward crashes).\n"
             f"- Ego speed is continuous; physical speed limits from the simulator "
             f"are approximately [{lo:.1f}, {hi:.1f}] m/s "
             "(read from the env/vehicle — not a hand-picked cruise target).\n"
@@ -217,6 +225,8 @@ def action_space_prompt_block(settings: Optional[ActionModeSettings] = None) -> 
         f"(mode={s.mode}).\n"
         "- Actions are discrete meta-actions (lane left/idle/right/faster/slower); "
         "ego speed snaps toward those gears.\n"
+        "- state.action is the integer index of the action just taken: "
+        "0=LANE_LEFT, 1=IDLE, 2=LANE_RIGHT, 3=FASTER, 4=SLOWER.\n"
         f"- If you introduce a speed setpoint constant, keep it inside "
         f"[{min(gears):.1f}, {max(gears):.1f}] m/s (reachable gears).\n"
     )

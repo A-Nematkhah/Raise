@@ -10,14 +10,17 @@ _SELECTION_OBJECTIVE = (
     "Your reward function is judged by training a PPO policy and evaluating it "
     "on held-out rollouts. Among policies that survive at least one holdout "
     "episode (SR > 0), candidates are ranked by Pareto dominance across: "
-    "collision rate, off-road rate, forward progress, mean speed, "
-    "lane_change_rate, and overtakes_per_km (successful passes of a vehicle "
-    "that was ahead). Survival rate is used only as the feasibility gate "
+    "collision rate and off-road rate (lower is better); forward progress, "
+    "mean speed, lane_change_rate (lane changes per step; more active lane "
+    "use counts as better), and overtakes_per_km (successful passes of a "
+    "vehicle that was ahead) (higher is better). Survival rate is used only "
+    "as the feasibility gate "
     "(SR > 0), not as a separate ranked objective, because with exclusive "
     "outcomes it is redundant with collision/off-road rates. A candidate is "
     "only worse than another if it is equal-or-worse on every ranked "
-    "objective and strictly worse on at least one (differences smaller than "
-    "eval sampling noise do not count) — there is no fixed weighting between "
+    "objective and strictly worse on at least one (collision/off-road rate "
+    "gaps within ~2 standard errors of the holdout episode count do not "
+    "count; the other objectives are compared as measured) — there is no fixed weighting between "
     "safety, speed, and overtaking, and there is no preferred target speed. "
     "Pure low-speed lane-keeping that never passes slower traffic is not "
     "automatically preferred. Reason about these trade-offs directly from "
@@ -91,8 +94,8 @@ Function Interface (EXACT FIELD STRUCTURE):
     - state.ego.speed, state.ego.lane_index, state.ego.on_road
     - state.others: tuple of NearbyVehicle; iterate `for v in state.others:` then v.x, v.y, v.vx, v.vy, v.heading
     - FRAMES: state.ego.x / state.ego.y are ABSOLUTE road coordinates; v.x, v.y, v.vx, v.vy are EGO-RELATIVE (other minus ego: v.x > 0 ahead, v.x < 0 behind, |v.y| < 2 same lane). Never compare v.x with state.ego.x or memory['prev_x']; compare v.x with 0 (e.g. an overtake is a vehicle whose v.x flipped from > 0 to <= 0 between steps).
-    - state.collision, state.off_road, state.timeout: bool (environment-owned)
-    - state.action, state.time_step, state.global_time, state.time_limit
+    - state.collision, state.off_road, state.timeout: bool (environment-owned). state.timeout is True only on the final step of an episode that reached the time limit WITHOUT collision/off-road — it marks a survived (successful) episode, not a failure.
+    - state.action (type depends on the action space below), state.time_step, state.global_time, state.time_limit
     - state.progress: float (forward meters since previous frame)
     - state.speed: float (ego speed, same as state.ego.speed)
   - memory: plain mutable dict cleared at every episode reset(); use for shaping (e.g. memory['prev_speed']).
@@ -151,7 +154,7 @@ HighwayRewardState access (dot notation only — never getattr/hasattr/__import_
 - state.ego.x, state.ego.y, state.ego.vx, state.ego.vy, state.ego.heading, state.ego.speed, state.ego.lane_index, state.ego.on_road
 - state.others — loop `for v in state.others:` then v.x, v.y, v.vx, v.vy, v.heading
 - FRAMES: state.ego.x/y are absolute; v.x, v.y, v.vx, v.vy are ego-relative (v.x > 0 ahead, v.x < 0 behind). Compare v.x with 0, never with state.ego.x or memory['prev_x'].
-- state.collision, state.off_road, state.timeout
+- state.collision, state.off_road, state.timeout (timeout = survived to the time limit, i.e. success)
 - state.action, state.time_step, state.global_time, state.time_limit, state.progress, state.speed
 - memory: plain dict for episode-local state; cleared on reset
 - FORBIDDEN (rejected by AST): lane_position, distance, robot, humans, gx/gy, history, px/py
@@ -213,7 +216,8 @@ D3_SYSTEM_PROMPT = (
     "state.others is a tuple; iterate with 'for v in state.others:'. "
     "state.ego.x/y are absolute; v.x/v.y/v.vx/v.vy are ego-relative "
     "(v.x > 0 ahead, v.x < 0 behind) — compare v.x with 0, never with state.ego.x. "
-    "state.collision / state.off_road / state.timeout (bool). "
+    "state.collision / state.off_road / state.timeout (bool; timeout = survived "
+    "to the time limit, a success). "
     "state.progress and state.speed are available. "
     "NO state.robot, NO state.humans, NO state.gx, NO state.lane_position, NO state.distance. "
     "SANDBOX: never getattr/hasattr/__import__/eval; use ** 0.5; "
