@@ -608,6 +608,8 @@ class ClosedLoopRunner:
                     label_candidates_parallel,
                 )
 
+                stage2_cfg.highway_eval_seed_base = int(cfg.seed) + int(g) * 1000
+
                 attach_warm_start_checkpoints(
                     to_label, list(population) + list(ranked)
                 )

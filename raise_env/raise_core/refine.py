@@ -109,6 +109,9 @@ class Stage2Config:
     # 64 → ~4× more PPO updates inside the same K2 than the former 256.
     highway_n_steps: int = 64
     highway_n_epochs: int = 10
+    # Eval scenario seed shared by every candidate labelled in one generation
+    # (None → per-candidate ``seed + round_index``).
+    highway_eval_seed_base: Optional[int] = None
 
 
 @dataclass

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import logging
 import os
 import time
@@ -354,6 +355,23 @@ def _highway_warm_start_enabled(config: Any) -> bool:
     )
 
 
+def clone_reward_fn(reward_fn: Any) -> Any:
+    """Independent copy of ``reward_fn`` with its own per-episode ``memory``.
+
+    Envs that step concurrently must not share one reward object: any env's
+    ``reset()`` would clear the others' memory mid-episode.
+    """
+    try:
+        return copy.deepcopy(reward_fn)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "reward_fn %s is not copyable (%s); envs will share episode memory",
+            type(reward_fn).__name__,
+            exc,
+        )
+        return reward_fn
+
+
 def _make_train_vec_env(reward_fn: Any, *, seed: int, n_envs: int, env_config: Optional[Dict] = None):
     """DummyVecEnv of Monitor(RewardInjectedHighwayEnv) (Windows-safe; same-process).
 
@@ -371,7 +389,7 @@ def _make_train_vec_env(reward_fn: Any, *, seed: int, n_envs: int, env_config: O
     def _thunk(rank: int):
         def _init():
             env = RewardInjectedHighwayEnv(
-                reward_fn,
+                reward_fn if rank == 0 else clone_reward_fn(reward_fn),
                 seed=int(seed) + int(rank) * 997,
                 config=env_config,
             )
@@ -580,7 +598,7 @@ class HighwayPPOTrainer:
                     candidate_id=cid,
                     log_path=os.path.join(out_dir, "diagnostics_groundtruth.jsonl"),
                     train_env_steps=train_steps,
-                    reward_fn=candidate.reward_fn,
+                    reward_fn=clone_reward_fn(candidate.reward_fn),
                     seed=seed,
                     n_episodes=4,
                 )
@@ -627,19 +645,21 @@ class HighwayPPOTrainer:
         )
 
         eval_deterministic = bool(getattr(config, "highway_eval_deterministic", True))
+        eval_seed_raw = getattr(config, "highway_eval_seed_base", None)
+        eval_seed = seed if eval_seed_raw is None else int(eval_seed_raw)
         train_dict: Dict[str, float] = {}
         if eval_mode == "both":
             eval_env = RewardInjectedHighwayEnv(
-                candidate.reward_fn, seed=seed, config=env_cfg
+                candidate.reward_fn, seed=eval_seed, config=env_cfg
             )
             if not eval_deterministic:
-                model.set_random_seed(int(seed) + 10_003)
+                model.set_random_seed(int(eval_seed) + 10_003)
             try:
                 train_metrics = _eval_metrics(
                     eval_env,
                     model,
                     n_episodes=eval_episodes,
-                    seed=seed,
+                    seed=eval_seed,
                     seed_offset=10_003,
                     deterministic=eval_deterministic,
                 )
@@ -649,18 +669,18 @@ class HighwayPPOTrainer:
 
         holdout_env = RewardInjectedHighwayEnv(
             candidate.reward_fn,
-            seed=seed + 7,
+            seed=eval_seed + 7,
             config=holdout_env_config(),
         )
         if not eval_deterministic:
             # Action sampling must not depend on RNG consumed during training.
-            model.set_random_seed(int(seed) + int(HOLDOUT_SEED_OFFSET))
+            model.set_random_seed(int(eval_seed) + int(HOLDOUT_SEED_OFFSET))
         try:
             holdout_metrics = _eval_metrics(
                 holdout_env,
                 model,
                 n_episodes=eval_episodes,
-                seed=seed,
+                seed=eval_seed,
                 seed_offset=HOLDOUT_SEED_OFFSET,
                 deterministic=eval_deterministic,
             )
@@ -718,7 +738,7 @@ class HighwayPPOTrainer:
         md["checkpoint_path"] = ckpt
         md["train_steps"] = int(train_steps)
         md["train_seed"] = int(seed)
-        md["eval_seed_base"] = int(seed) + int(HOLDOUT_SEED_OFFSET)
+        md["eval_seed_base"] = int(eval_seed) + int(HOLDOUT_SEED_OFFSET)
         md["eval_episodes"] = int(eval_episodes)
         md["ppo_n_steps"] = int(n_steps)
         md["eval_deterministic"] = bool(eval_deterministic)
