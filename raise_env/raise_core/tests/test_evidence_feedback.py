@@ -54,7 +54,7 @@ def _cand(cid: str = "c0", *, score: float = 0.5, metrics=None) -> RewardCandida
 
 def _evolver() -> StageIEvolver:
     return StageIEvolver(
-        ScriptedLLMClient([D5_SEED_FUNCTION]),
+        ScriptedLLMClient([D5_SEED_FUNCTION] * 2),
         score_fn=lambda *_a, **_k: type("R", (), {"score": 0.0, "rejected": False})(),
         validator=make_highway_validator(),
         prompts=hwy_prompts,
@@ -62,13 +62,13 @@ def _evolver() -> StageIEvolver:
 
 
 def test_evidence_block_is_numbers_only():
-    block = evidence_block(_hwy_metrics(), score1=0.42)
+    block = evidence_block(_hwy_metrics())
     low = block.lower()
     for word in _VERDICT_WORDS:
         assert word not in low, f"verdict word {word!r} leaked into evidence"
     assert "SR=0.80" in block
     assert "fitness=0.400" in block
-    assert "Score1=0.420" in block
+    assert "score1" not in low
 
 
 def test_attach_always_writes_metrics_and_evidence():
@@ -79,7 +79,7 @@ def test_attach_always_writes_metrics_and_evidence():
     fb = md["proxy_feedback"]
     assert "SR=0.80" in fb
     assert "mean_speed=24.5" in fb
-    assert "Score1=0.500" in fb
+    assert "Score1" not in fb
 
 
 def test_extract_llm_diagnosis():
@@ -135,6 +135,16 @@ def test_mutation_weakness_uses_evidence_block():
     assert "Holdout eval" in captured["weakness"]
     assert "TR=0.70" in captured["weakness"]
     assert "Global reflection: global note" in captured["weakness"]
+    assert "Score1" not in captured["weakness"]
+
+    bare = _cand("p1", score=0.9)
+    evo._format_d2_mutation = _fake_format
+    try:
+        evo._try_mutate(bare, "global note", phase="mutation", attempt=0)
+    finally:
+        evo._format_d2_mutation = orig
+    assert "no holdout evaluation yet" in captured["weakness"]
+    assert "Score1" not in captured["weakness"]
 
 
 def test_highway_prompts_render():

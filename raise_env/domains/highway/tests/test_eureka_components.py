@@ -119,9 +119,9 @@ def test_evidence_block_and_mutation_prompt():
         "n_eval_episodes": 20,
         "speed_p10": 18.0,
     }
-    block = evidence_block(metrics, score1=0.5)
+    block = evidence_block(metrics)
     assert "Holdout eval (20 episodes)" in block
-    assert "Score1=0.500" in block
+    assert "Score1" not in block
 
     assert "survival/success rate is always near zero" in _DIAGNOSIS_BEFORE_CODE
 

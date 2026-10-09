@@ -51,20 +51,32 @@ Episode memory: plain `dict` cleared on reset.
 
 ## Stage I (Score1)
 
-Hybrid Score1 (not Spearman-only):
+Score1 is a cheap sanity filter, not a predictor of Stage II fitness (no
+study supports that). Returns are **discounted with PPO's γ**
+(`objective_constants.PPO_GAMMA`): episodes end on a crash, so a positive
+per-step reward already makes survival pay, while a crash bonus larger than
+the discounted tail does not.
 
 ```
-0.25 · within-traj Spearman(highway_rule, cum_reward)
-0.40 · preference AUC (success ≻ timeout ≻ collision)
-0.20 · throughput alignment on success (speed/progress)
-0.15 · overtake alignment on success (episode_return vs overtake_count)
-−0.50 · crawl/lag penalty
-−0.35 · collision-decoy penalty
+safety  = 2·AUC − 1 of success ≻ timeout ≻ collision on discounted returns
+quality = 0.40 · throughput (Spearman of return vs speed/progress, successes)
+        + 0.25 · overtake   (Spearman of return vs overtake count, successes)
+        + 0.35 · step Spearman(step reward, step rule) on surviving frames
+Score1  = 0.5·safety + 0.5·max(0, safety)·quality − 0.5·crawl_penalty
 ```
 
+`crawl_penalty` is positive when `lag` successes earn at least the mean return
+of `positive` ones. Hard rejects: `no_signal` (nothing informative),
+`prefers_crash` (safety < 0), `score1_error` (the reward raises on a dataset
+frame), `score1_timeout`. Score1 is not shown to the LLM; it orders
+candidates without Stage II evidence and breaks fitness ties.
+
+Each trajectory has a role in `metadata["role"]`: `positive`, `neutral`,
+`lag` or `failure` (inferred from label / behaviour / speed when absent).
 Trajectory label `timeout` is the historical name for a non-collision
 failure (off-road). It is unrelated to `state.timeout`: off-road frames carry
-`off_road=True, timeout=False`.
+`off_road=True, timeout=False`. Dataset actions are recorded as meta indices
+and mapped to the run's action mode when Score1 loads the dataset.
 
 Dataset should include **safe_fast** successes and **crawl** successes so
 Score1 can punish “survive by going slow”. Collect with:

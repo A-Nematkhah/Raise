@@ -19,13 +19,11 @@ def test_evidence_lists_overtake_metrics_and_fitness():
             "overtake_episode_frac": 0.4,
             "fitness": 0.75,
         },
-        score1=0.5,
     )
     assert "overtakes_per_km=1.25" in text
     assert "overtake_episode_frac=0.40" in text
     assert "lane_change_rate=0.010" in text
     assert "fitness=0.750" in text
-    assert "Score1=0.500" in text
 
 
 def test_overtake_tracker_counts_pass():

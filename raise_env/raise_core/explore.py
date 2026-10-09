@@ -632,14 +632,14 @@ class StageIEvolver:
         if proxy_fb:
             # Evidence only — LLM diagnoses from numbers in the block.
             weakness = (
-                f"Parent {parent.candidate_id} Score1={parent.score}.\n"
+                f"Parent {parent.candidate_id}.\n"
                 f"{proxy_fb}\n"
                 f"Global reflection: {reflection}"
             )
         else:
             weakness = (
-                f"Parent {parent.candidate_id} score={parent.score}. "
-                f"Weakness focus: improve analytical Score1 relative to elites. "
+                f"Parent {parent.candidate_id} has no holdout evaluation yet "
+                f"(Stage II training failed or was skipped). "
                 f"Global reflection: {reflection}"
             )
         prompt = self._format_d2_mutation(

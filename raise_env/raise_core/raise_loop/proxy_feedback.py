@@ -5,7 +5,7 @@ Holdout numbers plus the selection fitness — the LLM diagnoses from the eviden
 
 from __future__ import annotations
 
-from typing import Any, Mapping, Optional
+from typing import Any, Mapping
 
 from raise_core.explore import RewardCandidate
 
@@ -38,12 +38,12 @@ def _fmt_opt(src: Mapping[str, Any], metrics: Mapping[str, Any], key: str, spec:
         return str(raw)
 
 
-def evidence_block(
-    metrics: Mapping[str, Any],
-    *,
-    score1: Optional[float] = None,
-) -> str:
-    """Holdout evaluation metrics (plus fitness / Score1 when finite) for the LLM."""
+def evidence_block(metrics: Mapping[str, Any]) -> str:
+    """Holdout evaluation metrics (plus fitness when finite) for the LLM.
+
+    Score1 is deliberately absent: it is a sanity filter with no shown relation
+    to fitness, so the LLM must not optimize it.
+    """
     src = metrics
     holdout = metrics.get("holdout")
     if isinstance(holdout, Mapping) and holdout:
@@ -68,8 +68,6 @@ def evidence_block(
     ]
     if _finite(metrics.get("fitness")):
         lines.append(f"fitness={float(metrics['fitness']):.3f}")
-    if score1 is not None and _finite(score1):
-        lines.append(f"Score1={float(score1):.3f}")
     return "\n".join(lines)
 
 
@@ -77,12 +75,5 @@ def attach_proxy_feedback(candidate: RewardCandidate, metrics: Mapping[str, Any]
     """Write ``last_metrics`` and the ``proxy_feedback`` evidence onto the candidate."""
     md = dict(candidate.metadata or {})
     md["last_metrics"] = dict(metrics)
-    score1 = candidate.score
-    if score1 is None and md.get("score1_train") is not None:
-        try:
-            score1 = float(md["score1_train"])
-        except (TypeError, ValueError):
-            score1 = None
-    score1_f = float(score1) if score1 is not None and _finite(score1) else None
-    md["proxy_feedback"] = evidence_block(metrics, score1=score1_f)
+    md["proxy_feedback"] = evidence_block(metrics)
     candidate.metadata = md
