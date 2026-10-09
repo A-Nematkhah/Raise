@@ -11,16 +11,17 @@ from domains.highway.action_config import (
     resolve_action_dict,
 )
 from domains.highway.state import (
+    DEFAULT_LANES,
     EgoVehicle,
     HighwayRewardState,
     NearbyVehicle,
+    lane_index_from_y,
 )
 
 ENV_ID = "highway-fast-v0"
 DEFAULT_DURATION = 40  # seconds
 DEFAULT_POLICY_FREQ = 5
 DEFAULT_VEHICLES = 20
-DEFAULT_LANES = 4
 MAX_OTHERS = 5
 # Denser traffic + distinct seed band for selection / anti-hacking eval.
 HOLDOUT_VEHICLES = 32
@@ -129,6 +130,22 @@ def _row_presence(row: np.ndarray) -> bool:
     return float(row[0]) > 0.5
 
 
+def detect_off_road(env: Any, info: Dict[str, Any]) -> bool:
+    """Off-road flag for one step: info keys, on-road reward, then ``vehicle.on_road``."""
+    off_road = bool(info.get("off_road", False))
+    rewards = info.get("rewards")
+    if isinstance(rewards, dict) and rewards.get("on_road_reward", 1.0) == 0.0:
+        off_road = True
+    # highway-env often omits info['off_road']; trust the vehicle flag.
+    try:
+        veh = getattr(getattr(env, "unwrapped", env), "vehicle", None)
+        if veh is not None and hasattr(veh, "on_road") and not bool(veh.on_road):
+            off_road = True
+    except Exception:  # noqa: BLE001
+        pass
+    return off_road
+
+
 def kinematics_to_state(
     obs: Any,
     *,
@@ -183,7 +200,7 @@ def kinematics_to_state(
             )
         )
 
-    lane_index = float(max(0, min(DEFAULT_LANES - 1, int(round(ego_y / 4.0 + 1.5)))))
+    lane_index = float(lane_index_from_y(ego_y))
     on_road = not bool(off_road)
 
     state = HighwayRewardState(
@@ -275,20 +292,8 @@ class RewardInjectedHighwayEnv(_gym_wrapper_base()):  # type: ignore[misc,valid-
         obs, _native_r, terminated, truncated, info = self.env.step(action)
         info = dict(info or {})
         collision = bool(info.get("crashed", False))
-        off_road = bool(info.get("off_road", False))
-        if isinstance(info.get("rewards"), dict):
-            if info["rewards"].get("on_road_reward", 1.0) == 0.0:
-                off_road = True
-        # highway-env often omits info['off_road']; trust the vehicle flag.
-        try:
-            veh = getattr(self.env.unwrapped, "vehicle", None)
-            if veh is not None and hasattr(veh, "on_road") and not bool(veh.on_road):
-                off_road = True
-        except Exception:  # noqa: BLE001
-            pass
+        off_road = detect_off_road(self.env, info)
         timeout = bool(truncated) and not collision and not off_road
-        if collision:
-            timeout = False
 
         self._global_time = min(self._time_limit, self._global_time + self._time_step)
         state, self._ego_x = kinematics_to_state(

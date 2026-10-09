@@ -260,7 +260,7 @@ def _run_episode(
     Returns ``(label, states, mean_speed, mean_progress, overtakes)``.
     ``overtakes`` is OvertakeTracker.passes (0 for non-overtake behaviors).
     """
-    from domains.highway.env_wrapper import kinematics_to_state
+    from domains.highway.env_wrapper import detect_off_road, kinematics_to_state
     from domains.highway.overtake import OvertakeTracker
 
     obs, _info = env.reset()
@@ -285,10 +285,7 @@ def _run_episode(
         tracker.observe(env)
         info = dict(info or {})
         collision = bool(info.get("crashed", False))
-        off_road = bool(info.get("off_road", False))
-        if isinstance(info.get("rewards"), dict):
-            if info["rewards"].get("on_road_reward", 1.0) == 0.0:
-                off_road = True
+        off_road = detect_off_road(env, info)
         timeout = bool(truncated) and not collision and not off_road
         global_time = min(time_limit, global_time + time_step)
         state, ego_x = kinematics_to_state(
@@ -633,7 +630,7 @@ def main() -> int:
                 frames[j] = dc_replace(
                     s,
                     off_road=True,
-                    timeout=True,
+                    timeout=False,
                     collision=False,
                     ego=dc_replace(s.ego, on_road=False),
                 )

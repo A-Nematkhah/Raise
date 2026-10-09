@@ -9,6 +9,7 @@ import warnings
 from typing import Any, Dict, Optional
 
 from domains.highway.overtake import OvertakeTracker
+from domains.highway.state import lane_index_from_y
 from raise_core.refine import ProxyMetrics, StubPolicyTrainer
 
 logger = logging.getLogger(__name__)
@@ -303,15 +304,12 @@ def _lane_index_from_obs(obs: Any) -> Optional[int]:
     """Discrete lane index from kinematics y (same mapping as kinematics_to_state)."""
     import numpy as np
 
-    from domains.highway.env_wrapper import DEFAULT_LANES
-
     arr = np.asarray(obs, dtype=np.float64)
     if arr.ndim != 2 or arr.shape[0] < 1 or arr.shape[1] < 3:
         return None
     if float(arr[0][0]) <= 0.5:
         return None
-    ego_y = float(arr[0][2])
-    return int(max(0, min(DEFAULT_LANES - 1, int(round(ego_y / 4.0 + 1.5)))))
+    return lane_index_from_y(float(arr[0][2]))
 
 
 def metrics_to_highway_dict(metrics: ProxyMetrics) -> Dict[str, float]:

@@ -50,6 +50,8 @@ for _path in (_ROOT, _SCRIPTS):
         sys.path.insert(0, _path)
 
 from raise_core.presets import CLOSED_LOOP_PROFILES  # noqa: E402
+from raise_core.surrogate import feature_schema_version_for_domain  # noqa: E402
+from raise_core.surrogate.dataset_io import read_manifest  # noqa: E402
 
 CHECKPOINT_LOCATIONS = (
     os.path.join("closed_loop", "checkpoint.json"),
@@ -68,7 +70,17 @@ def _dataset_ready(path: str) -> bool:
 def _warm_ready(warm_root: str) -> bool:
     model = os.path.join(warm_root, "model", "model.joblib")
     feats = os.path.join(warm_root, "dataset", "features.jsonl")
-    return os.path.isfile(model) and os.path.isfile(feats)
+    if not (os.path.isfile(model) and os.path.isfile(feats)):
+        return False
+    manifest = read_manifest(os.path.join(warm_root, "dataset")) or {}
+    expected = feature_schema_version_for_domain("highway")
+    if str(manifest.get("feature_schema_version")) != expected:
+        print(
+            f"Warm surrogate at {warm_root} has feature_schema_version="
+            f"{manifest.get('feature_schema_version')} (expected {expected}); rebuilding."
+        )
+        return False
+    return True
 
 
 def _ensure_dataset(path: str, *, episodes_per_behavior: int = 10) -> int:

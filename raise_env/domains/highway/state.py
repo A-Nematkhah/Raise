@@ -2,8 +2,19 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any, Tuple
+
+# highway-env StraightLane.DEFAULT_WIDTH; lane i is centred at y = i * width.
+LANE_WIDTH_M = 4.0
+DEFAULT_LANES = 4
+
+
+def lane_index_from_y(y: float, lanes: int = DEFAULT_LANES) -> int:
+    """Nearest highway-env lane for an absolute lateral position ``y`` (m)."""
+    idx = int(math.floor(float(y) / LANE_WIDTH_M + 0.5))
+    return max(0, min(int(lanes) - 1, idx))
 
 
 @dataclass(frozen=True)
@@ -73,7 +84,7 @@ def default_smoke_states() -> tuple[HighwayRewardState, ...]:
         return HighwayRewardState(
             ego=EgoVehicle(
                 x=x,
-                y=0.0,
+                y=float(lane_index) * LANE_WIDTH_M,
                 vx=speed,
                 vy=0.0,
                 heading=0.0,
@@ -93,12 +104,13 @@ def default_smoke_states() -> tuple[HighwayRewardState, ...]:
             speed=speed,
         )
 
+    # Ego-relative velocities, matching kinematics_to_state.
     nearby = (
-        NearbyVehicle(x=25.0, y=0.0, vx=18.0, vy=0.0, heading=0.0),
-        NearbyVehicle(x=10.0, y=4.0, vx=22.0, vy=0.0, heading=0.0),
+        NearbyVehicle(x=25.0, y=0.0, vx=-2.0, vy=0.0, heading=0.0),
+        NearbyVehicle(x=10.0, y=4.0, vx=2.0, vy=0.0, heading=0.0),
     )
     close_call = (
-        NearbyVehicle(x=8.0, y=0.0, vx=20.0, vy=0.0, heading=0.0),
+        NearbyVehicle(x=8.0, y=0.0, vx=0.0, vy=0.0, heading=0.0),
     )
     return (
         # Cruise / clear traffic

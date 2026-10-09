@@ -34,7 +34,7 @@ from raise_core.surrogate.dataset_io import (
     read_manifest,
     write_manifest,
 )
-from raise_core.surrogate.features import FEATURE_SCHEMA_VERSION
+from raise_core.surrogate import feature_schema_version_for_domain
 from raise_core.surrogate.gate import (
     predict_population,
     surrogate_model_ready,
@@ -1092,7 +1092,7 @@ class ClosedLoopRunner:
         man = read_manifest(cfg.surrogate_dataset) or {}
         man.update(
             {
-                "feature_schema_version": FEATURE_SCHEMA_VERSION,
+                "feature_schema_version": feature_schema_version_for_domain(pack.name),
                 "mode": "closed_loop_v1",
                 "n_examples": n_labeled,
                 "closed_loop_output": cfg.output_dir,

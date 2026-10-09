@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional
 
 from raise_core.explore import RewardCandidate
 from raise_core.selection import navigation_scalar
-from raise_core.surrogate import FEATURE_SCHEMA_VERSION
+from raise_core.surrogate import feature_schema_version_for_domain
 from raise_core.surrogate.dataset_io import (
     LABEL_SCHEMA_VERSION,
     append_example,
@@ -358,6 +358,7 @@ def run_bootstrap(
 
     domain_key = str(domain or "crowdnav").strip().lower() or "crowdnav"
     targets = list(target_keys_for_domain(domain_key))
+    schema_version = feature_schema_version_for_domain(domain_key)
 
     metrics_path = os.path.join(model_dir, "metrics.json")
     prior = read_manifest(out_dir)
@@ -365,7 +366,7 @@ def run_bootstrap(
         not force
         and os.path.isfile(metrics_path)
         and prior
-        and str(prior.get("feature_schema_version")) == FEATURE_SCHEMA_VERSION
+        and str(prior.get("feature_schema_version")) == schema_version
         and list(prior.get("target_keys") or []) == targets
     ):
         logger.info("bootstrap idempotent hit — returning existing artifacts")
@@ -408,6 +409,20 @@ def run_bootstrap(
     )
 
     os.makedirs(out_dir, exist_ok=True)
+    stale_schema = bool(
+        prior
+        and "feature_schema_version" in prior
+        and str(prior.get("feature_schema_version")) != schema_version
+    )
+    if stale_schema:
+        logger.warning(
+            "surrogate dataset at %s has feature_schema_version=%s (expected %s); "
+            "relabeling from scratch",
+            out_dir,
+            prior.get("feature_schema_version"),
+            schema_version,
+        )
+    force = bool(force or stale_schema)
     known_ids = existing_example_ids(out_dir) if not force else set()
     if force:
         for name in ("features.jsonl", "labels.jsonl"):
@@ -494,7 +509,7 @@ def run_bootstrap(
     manifest: Dict[str, Any] = {
         "n": len(feats),
         "domain": domain_key,
-        "feature_schema_version": FEATURE_SCHEMA_VERSION,
+        "feature_schema_version": schema_version,
         "label_schema_version": LABEL_SCHEMA_VERSION,
         "label_budget": LABEL_BUDGET,
         "target_keys": list(targets),

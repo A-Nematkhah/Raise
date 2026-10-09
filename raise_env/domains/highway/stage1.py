@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
 from dataclasses import asdict, dataclass, field
+from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
@@ -14,6 +16,7 @@ from domains.highway.state import (
     EgoVehicle,
     HighwayRewardState,
     NearbyVehicle,
+    lane_index_from_y,
 )
 from raise_core.rules import (
     TrajectoryCategory,
@@ -25,6 +28,8 @@ from raise_core.scoring import Score1Result
 logger = logging.getLogger(__name__)
 
 DEFAULT_STAGE1_DATASET = "domains/highway/data/stage1_dataset"
+# 2: lane_index = nearest highway-env lane; off-road frames carry timeout=False.
+STATE_SCHEMA_VERSION = 2
 
 
 @dataclass
@@ -144,15 +149,85 @@ def save_highway_dataset(
         "domain": "highway",
         "n_trajectories": len(trajectories),
         "labels": sorted({t.label for t in trajectories}),
+        "state_schema_version": STATE_SCHEMA_VERSION,
     }
     with open(os.path.join(path, "manifest.json"), "w", encoding="utf-8") as fh:
         json.dump(manifest, fh, indent=2)
+
+
+def read_dataset_manifest(path: str) -> Dict[str, Any]:
+    manifest_path = os.path.join(path, "manifest.json")
+    if not os.path.isfile(manifest_path):
+        return {}
+    with open(manifest_path, encoding="utf-8") as fh:
+        data = json.load(fh)
+    return data if isinstance(data, dict) else {}
+
+
+def migrate_state_dict(d: Dict[str, Any]) -> Dict[str, Any]:
+    """Upgrade one serialized state to ``STATE_SCHEMA_VERSION`` (returns a new dict)."""
+    out = dict(d)
+    ego = dict(out["ego"])
+    ego["lane_index"] = float(lane_index_from_y(float(ego["y"])))
+    out["ego"] = ego
+    if bool(out.get("off_road")):
+        out["timeout"] = False
+    return out
+
+
+def migrate_highway_dataset(path: str, *, backup: bool = True) -> int:
+    """Migrate ``path`` in place; return trajectories rewritten (0 if already current)."""
+    traj_path = os.path.join(path, "trajectories.jsonl")
+    if not os.path.isfile(traj_path):
+        raise FileNotFoundError(traj_path)
+    manifest = read_dataset_manifest(path)
+    if int(manifest.get("state_schema_version") or 1) >= STATE_SCHEMA_VERSION:
+        return 0
+
+    if backup:
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        abs_path = os.path.abspath(path)
+        shutil.copytree(
+            abs_path,
+            os.path.join(os.path.dirname(abs_path), f"{os.path.basename(abs_path)}_backup_{stamp}"),
+        )
+
+    records = []
+    with open(traj_path, encoding="utf-8") as fh:
+        for line in fh:
+            if not line.strip():
+                continue
+            rec = json.loads(line)
+            rec["states"] = [migrate_state_dict(s) for s in rec["states"]]
+            records.append(rec)
+
+    tmp_path = traj_path + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as fh:
+        for rec in records:
+            fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    os.replace(tmp_path, traj_path)
+
+    manifest["state_schema_version"] = STATE_SCHEMA_VERSION
+    with open(os.path.join(path, "manifest.json"), "w", encoding="utf-8") as fh:
+        json.dump(manifest, fh, indent=2)
+    return len(records)
 
 
 def load_highway_dataset(path: str) -> List[HighwayTrajectoryRecord]:
     traj_path = os.path.join(path, "trajectories.jsonl")
     if not os.path.isfile(traj_path):
         raise FileNotFoundError(traj_path)
+    version = int(read_dataset_manifest(path).get("state_schema_version") or 1)
+    if version < STATE_SCHEMA_VERSION:
+        logger.warning(
+            "Highway Stage I dataset %s has state_schema_version=%d (current %d): "
+            "lane_index / timeout fields are stale. Run "
+            "scripts/migrate_highway_stage1_dataset.py --dataset %s",
+            path,
+            version,
+            STATE_SCHEMA_VERSION,
+            path,
+        )
     out: List[HighwayTrajectoryRecord] = []
     with open(traj_path, encoding="utf-8") as fh:
         for line in fh:
