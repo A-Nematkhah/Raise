@@ -362,9 +362,10 @@ def _make_train_vec_env(reward_fn: Any, *, seed: int, n_envs: int, env_config: O
 
     def _thunk(rank: int):
         def _init():
+            # PPO(seed=s) re-seeds VecEnv slot i with s + i on the first reset.
             env = RewardInjectedHighwayEnv(
                 reward_fn if rank == 0 else clone_reward_fn(reward_fn),
-                seed=int(seed) + int(rank) * 997,
+                seed=int(seed) + int(rank),
                 config=env_config,
             )
             # filename omitted on purpose — avoid per-worker Monitor CSVs.
@@ -457,7 +458,7 @@ class HighwayPPOTrainer:
         except ImportError as exc:  # pragma: no cover
             raise ImportError(
                 "Highway PPO trainer needs stable-baselines3. "
-                "Install: pip install -r requirements_highway.txt"
+                "Install: pip install -r requirements.txt"
             ) from exc
 
         from domains.highway.env_wrapper import RewardInjectedHighwayEnv

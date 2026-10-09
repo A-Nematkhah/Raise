@@ -21,3 +21,6 @@ K_GATE = 6.0
 
 # Lag penalty kicks in when mean_speed is below this (m/s).
 LAG_SPEED_MPS = 18.0
+
+# Progress scale for the fitness progress term (~20 m/s * 40 s episode).
+REF_PROGRESS_M = 800.0

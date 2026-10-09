@@ -79,7 +79,8 @@ Function Interface (EXACT FIELD STRUCTURE):
     - state.ego.x, state.ego.y, state.ego.vx, state.ego.vy, state.ego.heading
     - state.ego.speed, state.ego.lane_index, state.ego.on_road
     - state.others: tuple of NearbyVehicle; iterate `for v in state.others:` then v.x, v.y, v.vx, v.vy, v.heading
-    - FRAMES: state.ego.x / state.ego.y are ABSOLUTE road coordinates; v.x, v.y, v.vx, v.vy are EGO-RELATIVE (other minus ego: v.x > 0 ahead, v.x < 0 behind, |v.y| < 2 same lane). Never compare v.x with state.ego.x or memory['prev_x']; compare v.x with 0 (e.g. an overtake is a vehicle whose v.x flipped from > 0 to <= 0 between steps).
+    - FRAMES: state.ego.x / state.ego.y are ABSOLUTE road coordinates; v.x, v.y, v.vx, v.vy are EGO-RELATIVE (other minus ego: v.x > 0 ahead, v.x < 0 behind, |v.y| < 2 same lane). Never compare v.x with state.ego.x or memory['prev_x']; compare v.x with 0 (e.g. an overtake is a vehicle whose v.x flipped from > 0 to <= 0 between steps). Headings (state.ego.heading, v.heading) are absolute radians, ~0 along the road.
+    - LANES: state.ego.lane_index 0 is the leftmost lane; larger index = further right (y grows to the right, 4 m per lane). LANE_LEFT lowers lane_index, LANE_RIGHT raises it.
     - state.collision, state.off_road, state.timeout: bool (environment-owned). state.timeout is True only on the final step of an episode that reached the time limit WITHOUT collision/off-road — it marks a survived (successful) episode, not a failure.
     - state.action (type depends on the action space below), state.time_step, state.global_time, state.time_limit
     - state.progress: float (forward meters since previous frame)
@@ -139,7 +140,8 @@ _REWARD_STATE_ACCESS = """\
 HighwayRewardState access (dot notation only — never getattr/hasattr/__import__):
 - state.ego.x, state.ego.y, state.ego.vx, state.ego.vy, state.ego.heading, state.ego.speed, state.ego.lane_index, state.ego.on_road
 - state.others — loop `for v in state.others:` then v.x, v.y, v.vx, v.vy, v.heading
-- FRAMES: state.ego.x/y are absolute; v.x, v.y, v.vx, v.vy are ego-relative (v.x > 0 ahead, v.x < 0 behind). Compare v.x with 0, never with state.ego.x or memory['prev_x'].
+- FRAMES: state.ego.x/y are absolute; v.x, v.y, v.vx, v.vy are ego-relative (v.x > 0 ahead, v.x < 0 behind). Compare v.x with 0, never with state.ego.x or memory['prev_x']. Headings are absolute radians (~0 along the road).
+- LANES: lane_index 0 is the leftmost lane; larger index = further right (y grows to the right). LANE_LEFT lowers lane_index.
 - state.collision, state.off_road, state.timeout (timeout = survived to the time limit, i.e. success)
 - state.action, state.time_step, state.global_time, state.time_limit, state.progress, state.speed
 - memory: plain dict for episode-local state; cleared on reset

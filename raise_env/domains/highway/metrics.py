@@ -16,6 +16,7 @@ from typing import Any, Dict, Mapping, Optional
 from domains.highway.objective_constants import (
     K_GATE,
     LAG_SPEED_MPS,
+    REF_PROGRESS_M,
     V_FLOOR,
     V_MIN,
     V_TARGET,
@@ -39,7 +40,7 @@ __all__ = [
 _LAG_SPEED_MPS = LAG_SPEED_MPS
 
 # Reference scales for ~40s highway-fast episodes at traffic cruise.
-_REF_PROGRESS_M = 800.0  # ~20 m/s * 40 s
+_REF_PROGRESS_M = float(REF_PROGRESS_M)
 _REF_SPEED_MPS = float(V_TARGET)
 
 HACK_PENALTY = 10.0  # magnitude when v_eff < v_floor (F = −HACK_PENALTY)
