@@ -5,7 +5,7 @@ from __future__ import annotations
 import glob
 import json
 import os
-from typing import Any, Dict, List, Mapping, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from raise_core.explore import RewardCandidate
 
@@ -59,10 +59,60 @@ def raw_objective_row(candidate: RewardCandidate) -> Dict[str, Any]:
     }
 
 
+def _load_json_dict(path: str) -> Dict[str, Any]:
+    if not os.path.isfile(path):
+        return {}
+    with open(path, encoding="utf-8") as fh:
+        data = json.load(fh)
+    return data if isinstance(data, dict) else {}
+
+
+def run_pareto_settings(run_dir: str) -> Dict[str, Any]:
+    """Calibration mode, objectives, ambient stats and reference the run ranked with.
+
+    Re-ranking a run's population must use the same settings as its breeding
+    loop, otherwise the reported front 0 can differ from the one that bred.
+    """
+    from domains.highway.pareto_rank import (
+        ParetoObjectives,
+        ReferenceStats,
+        parse_calibration_mode,
+    )
+
+    cfg = _load_json_dict(os.path.join(run_dir, "config.json"))
+    calibration_mode = parse_calibration_mode(cfg.get("highway_calibration_mode"))
+    objectives = ParetoObjectives(
+        progress=bool(cfg.get("highway_pareto_use_progress", True)),
+        lane_change=bool(cfg.get("highway_pareto_use_lane_change", True)),
+        overtake=bool(cfg.get("highway_pareto_use_overtake", True)),
+    )
+    closed_loop = os.path.join(run_dir, "closed_loop")
+    ambient = _load_json_dict(os.path.join(closed_loop, "ambient_traffic.json")) or None
+    ref = None
+    ref_payload = _load_json_dict(os.path.join(closed_loop, "pareto_reference.json"))
+    if calibration_mode == "population" and ref_payload:
+        ref = ReferenceStats(
+            v_floor=float(ref_payload["v_floor"]),
+            cr_ceiling=float(ref_payload["cr_ceiling"]),
+            tr_ceiling=float(ref_payload["tr_ceiling"]),
+            source=str(ref_payload.get("source") or "gear_endpoints_slower_faster"),
+            se_margin=bool(ref_payload.get("se_margin", True)),
+        )
+    return {
+        "calibration_mode": calibration_mode,
+        "objectives": objectives,
+        "ambient": ambient,
+        "ref": ref,
+    }
+
+
 def ensure_pareto_stamped(
     candidates: Sequence[RewardCandidate],
     *,
     ref: Any = None,
+    calibration_mode: Optional[str] = None,
+    objectives: Any = None,
+    ambient: Optional[Mapping[str, float]] = None,
 ) -> List[RewardCandidate]:
     """Stamp pareto_* if missing (recompute from last_metrics)."""
     pop = list(candidates)
@@ -82,16 +132,31 @@ def ensure_pareto_stamped(
 
     from raise_core.raise_loop.evolve_rank import rank_population_pareto
 
-    return rank_population_pareto(pop, ref=ref)
+    return rank_population_pareto(
+        pop,
+        ref=ref,
+        calibration_mode=calibration_mode,
+        objectives=objectives,
+        ambient=ambient,
+    )
 
 
 def front0_candidates(
     candidates: Sequence[RewardCandidate],
     *,
     ref: Any = None,
+    calibration_mode: Optional[str] = None,
+    objectives: Any = None,
+    ambient: Optional[Mapping[str, float]] = None,
 ) -> List[RewardCandidate]:
     """Feasible Pareto front 0 only (after ensuring stamps)."""
-    stamped = ensure_pareto_stamped(candidates, ref=ref)
+    stamped = ensure_pareto_stamped(
+        candidates,
+        ref=ref,
+        calibration_mode=calibration_mode,
+        objectives=objectives,
+        ambient=ambient,
+    )
     front = [
         c
         for c in stamped
@@ -108,7 +173,7 @@ def front0_candidates(
         c
         for c in stamped
         if (c.metadata or {}).get("pareto_feasible") is True
-        and int((c.metadata or {}).get("pareto_front") or -1) == 0
+        and (c.metadata or {}).get("pareto_front") == 0
     ]
 
 
@@ -227,7 +292,14 @@ def list_front0_from_run(
     cands = dicts_to_candidates(items)
     if not cands:
         raise ValueError(f"Population file {path} has no candidates")
-    front = front0_candidates(cands, ref=ref)
+    settings = run_pareto_settings(run_dir)
+    front = front0_candidates(
+        cands,
+        ref=ref if ref is not None else settings["ref"],
+        calibration_mode=settings["calibration_mode"],
+        objectives=settings["objectives"],
+        ambient=settings["ambient"],
+    )
     rows = [raw_objective_row(c) for c in front]
     return rows, front, path
 

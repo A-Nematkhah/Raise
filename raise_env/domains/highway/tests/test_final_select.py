@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import json
+
 from domains.highway.final_select import (
     crowdnav_history_scalar,
     format_front_table,
     front0_candidates,
     raw_objective_row,
+    run_pareto_settings,
 )
 from domains.highway.pareto_rank import ReferenceStats
 from raise_core.explore import RewardCandidate
@@ -102,6 +105,39 @@ def test_pareto_front_lists_balanced_no_silent_winner():
     bal = next(c for c in ranked if c.candidate_id == "balanced")
     assert bal.metadata.get("pareto_front") == 0
     assert bal.metadata.get("pareto_front0") is True
+
+
+def test_run_pareto_settings_follow_run_config(tmp_path):
+    (tmp_path / "config.json").write_text(
+        json.dumps(
+            {
+                "domain": "highway",
+                "highway_calibration_mode": "env_measured",
+                "highway_pareto_use_progress": True,
+                "highway_pareto_use_lane_change": False,
+                "highway_pareto_use_overtake": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "closed_loop").mkdir()
+    (tmp_path / "closed_loop" / "ambient_traffic.json").write_text(
+        json.dumps({"mean": 21.0}), encoding="utf-8"
+    )
+    settings = run_pareto_settings(str(tmp_path))
+    assert settings["calibration_mode"] == "env_measured"
+    names = settings["objectives"].names()
+    assert "overtakes_per_km" in names
+    assert "lane_change_rate" not in names
+    assert settings["ambient"] == {"mean": 21.0}
+    assert settings["ref"] is None
+
+
+def test_run_pareto_settings_defaults_match_run_defaults(tmp_path):
+    settings = run_pareto_settings(str(tmp_path))
+    assert settings["calibration_mode"] == "no_speed_floor"
+    names = settings["objectives"].names()
+    assert "lane_change_rate" in names and "overtakes_per_km" in names
 
 
 def test_stamp_sets_pareto_front_index():

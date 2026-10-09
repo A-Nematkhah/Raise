@@ -10,8 +10,10 @@ from domains.highway.pareto_rank import (
     bernoulli_se,
     calibrate_from_gear_endpoints,
     calibrate_from_population,
+    crowding_distance,
     dominates,
     is_feasible,
+    metrics_from_mapping,
     rank_population,
     reference_for_mode,
     _objectives,
@@ -133,3 +135,25 @@ def test_rank_with_gear_ref_keeps_crawlers_above_crashers():
     assert ordered[0].candidate_id == "crawl"
     assert is_feasible(pop[0], gear)
     assert not is_feasible(pop[1], gear)
+
+
+def test_nan_metrics_rank_as_worst_and_keep_crowding_finite():
+    nan = float("nan")
+    good = metrics_from_mapping(
+        "good", {"SR": 0.9, "CR": 0.1, "TR": 0.0, "mean_speed": 25.0, "PL": 800.0}
+    )
+    broken = metrics_from_mapping(
+        "broken", {"SR": 0.9, "CR": nan, "TR": 0.0, "mean_speed": nan, "PL": 800.0}
+    )
+    assert broken.cr == 1.0 and broken.mean_speed == 0.0
+    assert dominates(good, broken, ParetoObjectives())
+
+    third = metrics_from_mapping(
+        "third", {"SR": 0.5, "CR": 0.0, "TR": 0.5, "mean_speed": 30.0, "PL": 500.0}
+    )
+    front = [good, broken, third]
+    cd = crowding_distance(front, ParetoObjectives())
+    assert all(not np.isnan(v) for v in cd.values())
+    ref = reference_for_mode("no_speed_floor", front)
+    ordered = rank_population(front, ref=ref, objectives=ParetoObjectives())
+    assert ordered[-1].candidate_id == "broken"

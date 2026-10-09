@@ -471,13 +471,16 @@ def metrics_from_mapping(
     elif str(metrics.get("eval_profile", "")).lower() == "holdout":
         src = metrics
 
-    def _f(key: str, *alts: str, default: float = 0.0) -> float:
+    # Non-finite values map to ``worst`` for that objective: a NaN must neither
+    # dominate nor escape domination, and crowding distance must stay finite.
+    def _f(key: str, *alts: str, default: float = 0.0, worst: float = 0.0) -> float:
         for k in (key,) + alts:
             if k in src and src[k] is not None:
                 try:
-                    return float(src[k])
+                    value = float(src[k])
                 except (TypeError, ValueError):
                     continue
+                return value if np.isfinite(value) else float(worst)
         return float(default)
 
     samples = src.get("speed_samples")
@@ -496,12 +499,14 @@ def metrics_from_mapping(
             p10 = float(src["speed_p10"])
         except (TypeError, ValueError):
             p10 = None
+        if p10 is not None and not np.isfinite(p10):
+            p10 = None
 
     return Metrics(
         candidate_id=str(candidate_id),
         sr=_f("SR", "sr"),
-        cr=_f("CR", "cr"),
-        tr=_f("TR", "tr"),
+        cr=_f("CR", "cr", worst=1.0),
+        tr=_f("TR", "tr", worst=1.0),
         progress=_f("PL", "mean_progress", "progress"),
         mean_speed=_f("mean_speed", "ITR", "avg_speed"),
         soft_success=_f("soft_success"),
