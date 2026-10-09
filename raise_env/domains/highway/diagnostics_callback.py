@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 import warnings
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
@@ -63,6 +64,11 @@ class RolloutDiagnosticsCallback(BaseCallback):
 
     Also snapshots mean reward-component values once per rollout for EUREKA
     reflection (``component_history``).
+
+    SB3 records and clears ``rollout/*`` and ``time/*`` logger keys after
+    ``_on_rollout_end``, so ``ep_rew_mean`` and ``fps`` are computed here from
+    ``model.ep_info_buffer`` and wall time. ``train/*`` values come from the
+    logger and describe the previous PPO update.
     """
 
     def __init__(
@@ -86,6 +92,27 @@ class RolloutDiagnosticsCallback(BaseCallback):
         self._warned_new_keys: set[str] = set()
         # Across rollouts: name -> list of per-rollout means.
         self.component_history: Dict[str, List[float]] = {}
+        self._train_t0: Optional[float] = None
+        self._train_steps0 = 0
+
+    def _on_training_start(self) -> None:
+        self._train_t0 = time.perf_counter()
+        self._train_steps0 = int(self.num_timesteps)
+
+    def _ep_rew_mean(self, ntv: Any) -> Optional[float]:
+        buf = getattr(self.model, "ep_info_buffer", None)
+        if buf:
+            returns = [float(ep["r"]) for ep in buf if isinstance(ep, dict) and "r" in ep]
+            if returns:
+                return float(np.mean(returns))
+        return _logger_get(ntv, "ep_rew_mean")
+
+    def _fps(self, ntv: Any) -> Optional[float]:
+        if self._train_t0 is not None:
+            elapsed = time.perf_counter() - self._train_t0
+            if elapsed > 0:
+                return float(int(self.num_timesteps) - self._train_steps0) / elapsed
+        return _logger_get(ntv, "fps")
 
     def _ingest_step_components(self, comps: Mapping[str, Any]) -> None:
         """Accumulate one step's components; missing keys are skipped (not zeroed)."""
@@ -174,14 +201,14 @@ class RolloutDiagnosticsCallback(BaseCallback):
             record: dict = {
                 "candidate_id": self.candidate_id,
                 "steps": int(self.num_timesteps),
-                "ep_rew_mean": _logger_get(ntv, "ep_rew_mean"),
+                "ep_rew_mean": self._ep_rew_mean(ntv),
                 "explained_variance": _logger_get(ntv, "explained_variance"),
                 "approx_kl": _logger_get(ntv, "approx_kl"),
                 "entropy_loss": _logger_get(ntv, "entropy_loss"),
                 "value_loss": _logger_get(ntv, "value_loss"),
                 "policy_gradient_loss": _logger_get(ntv, "policy_gradient_loss"),
                 "clip_fraction": _logger_get(ntv, "clip_fraction"),
-                "fps": _logger_get(ntv, "fps"),
+                "fps": self._fps(ntv),
             }
             if rollout_means:
                 record["reward_component_means"] = rollout_means

@@ -46,6 +46,23 @@ def test_rollout_callback_writes_jsonl(tmp_path):
     assert rows[0]["fps"] == 100.0
 
 
+def test_rollout_callback_reads_episode_buffer_when_logger_cleared(tmp_path):
+    path = str(tmp_path / "diagnostics_rollout.jsonl")
+    cb = RolloutDiagnosticsCallback(candidate_id="c0", log_path=path)
+    cb.model = SimpleNamespace(
+        logger=SimpleNamespace(name_to_value={"train/approx_kl": 0.02}),
+        ep_info_buffer=[{"r": 1.0, "l": 10}, {"r": 3.0, "l": 12}],
+    )
+    cb.num_timesteps = 0
+    cb._on_training_start()
+    cb.num_timesteps = 128
+    cb._on_rollout_end()
+    rows = [json.loads(l) for l in open(path, encoding="utf-8") if l.strip()]
+    assert rows[0]["ep_rew_mean"] == 2.0
+    assert rows[0]["fps"] is not None and rows[0]["fps"] > 0
+    assert rows[0]["approx_kl"] == 0.02
+
+
 def test_rollout_callback_swallows_io_errors(tmp_path, monkeypatch):
     path = str(tmp_path / "diagnostics_rollout.jsonl")
     cb = RolloutDiagnosticsCallback(candidate_id="c0", log_path=path)

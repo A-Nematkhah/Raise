@@ -2,21 +2,27 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any, Dict, Set
 
 
 class OvertakeTracker:
     """
     Per-episode pass counter along the road's longitudinal axis.
 
-    ``passes`` — a vehicle that was ahead of the ego is now behind it.
+    ``passes`` — vehicles that were ahead of the ego and are currently behind
+    it. Losing the position again cancels that vehicle's pass, so two cars
+    swapping back and forth do not inflate the count.
 
     Call ``observe(env)`` after reset and after every non-terminal step.
     """
 
     def __init__(self) -> None:
-        self.passes = 0
         self._side: Dict[int, int] = {}
+        self._passed: Set[int] = set()
+
+    @property
+    def passes(self) -> int:
+        return len(self._passed)
 
     def observe(self, env: Any) -> None:
         base = getattr(env, "unwrapped", env)
@@ -35,5 +41,7 @@ class OvertakeTracker:
             key = id(other)
             prev = self._side.get(key)
             if prev == 1 and side == -1:
-                self.passes += 1
+                self._passed.add(key)
+            elif prev == -1 and side == 1:
+                self._passed.discard(key)
             self._side[key] = side

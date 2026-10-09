@@ -129,3 +129,12 @@ def test_overtake_tracker_counts_pass():
     other.position = (10.0, 0.0)
     tr.observe(env)
     assert tr.passes == 1
+
+    # Swapping back and forth must not count the same vehicle repeatedly.
+    for _ in range(3):
+        other.position = (env.vehicle.position[0] + 5.0, 0.0)
+        tr.observe(env)
+        assert tr.passes == 0
+        other.position = (env.vehicle.position[0] - 5.0, 0.0)
+        tr.observe(env)
+        assert tr.passes == 1
