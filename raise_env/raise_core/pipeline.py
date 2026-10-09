@@ -13,6 +13,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+from domains.highway.action_config import configure_action_mode_from_config
 from domains.highway.post_run import write_highway_run_artifacts
 from raise_core import console
 from raise_core.domains import (
@@ -137,6 +138,8 @@ class RaisePipeline:
         self.config = config or RaiseRunConfig()
         self.llm = llm
         self.domain_pack = domain_pack or load_domain(self.config.domain)
+        # Smoke states read the active action mode (int vs tuple action).
+        configure_action_mode_from_config(self.config)
         self.validator = make_validator_for_domain(self.domain_pack)
 
     def _build_llm(self) -> LLMClient:

@@ -3,12 +3,23 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Tuple
+
+from domains.highway.action_config import get_action_settings
 
 # highway-env StraightLane.DEFAULT_WIDTH; lane i is centred at y = i * width.
 LANE_WIDTH_M = 4.0
 DEFAULT_LANES = 4
+
+# Meta action index -> (acceleration, steering) for continuous-mode smoke states.
+_META_TO_CONTINUOUS = {
+    0: (0.0, -0.3),
+    1: (0.0, 0.0),
+    2: (0.0, 0.3),
+    3: (0.5, 0.0),
+    4: (-0.5, 0.0),
+}
 
 
 def lane_index_from_y(y: float, lanes: int = DEFAULT_LANES) -> int:
@@ -65,6 +76,19 @@ class HighwayRewardState:
     speed: float  # ego speed duplicate for convenience
 
 
+def smoke_action(meta_action: int) -> Any:
+    """``state.action`` for a smoke state in the active action mode.
+
+    Matches what ``RewardInjectedHighwayEnv`` passes: an ``int`` for
+    DiscreteMetaAction, a tuple of floats for ContinuousAction.
+    """
+    settings = get_action_settings()
+    if settings.mode != "continuous":
+        return int(meta_action)
+    accel, steer = _META_TO_CONTINUOUS.get(int(meta_action), (0.0, 0.0))
+    return (accel, steer) if settings.continuous_lateral else (accel,)
+
+
 def default_smoke_states() -> tuple[HighwayRewardState, ...]:
     """Deterministic snapshots for RewardValidator smoke tests."""
 
@@ -96,7 +120,7 @@ def default_smoke_states() -> tuple[HighwayRewardState, ...]:
             collision=collision,
             off_road=off_road,
             timeout=timeout,
-            action=action,
+            action=smoke_action(action),
             time_step=0.2,
             global_time=global_time,
             time_limit=40.0,
@@ -151,27 +175,18 @@ def fingerprint_smoke_states(
     discriminative.
     """
     base = list(default_smoke_states())
-    if not dataset_path:
-        try:
-            from domains.highway.stage1 import DEFAULT_STAGE1_DATASET
+    # stage1 imports this module (lane_index_from_y, HighwayRewardState).
+    from domains.highway.stage1 import DEFAULT_STAGE1_DATASET, load_highway_dataset
 
-            dataset_path = DEFAULT_STAGE1_DATASET
-        except Exception:  # noqa: BLE001
-            dataset_path = None
-    if not dataset_path:
+    path = dataset_path or DEFAULT_STAGE1_DATASET
+    if not path:
         return tuple(base)
-
     try:
-        from domains.highway.stage1 import load_highway_dataset
+        trajs = load_highway_dataset(path)
     except Exception:  # noqa: BLE001
         return tuple(base)
 
-    try:
-        trajs = load_highway_dataset(dataset_path)
-    except Exception:  # noqa: BLE001
-        return tuple(base)
-
-    # Prefer one mid-frame from crawl success, fast success, and a collision.
+    # One mid-frame from crawl and fast successes, plus the terminal frame of a collision.
     picked: list[HighwayRewardState] = []
     buckets = {"crawl": None, "fast": None, "collision": None}
     for traj in trajs:
@@ -182,20 +197,27 @@ def fingerprint_smoke_states(
         lab = str(traj.label or "").lower()
         spd = float(getattr(mid, "speed", 0.0) or 0.0)
         if buckets["crawl"] is None and (
-            "crawl" in beh
-            or "lag" in beh
-            or (lab == "success" and spd < 18.0)
+            beh in ("crawl", "lag", "decoy_lag") or (lab == "success" and spd < 18.0)
         ):
             buckets["crawl"] = mid
         elif buckets["fast"] is None and lab == "success" and spd >= 22.0:
             buckets["fast"] = mid
         elif buckets["collision"] is None and lab == "collision":
-            buckets["collision"] = mid
+            buckets["collision"] = traj.states[-1]
         if all(buckets.values()):
             break
     for st in buckets.values():
         if st is not None:
-            picked.append(st)
+            picked.append(_with_smoke_action(st))
         if len(picked) >= max_dataset_frames:
             break
     return tuple(base + picked)
+
+
+def _with_smoke_action(state: HighwayRewardState) -> HighwayRewardState:
+    """Stage I frames store meta action indices; map them to the active mode."""
+    try:
+        meta = int(state.action)
+    except (TypeError, ValueError):
+        meta = 1
+    return replace(state, action=smoke_action(meta))

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional, Tuple
 
+import gymnasium as gym
+import highway_env  # noqa: F401  (registers highway-fast-v0)
 import numpy as np
 
 from domains.highway.action_config import (
@@ -30,17 +32,6 @@ MAX_OTHERS = 5
 HOLDOUT_VEHICLES = 20
 HOLDOUT_VEHICLES_DENSITY = 1.5
 HOLDOUT_SEED_OFFSET = 50_003
-
-
-def _require_highway_deps() -> None:
-    try:
-        import gymnasium  # noqa: F401
-        import highway_env  # noqa: F401
-    except ImportError as exc:  # pragma: no cover
-        raise ImportError(
-            "Highway domain requires gymnasium + highway-env. "
-            "Install: pip install -r requirements_highway.txt"
-        ) from exc
 
 
 def _base_env_config(action: Dict[str, Any]) -> Dict[str, Any]:
@@ -107,9 +98,6 @@ def make_base_env(
     render_mode: Optional[str] = None,
 ):
     """Create a configured highway-fast-v0 env (native reward unused)."""
-    _require_highway_deps()
-    import gymnasium as gym
-
     cfg = default_env_config()
     if config:
         nested = dict(cfg)
@@ -180,15 +168,7 @@ def kinematics_to_state(
     vy = float(ego_row[4]) if _row_presence(ego_row) else 0.0
     heading = float(ego_row[5]) if _row_presence(ego_row) else 0.0
     speed = float((vx ** 2 + vy ** 2) ** 0.5)
-    if prev_ego_x is None:
-        progress = 0.0
-    else:
-        dx = ego_x - float(prev_ego_x)
-        progress = max(0.0, dx)
-        # Only synthesize progress from speed when moving forward (vx>0).
-        # Reversing previously got free progress via speed*dt — wrong for PL.
-        if progress < 1e-6 and speed > 0.5 and vx > 0.5:
-            progress = speed * float(time_step)
+    progress = 0.0 if prev_ego_x is None else max(0.0, ego_x - float(prev_ego_x))
 
     others = []
     for row in arr[1 : MAX_OTHERS + 1]:
@@ -233,13 +213,19 @@ def kinematics_to_state(
     return state, ego_x
 
 
-def _gym_wrapper_base():
-    import gymnasium as gym
+def action_for_state(action: Any, action_space: Any) -> Any:
+    """Plain Python ``state.action``: ``int`` for Discrete, tuple of floats for Box.
 
-    return gym.Wrapper
+    SB3 hands the env ``np.int64`` (VecEnv) or 0-d arrays (``predict``); the
+    sandbox only accepts real ``int``/``float`` returns, and smoke states use
+    the same plain types.
+    """
+    if isinstance(action_space, gym.spaces.Discrete):
+        return int(np.asarray(action).reshape(-1)[0])
+    return tuple(float(a) for a in np.asarray(action, dtype=np.float64).reshape(-1))
 
 
-class RewardInjectedHighwayEnv(_gym_wrapper_base()):  # type: ignore[misc,valid-type]
+class RewardInjectedHighwayEnv(gym.Wrapper):
     """
     Gymnasium Wrapper that replaces the native reward with
     ``reward_fn.compute(HighwayRewardState)``.
@@ -304,7 +290,7 @@ class RewardInjectedHighwayEnv(_gym_wrapper_base()):  # type: ignore[misc,valid-
         self._global_time = min(self._time_limit, self._global_time + self._time_step)
         state, self._ego_x = kinematics_to_state(
             obs,
-            action=action,
+            action=action_for_state(action, self.env.action_space),
             collision=collision,
             off_road=off_road,
             timeout=timeout,
