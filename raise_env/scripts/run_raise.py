@@ -150,7 +150,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--highway-warm-start",
         action=argparse.BooleanOptionalAction,
         default=_DEFAULTS.highway_warm_start,
-        help="Warm-start PPO from the parent's checkpoint when available",
+        help=(
+            "Warm-start PPO from the parent's checkpoint when available "
+            "(off by default: warm-started children get a larger effective budget)"
+        ),
     )
     parser.add_argument(
         "--highway-action-mode",

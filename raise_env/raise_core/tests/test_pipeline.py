@@ -7,6 +7,8 @@ import json
 from raise_core import pipeline as pipeline_mod
 from raise_core.domains import make_stage3_trainer_for_domain
 from raise_core.pipeline import RaisePipeline, RaiseRunConfig
+from raise_core.refine import Stage2Config
+from raise_core.validate import Stage3Config
 
 
 def test_pipeline_fast(tmp_path):
@@ -96,14 +98,20 @@ def test_stage3_receives_highway_config(tmp_path, monkeypatch):
     cfg = RaiseRunConfig(output_dir=str(tmp_path / "run_hw_cfg"))
     cfg.apply_fast_profile()
     cfg.highway_eval_mode = "holdout_only"
-    cfg.highway_warm_start = False
+    cfg.highway_warm_start = True
     cfg.highway_n_envs = 2
     RaisePipeline(cfg).run()
     assert seen
     s3 = seen[0]
     assert s3.highway_eval_mode == "holdout_only"
-    assert s3.highway_warm_start is False
+    assert s3.highway_warm_start is True
     assert s3.highway_n_envs == 2
     assert s3.train_env_steps == cfg.stage3_train_steps
     assert s3.highway_n_steps == 64
     assert s3.highway_eval_deterministic is False
+
+
+def test_warm_start_off_by_default():
+    assert RaiseRunConfig().highway_warm_start is False
+    assert Stage2Config().highway_warm_start is False
+    assert Stage3Config().highway_warm_start is False

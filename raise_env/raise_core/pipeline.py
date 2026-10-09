@@ -71,7 +71,9 @@ class RaiseRunConfig:
     # Highway trainer knobs.
     highway_n_envs: int = 1
     highway_label_workers: int = 1
-    highway_warm_start: bool = True
+    # Off: a warm-started child carries its parent's PPO steps, so its fitness
+    # would be compared against siblings trained on a smaller budget.
+    highway_warm_start: bool = False
     highway_eval_mode: str = "holdout_only"
     highway_action_mode: str = "meta_default"
     highway_action_continuous_lateral: bool = True

@@ -59,7 +59,7 @@ class Stage3Config:
     highway_meta_fine_high: float = 35.0
     highway_meta_fine_n: int = 21
     highway_eval_mode: str = "both"
-    highway_warm_start: bool = True
+    highway_warm_start: bool = False
     highway_n_envs: int = 1
     # Same PPO rollout / eval policy mode as Stage II so both stages are comparable.
     highway_n_steps: int = 64

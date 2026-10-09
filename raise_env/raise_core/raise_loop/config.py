@@ -36,7 +36,7 @@ class ClosedLoopConfig:
     # Highway speed knobs (same budget; higher wall throughput).
     highway_n_envs: int = 1
     highway_label_workers: int = 1
-    highway_warm_start: bool = True
+    highway_warm_start: bool = False
     highway_eval_mode: str = "holdout_only"  # both | holdout_only
     highway_action_mode: str = "meta_default"
     highway_action_continuous_lateral: bool = True

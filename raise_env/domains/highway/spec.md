@@ -139,8 +139,9 @@ metrics plus this fitness (`raise_loop/proxy_feedback.py`).
    AST policy → spawned smoke test → compile.
 2. **Each generation g < G**: Score1 on the Stage I dataset; every new
    executable candidate is PPO-trained for K2 env steps and evaluated on E2
-   holdout episodes (eval seeds shared within the generation; PPO warm-starts
-   from a parent's checkpoint when that parent is still in the population);
+   holdout episodes (eval seeds shared within the generation; every candidate
+   trains from scratch, `--highway-warm-start` opts into copying a parent's
+   policy weights);
    rank by fitness; the LLM breeds the next generation
    (crossover of the top 2, mutation of the lower half with its evaluation
    evidence, random restarts; the best genome is carried over with elitism).

@@ -28,7 +28,7 @@ class Stage2Config:
     output_root: str = "trained_models/stage2"
     device: str = "cpu"
     highway_n_envs: int = 1
-    highway_warm_start: bool = True
+    highway_warm_start: bool = False
     highway_eval_mode: str = "both"
     highway_action_mode: str = "meta_default"
     highway_action_continuous_lateral: bool = True
