@@ -84,6 +84,30 @@ SAFE_METHOD_ATTRIBUTES: Tuple[str, ...] = (
     "add",
 )
 
+# ``math.<name>`` uses allowed on the pre-injected ``math`` module (pure functions
+# and constants; anything else on ``math`` is rejected).
+SAFE_MATH_CONSTANTS: Tuple[str, ...] = ("pi", "e", "tau", "inf")
+SAFE_MATH_ATTRIBUTES: Tuple[str, ...] = SAFE_MATH_CONSTANTS + (
+    "sqrt",
+    "exp",
+    "log",
+    "log1p",
+    "log10",
+    "tanh",
+    "sin",
+    "cos",
+    "tan",
+    "atan",
+    "atan2",
+    "hypot",
+    "fabs",
+    "floor",
+    "ceil",
+    "copysign",
+    "isfinite",
+    "isnan",
+)
+
 
 @dataclass(frozen=True)
 class SandboxConfig:

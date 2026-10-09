@@ -9,7 +9,18 @@ from __future__ import annotations
 import ast
 from typing import List, Optional
 
-from raise_core.sandbox.config import SAFE_METHOD_ATTRIBUTES, SandboxConfig
+from raise_core.sandbox.config import (
+    SAFE_MATH_ATTRIBUTES,
+    SAFE_MATH_CONSTANTS,
+    SAFE_METHOD_ATTRIBUTES,
+    SandboxConfig,
+)
+
+_IMPORT_HINT = (
+    "math is pre-injected as name `math` - do not import it; call e.g. "
+    "math.sqrt / math.exp / math.tanh directly; "
+    "never use __import__/getattr/hasattr"
+)
 from raise_core.sandbox.errors import RewardSandboxError
 
 
@@ -25,11 +36,7 @@ class _PolicyVisitor(ast.NodeVisitor):
 
     def visit_Import(self, node: ast.Import) -> None:
         if not self.config.allow_imports:
-            self.reasons.append(
-                "import is forbidden (math is pre-injected as name `math` - "
-                "do not import; prefer ** 0.5 for square roots; "
-                "never use __import__/getattr/hasattr)"
-            )
+            self.reasons.append(f"import is forbidden ({_IMPORT_HINT})")
         else:
             for alias in node.names:
                 root = alias.name.split(".", 1)[0]
@@ -39,11 +46,7 @@ class _PolicyVisitor(ast.NodeVisitor):
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
         if not self.config.allow_imports:
-            self.reasons.append(
-                "from-import is forbidden (math is pre-injected as name `math` - "
-                "do not import; prefer ** 0.5 for square roots; "
-                "never use __import__/getattr/hasattr)"
-            )
+            self.reasons.append(f"from-import is forbidden ({_IMPORT_HINT})")
         else:
             root = (node.module or "").split(".", 1)[0]
             if not root or root not in self.config.allowed_modules:
@@ -122,6 +125,12 @@ class _PolicyVisitor(ast.NodeVisitor):
     def visit_Attribute(self, node: ast.Attribute) -> None:
         if node.attr.startswith("_"):
             self.reasons.append(f"attribute {node.attr!r} is forbidden")
+        elif isinstance(node.value, ast.Name) and node.value.id == "math":
+            if node.attr not in SAFE_MATH_ATTRIBUTES:
+                self.reasons.append(
+                    f"math.{node.attr} is not allowed "
+                    f"(allowed: {', '.join(SAFE_MATH_ATTRIBUTES)})"
+                )
         elif self._allowed_attrs is not None and node.attr not in self._allowed_attrs:
             self.reasons.append(
                 f"attribute {node.attr!r} is not on the domain allowlist "
@@ -243,7 +252,7 @@ def _is_math_constant(node: ast.AST) -> bool:
         isinstance(node, ast.Attribute)
         and isinstance(node.value, ast.Name)
         and node.value.id == "math"
-        and node.attr in ("pi", "e", "tau", "inf")
+        and node.attr in SAFE_MATH_CONSTANTS
     )
 
 

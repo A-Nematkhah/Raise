@@ -5,8 +5,17 @@ from __future__ import annotations
 from typing import Optional
 
 from domains.highway.action_config import action_space_prompt_block
+from raise_core.sandbox.config import SAFE_MATH_ATTRIBUTES, SAFE_MATH_CONSTANTS
 
 DOMAIN_NAME = "highway"
+
+_MATH_RULE = (
+    "Math: `math` is pre-injected - never write `import math`. Allowed: "
+    + ", ".join(f"math.{n}" for n in SAFE_MATH_ATTRIBUTES if n not in SAFE_MATH_CONSTANTS)
+    + "; constants "
+    + ", ".join(f"math.{n}" for n in SAFE_MATH_CONSTANTS)
+    + ". Any other math.* is rejected."
+)
 
 _SELECTION_OBJECTIVE = (
     "Your reward function is judged by training a PPO policy and evaluating it "
@@ -103,8 +112,7 @@ def compute_reward(state, memory):
     total = float(progress)
     return total, {{"progress_term": total}}
 ```
-Math:
-- Prefer `** 0.5` for square roots. Do not write `import math`.
+- """ + _MATH_RULE + """
 - Do not use getattr, hasattr, or __import__.
 Constraints (CRITICAL):
 - Hyperparameters must be local variables inside the function body.
@@ -146,7 +154,8 @@ HighwayRewardState access (dot notation only — never getattr/hasattr/__import_
 - state.action, state.time_step, state.global_time, state.time_limit, state.progress, state.speed
 - memory: plain dict for episode-local state; cleared on reset
 - FORBIDDEN (rejected by AST): lane_position, distance, robot, humans, gx/gy, history, px/py
-- Math: no import math; use ** 0.5. No getattr/hasattr/__import__.
+- """ + _MATH_RULE + """
+- No getattr/hasattr/__import__.
 """
 
 _D2_SANDBOX_RULES = """
@@ -277,7 +286,7 @@ D1_BATCH_USER_PROMPT = """Please write **{n} diverse** Python reward functions f
 Each function: def {func_name}_vK(state, memory) for K=1..{n}, returning (finite float, dict[str, float]).
 Use HighwayRewardState fields only (state.ego.*, state.others, state.collision/off_road/timeout, state.progress, state.speed, memory).
 FORBIDDEN fields (will be rejected): lane_position, distance, robot, humans, gx, gy, history.
-No imports, classes, getattr/hasattr. Prefer ** 0.5 for roots.
+No imports, classes, getattr/hasattr. """ + _MATH_RULE + """
 {action_space_block}
 {seed_block}
 {reflection_block}
