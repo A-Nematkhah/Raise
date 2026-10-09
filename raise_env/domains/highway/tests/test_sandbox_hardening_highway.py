@@ -32,7 +32,7 @@ _BODY = (
         "",
         '"""Docstring."""\n',
         "TARGET = 25.0\n",
-        "W = {'speed': 1.0, 'crash': -2}\nPAIR = (1, -1.5)\n",
+        "PAIR = (1, -1.5)\nNESTED = ((0, 1.0), (1, math.pi))\n",
         "BASE = 2.0\nSCALED = BASE * 3 + -1\n",
     ],
 )
@@ -49,12 +49,28 @@ def test_highway_accepts_constant_top_level(prefix):
         "F = lambda s: 1.0\n",
         "max(1, 2)\n",
         "TABLE = [0.0] * 4\nY = TABLE[0]\n",
+        "W = {'speed': 1.0, 'crash': -2}\n",
+        "HIST = []\n",
+        "SEEN = {1, 2}\n",
+        "PAIR = (1, [2])\n",
     ],
 )
 def test_highway_rejects_top_level_work(prefix):
     reward, reason = make_highway_validator().try_validate(prefix + _BODY)
     assert reward is None
     assert reason and "top-level" in reason
+
+
+def test_mutable_global_cannot_leak_across_episodes():
+    code = (
+        "HIST = []\n"
+        "def compute_reward(state, memory):\n"
+        "    HIST.append(1.0)\n"
+        "    return float(len(HIST))\n"
+    )
+    reward, reason = make_highway_validator().try_validate(code)
+    assert reward is None
+    assert "memory dict" in reason
 
 
 def test_highway_validator_defaults_to_highway_smoke_states():

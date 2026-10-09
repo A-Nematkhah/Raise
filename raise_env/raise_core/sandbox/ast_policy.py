@@ -234,9 +234,6 @@ def check_interface(tree: ast.Module, config: SandboxConfig) -> ast.FunctionDef:
 _CONSTANT_EXPR_NODES = (
     ast.Constant,
     ast.Tuple,
-    ast.List,
-    ast.Dict,
-    ast.Set,
     ast.UnaryOp,
     ast.BinOp,
     ast.Name,
@@ -280,6 +277,12 @@ def check_top_level_constants(tree: ast.Module) -> None:
                     continue
                 if isinstance(sub, ast.Name) and sub.id == "math":
                     continue
+                if isinstance(sub, (ast.List, ast.Dict, ast.Set)):
+                    raise RewardSandboxError(
+                        "mutable top-level values (list/dict/set) are forbidden: "
+                        "they survive episode resets. Use a tuple for constants, "
+                        "locals for hyperparameters, and the memory dict for state"
+                    )
                 if not isinstance(sub, _CONSTANT_EXPR_NODES):
                     raise RewardSandboxError(
                         "top-level assignments may only bind constant expressions "

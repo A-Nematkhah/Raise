@@ -116,6 +116,7 @@ def compute_reward(state, memory):
 - Do not use getattr, hasattr, or __import__.
 Constraints (CRITICAL):
 - Hyperparameters must be local variables inside the function body.
+- No module-level lists/dicts/sets (they would survive episode resets); keep cross-step state in memory.
 - Signature: exactly one function def {func_name}(state, memory): returning (finite float, dict[str, float]).
 - Sandbox: no import/from, no classes, no while loops, no list/dict/set comprehensions or generator expressions, no reflection builtins.
 - Access fields only via dot notation. Iterate others with `for v in state.others:`.
@@ -171,6 +172,7 @@ Sandbox rules (CRITICAL — invalid code is discarded):
 - Use ``memory`` (dict) for cross-timestep shaping; never invent state.history.
 {reward_state_access}
 - Hyperparameters as locals only; no extra args beyond (state, memory).
+- No module-level lists/dicts/sets (they would survive episode resets).
 - Put diagnosis as plain text BEFORE the fence; the fenced block must contain ONLY the function.
 """
 
