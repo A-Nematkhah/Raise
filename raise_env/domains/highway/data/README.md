@@ -6,21 +6,25 @@
 
 ## Stage I dataset
 
-Collect a **balanced** set for hybrid Score1 (fast success vs crawl success vs collision):
-
 ```bash
 python scripts/collect_highway_stage1_dataset.py
 ```
 
-Expect roughly:
-- `success` with `behavior=safe_fast` (cruise [22, 25] m/s)
-- `success` with `behavior=crawl` ([10, 14] m/s — hard negative for Score1)
-- `success` with `behavior=decoy_lag` ([15, 17.5] m/s — soft lag decoy)
-- `collision` / `timeout` (label `timeout` = off-road / non-collision failure;
-  its frames have `off_road=True, timeout=False`)
+All rollouts are genuine (no speed rescaling), 40 s long, and alternate
+between the training and holdout traffic profiles. The default run (~6 min)
+gives about 124 trajectories:
 
-Manifest lists labels and `state_schema_version`; each traj stores
-`metadata.mean_speed` / `mean_progress`.
+| role | source |
+|------|--------|
+| `positive` (~30) | `overtake` successes with ≥ 1 pass, 21–25 m/s |
+| `neutral` (~16) | lane-locked survivors: `follow` (≤ 25 m/s behind leads), `safe_cruise` (20 m/s) |
+| `lag` (~19) | `lag` (16 m/s), `crawl` (12 m/s) successes |
+| `failure` (~59) | collisions of every behaviour (incl. slow ones) + 5 synthesized off-road (label `timeout`, frames `off_road=True, timeout=False`) |
+
+Each trajectory stores `metadata.role`, `traffic`, `goal_speed`,
+`mean_speed`, `mean_progress` and `overtakes`; Score1 reads `role`.
+`state.action` is the meta action index, mapped to the run's action mode
+when Score1 loads the dataset.
 
 Datasets collected before `state_schema_version=2` have a wrong
 `ego.lane_index` and `timeout=True` on off-road frames — recollect them.
