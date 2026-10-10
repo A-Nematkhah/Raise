@@ -2,10 +2,57 @@
 
 from __future__ import annotations
 
+import ast
+import hashlib
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Dict, Mapping, Optional
 
 from raise_core.sandbox.runtime import RewardFunction
+
+# Stage II results that belong to the genome (and its saved policy), so an
+# identical genome can take them over instead of being trained again.
+EVALUATION_KEYS = (
+    "fitness",
+    "selection_scalar",
+    "last_metrics",
+    "proxy_feedback",
+    "checkpoint_path",
+    "eval_generation",
+    "fitness_history",
+    "train_steps",
+    "train_seed",
+    "ppo_n_steps",
+    "training_dynamics",
+    "eval_seed_base",
+    "eval_episodes",
+    "eval_deterministic",
+)
+
+
+def evaluation_fields(metadata: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
+    md = metadata or {}
+    return {k: md[k] for k in EVALUATION_KEYS if md.get(k) is not None}
+
+
+def genome_fingerprint(code: str) -> str:
+    """Hash of the code's AST without docstrings (comments/layout do not count)."""
+    try:
+        tree = ast.parse(str(code or ""))
+    except SyntaxError:
+        canonical = "\n".join(line.rstrip() for line in str(code or "").strip().splitlines())
+    else:
+        for node in ast.walk(tree):
+            body = getattr(node, "body", None)
+            if (
+                isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+                and body
+                and isinstance(body[0], ast.Expr)
+                and isinstance(body[0].value, ast.Constant)
+                and isinstance(body[0].value.value, str)
+            ):
+                node.body = body[1:] or [ast.Pass()]
+        canonical = ast.dump(tree, include_attributes=False)
+    return hashlib.sha1(canonical.encode("utf-8")).hexdigest()
 
 
 @dataclass

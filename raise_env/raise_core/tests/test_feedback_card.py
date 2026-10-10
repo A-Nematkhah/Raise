@@ -579,7 +579,9 @@ def test_every_call_type_gets_the_card_within_budget(tmp_path):
     llm = evo.llm
 
     mut = evo._try_mutate(pop["mut_0009"], "", phase="mutation", attempt=1)
+    evo.llm.reply = _REPLY.replace("-80.0", "-81.0")  # identical children are rejected
     cro = evo._try_crossover(pop["mut_0009"], pop["mut_0010"], "", phase="crossover", attempt=1)
+    evo.llm.reply = _REPLY.replace("-80.0", "-82.0")
     ran = evo._try_random_restart(phase="random", attempt=1)
     evo.llm.reply = _BATCH_REPLY
     batch = evo._fill_random_batch(2)

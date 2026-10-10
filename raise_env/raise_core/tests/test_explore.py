@@ -169,9 +169,9 @@ def _ranked_gen0(evolver: StageIEvolver):
 def test_next_generation_with_elite_uses_top2_and_lower_half():
     batch_body = "\n\n".join(_valid_code(float(i)) for i in range(8, 0, -1))
     completions = [batch_body]
-    completions += [_valid_code(100.0)] * 2  # crossover slots
-    completions += [_valid_code(50.0)] * 4  # mutation slots
-    completions += [_valid_code(10.0)] * 1  # random slot (elite takes one)
+    completions += [_valid_code(100.0 + i) for i in range(2)]  # crossover slots
+    completions += [_valid_code(50.0 + i) for i in range(4)]  # mutation slots
+    completions += [_valid_code(10.0)]  # random slot (elite takes one)
     evolver = _evolver(
         ScriptedLLMClient(completions), population_size=8, keep_runtime_elite=True
     )
@@ -194,8 +194,8 @@ def test_next_generation_with_elite_uses_top2_and_lower_half():
 def test_next_generation_exact_242_without_runtime_elite():
     batch_body = "\n\n".join(_valid_code(float(i)) for i in range(8, 0, -1))
     completions = [batch_body]
-    completions += [_valid_code(100.0)] * 2
-    completions += [_valid_code(50.0)] * 4
+    completions += [_valid_code(100.0 + i) for i in range(2)]
+    completions += [_valid_code(50.0 + i) for i in range(4)]
     completions += ["\n\n".join([_valid_code(10.0), _valid_code(11.0)])]
     evolver = _evolver(
         ScriptedLLMClient(completions), population_size=8, keep_runtime_elite=False

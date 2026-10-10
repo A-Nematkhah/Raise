@@ -29,6 +29,8 @@ def categorize_validation_error(error: Optional[str]) -> str:
     if not error:
         return "unknown"
     text = error.lower()
+    if text.startswith("duplicate genome"):
+        return "duplicate"
     if "syntax error" in text:
         return "syntax"
     if "source code is empty" in text or "no source code" in text:

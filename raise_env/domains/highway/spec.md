@@ -248,8 +248,15 @@ the disabled prompts are byte-identical to the pre-card ones.
    evaluations stay in `fitness_history`; a failed re-evaluation keeps the old
    fitness, sets `fitness_stale` and is listed in `stale_fitness_ids`);
    rank by fitness; the LLM breeds the next generation
-   (crossover of the top 2, mutation of the lower half with its evaluation
-   evidence, random restarts; the best genome is carried over with elitism).
+   (crossover of the top 2 distinct genomes, mutation of the lower half with
+   its evaluation evidence, random restarts; the best genome is carried over
+   with elitism). Genomes are compared by fingerprint (SHA-1 of the AST
+   without docstrings, so layout and comments do not matter): an LLM child
+   identical to an archived genome or to a sibling is rejected as `duplicate`
+   and regenerated; a fallback clone takes over the evaluation of the genome it
+   copies (`duplicate_of`) and is re-evaluated instead of retrained; identical
+   new genomes in one generation are trained once (`duplicate_ids`,
+   `n_unique_genomes` in `epochs.jsonl`).
 3. **Stage III**: every candidate of the final population is trained once for
    K3 env steps and evaluated on E3 episodes; the final candidate is the best
    Stage III fitness. No LLM call.

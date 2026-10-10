@@ -25,7 +25,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from domains.highway import feedback_card as highway_feedback_card
 from domains.highway import prompts as highway_prompts
-from raise_core.candidate import RewardCandidate
+from raise_core.candidate import RewardCandidate, evaluation_fields, genome_fingerprint
 from raise_core.feedback import ArchiveRecord, CandidateArchive, FeedbackCardConfig
 from raise_core.llm import (
     EmptyCompletionError,
@@ -121,6 +121,10 @@ class StageIEvolver:
         self._token_counter = make_token_counter(str(getattr(llm, "provider", "") or ""))
         self._call_log = LLMCallLog(llm_log_dir)
         self._last_call: Dict[str, Any] = {}
+        # Genomes accepted into the population being built (fingerprint -> id);
+        # with the archive this rejects LLM children identical to known genomes.
+        self._generation_genomes: Dict[str, str] = {}
+        self._fingerprints: Dict[str, str] = {}
 
         n = self.config.population_size
         if self.config.n_crossover + self.config.n_mutation + self.config.n_random != n:
@@ -395,6 +399,41 @@ class StageIEvolver:
     def _validate(self, code: str) -> tuple[Optional[SandboxedReward], Optional[str]]:
         return self.validator.try_validate(code)
 
+    # ------------------------------------------------------------------ genomes
+
+    def _fingerprint(self, cid: str, code: str) -> str:
+        fp = self._fingerprints.get(cid)
+        if fp is None:
+            fp = self._fingerprints[cid] = genome_fingerprint(code)
+        return fp
+
+    def _known_genome(self, fp: str) -> Optional[str]:
+        """Id of a genome already in this population or the archive, if any."""
+        if fp in self._generation_genomes:
+            return self._generation_genomes[fp]
+        for rec in self.archive.records():
+            if self._fingerprint(rec.candidate_id, rec.code) == fp:
+                return rec.candidate_id
+        return None
+
+    def _register_genome(self, cand: RewardCandidate) -> None:
+        self._generation_genomes[self._fingerprint(cand.candidate_id, cand.code)] = (
+            cand.candidate_id
+        )
+
+    def _reused_evaluation(
+        self, code: str, source: Optional[RewardCandidate]
+    ) -> Dict[str, Any]:
+        """Stage II results of an evaluated genome identical to ``code``."""
+        fp = genome_fingerprint(code)
+        if source is not None and (source.metadata or {}).get("fitness") is not None:
+            if self._fingerprint(source.candidate_id, source.code) == fp:
+                return {**evaluation_fields(source.metadata), "duplicate_of": source.candidate_id}
+        for rec in self.archive.records():
+            if rec.evaluated and self._fingerprint(rec.candidate_id, rec.code) == fp:
+                return {**evaluation_fields(rec.metadata), "duplicate_of": rec.candidate_id}
+        return {}
+
     def _make_candidate(
         self,
         code: str,
@@ -434,12 +473,26 @@ class StageIEvolver:
             md["llm_diagnosis"] = extract_llm_diagnosis(raw_completion)
         if call_id:
             md["llm_call_id"] = call_id
-        cand = self._make_candidate(
-            code,
-            origin=origin,
-            parent_ids=parent_ids,
-            metadata=md,
-        )
+        duplicate_of = self._known_genome(genome_fingerprint(code))
+        if duplicate_of is not None:
+            # Training it again would only redraw the same genome's noise.
+            cand = RewardCandidate(
+                candidate_id=self._next_id(origin[:3]),
+                code=code,
+                origin=origin,
+                parent_ids=parent_ids,
+                validation_error=f"duplicate genome of {duplicate_of}",
+                metadata=md,
+            )
+        else:
+            cand = self._make_candidate(
+                code,
+                origin=origin,
+                parent_ids=parent_ids,
+                metadata=md,
+            )
+            if cand.valid:
+                self._register_genome(cand)
         if call_id:
             self._call_log.write_validation(
                 call_id=call_id,
@@ -532,14 +585,26 @@ class StageIEvolver:
         origin: str,
         parent_ids: tuple = (),
         metadata: Optional[dict] = None,
+        source: Optional[RewardCandidate] = None,
     ) -> RewardCandidate:
-        """Reuse known-valid source when LLM regeneration exhausts its budget."""
-        return self._make_candidate(
+        """Reuse known-valid source when LLM regeneration exhausts its budget.
+
+        A copy of an evaluated genome takes over its Stage II results (the
+        runner then only re-evaluates the saved policy, no training).
+        """
+        cand = self._make_candidate(
             code,
             origin=origin,
             parent_ids=parent_ids,
-            metadata={**(metadata or {}), "llm_fallback_clone": True},
+            metadata={
+                **(metadata or {}),
+                **self._reused_evaluation(code, source),
+                "llm_fallback_clone": True,
+            },
         )
+        if cand.valid:
+            self._register_genome(cand)
+        return cand
 
     # ------------------------------------------------------------------ Gen0
 
@@ -551,6 +616,7 @@ class StageIEvolver:
         cfg = self.config
         needed = cfg.population_size
         out: List[RewardCandidate] = []
+        self._generation_genomes = {}
         batch_id = f"gen0_batch_{self._counter:04d}"
         console.status(
             f"Gen 0/{cfg.generations} - generating initial population (N={needed})",
@@ -902,7 +968,14 @@ class StageIEvolver:
         if len(ranked) < 2:
             raise ValueError("Need at least 2 ranked candidates to evolve.")
 
-        top_a, top_b = ranked[0], ranked[1]
+        self._generation_genomes = {}
+        top_a = ranked[0]
+        fp_a = self._fingerprint(top_a.candidate_id, top_a.code)
+        # Crossing a genome with its own copy is a mutation without evidence.
+        top_b = next(
+            (c for c in ranked[1:] if self._fingerprint(c.candidate_id, c.code) != fp_a),
+            ranked[1],
+        )
         generated_crossover = cfg.n_crossover
         generated_mutation = cfg.n_mutation
         generated_random = cfg.n_random
@@ -924,6 +997,7 @@ class StageIEvolver:
         next_pop: List[RewardCandidate] = []
         if keep_elite:
             next_pop.append(top_a)
+            self._register_genome(top_a)
 
         # Crossover from top-2.
         for i in range(generated_crossover):
@@ -943,6 +1017,7 @@ class StageIEvolver:
                         top_a.code,
                         origin="crossover_fallback",
                         parent_ids=(top_a.candidate_id, top_b.candidate_id),
+                        source=top_a,
                     ),
                 )
             )
@@ -966,6 +1041,7 @@ class StageIEvolver:
                         _p.code,
                         origin="mutation_fallback",
                         parent_ids=(_p.candidate_id,),
+                        source=_p,
                     ),
                 )
             )

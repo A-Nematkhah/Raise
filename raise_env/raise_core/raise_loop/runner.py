@@ -19,7 +19,7 @@ from raise_core.domains import (
     make_stage2_trainer_for_domain,
     make_validator_for_domain,
 )
-from raise_core.candidate import RewardCandidate
+from raise_core.candidate import RewardCandidate, evaluation_fields, genome_fingerprint
 from raise_core.explore import StageIConfig, StageIEvolver
 from raise_core.feedback import ArchiveRecord, CandidateArchive
 from raise_core.llm import LLMClient, make_llm_client
@@ -170,6 +170,19 @@ def _carried(candidate: RewardCandidate, generation: int) -> bool:
         or bool(md.get("fitness_history"))
         or bool(md.get("fitness_stale"))
     )
+
+
+def _same_genome_copies(candidates: List[RewardCandidate]) -> Dict[str, RewardCandidate]:
+    """Later candidates whose genome equals an earlier one's: ``copy id -> original``."""
+    first: Dict[str, RewardCandidate] = {}
+    copies: Dict[str, RewardCandidate] = {}
+    for cand in candidates:
+        fp = genome_fingerprint(cand.code)
+        if fp in first:
+            copies[str(cand.candidate_id)] = first[fp]
+        else:
+            first[fp] = cand
+    return copies
 
 
 _EVAL_KEYS = ("fitness", "selection_scalar", "last_metrics")
@@ -492,17 +505,25 @@ class ClosedLoopRunner:
                 )
 
             stage2_cfg.highway_eval_seed_base = int(cfg.seed) + int(g) * 1000
-            attach_warm_start_checkpoints(
-                [c for c in to_label if not _needs_reevaluation(c, g)], list(population)
-            )
+            to_train = [c for c in to_label if not _needs_reevaluation(c, g)]
+            copies = _same_genome_copies(to_train)
+            attach_warm_start_checkpoints(to_train, list(population))
             label_candidates_parallel(
                 to_label,
-                already_done=labeled_this_epoch,
+                already_done=labeled_this_epoch | set(copies),
                 workers=max(1, int(cfg.highway_label_workers or 1)),
                 label_one=_label_one,
                 on_done=_on_done,
                 round_index_fn=lambda i: g * 1000 + i,
             )
+            for cand in to_train:
+                original = copies.get(str(cand.candidate_id))
+                if original is not None and (original.metadata or {}).get("fitness") is not None:
+                    cand.metadata = {
+                        **(cand.metadata or {}),
+                        **evaluation_fields(original.metadata),
+                        "duplicate_of": original.candidate_id,
+                    }
 
             evolve_mode = parse_evolve_rank(cfg.evolve_rank)
             ranked_for_evo = rank_population_for_evolution(
@@ -515,13 +536,20 @@ class ClosedLoopRunner:
                 ranked_for_evo, generation=g
             )
 
-            trained = [c for c in to_label if not _carried(c, g)]
+            trained = [
+                c for c in to_label
+                if not _carried(c, g) and str(c.candidate_id) not in copies
+            ]
             carried = [c for c in to_label if _carried(c, g)]
             epoch_rec = {
                 "epoch": g,
                 "n_population": len(ranked),
+                "n_unique_genomes": len({genome_fingerprint(c.code) for c in ranked}),
                 "n_to_label": len(trained),
                 "labeled_ids": [c.candidate_id for c in trained],
+                # Same genome as a candidate trained this generation: took over
+                # its evaluation instead of a second training run.
+                "duplicate_ids": [c.candidate_id for c in to_train if str(c.candidate_id) in copies],
                 # Carried genomes evaluated again on this generation's seeds
                 # (no training); ``stale_fitness_ids`` failed that pass.
                 "reevaluated_ids": [

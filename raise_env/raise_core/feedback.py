@@ -31,6 +31,7 @@ ARCHIVED_METADATA_KEYS = (
     "llm_fallback_clone",
     "eval_generation",
     "fitness_history",
+    "checkpoint_path",
 )
 _POP_EPOCH_RE = re.compile(r"pop_epoch_(\d+)\.json$")
 
