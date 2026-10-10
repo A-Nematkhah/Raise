@@ -131,19 +131,6 @@ def build_parser() -> argparse.ArgumentParser:
             "crossover + mutation + random must equal --population.",
         )
     parser.add_argument(
-        "--evolve-rank",
-        default=_DEFAULTS.evolve_rank,
-        choices=("scalar", "score1", "hybrid"),
-        help="Parent order for the next generation: scalar=fitness (default), "
-        "score1, or hybrid (normalized blend)",
-    )
-    parser.add_argument(
-        "--evolve-rank-score1-weight",
-        type=float,
-        default=_DEFAULTS.evolve_rank_score1_weight,
-        help="Weight on Score1 inside hybrid evolve-rank",
-    )
-    parser.add_argument(
         "--highway-n-envs",
         type=int,
         default=_DEFAULTS.highway_n_envs,
@@ -296,8 +283,6 @@ def main() -> int:
         n_crossover=args.n_crossover,
         n_mutation=args.n_mutation,
         n_random=args.n_random,
-        evolve_rank=args.evolve_rank,
-        evolve_rank_score1_weight=float(args.evolve_rank_score1_weight),
         resume=bool(args.resume),
         highway_n_envs=max(1, int(args.highway_n_envs)),
         highway_label_workers=max(1, int(args.highway_label_workers)),

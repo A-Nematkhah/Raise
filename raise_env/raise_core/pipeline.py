@@ -31,7 +31,6 @@ from raise_core.feedback import FeedbackCardConfig
 from raise_core.llm import LLMClient, make_llm_client
 from raise_core.population_io import candidate_to_dict
 from raise_core.raise_loop import ClosedLoopConfig, ClosedLoopRunner
-from raise_core.raise_loop.evolve_rank import parse_evolve_rank
 from raise_core.raise_loop.logging_io import write_json
 from raise_core.selection import candidate_fitness, pick_best_trained
 from raise_core.validate import STAGE3_STEPS, Stage3Config, Stage3Runner
@@ -69,9 +68,6 @@ class RaiseRunConfig:
     n_crossover: Optional[int] = None
     n_mutation: Optional[int] = None
     n_random: Optional[int] = None
-    # Next-generation parent order: scalar (fitness) | score1 | hybrid.
-    evolve_rank: str = "scalar"
-    evolve_rank_score1_weight: float = 0.4
     # Crash-safe resume of closed loop + Stage III from output_dir.
     resume: bool = True
 
@@ -195,8 +191,6 @@ class RaisePipeline:
             resume=bool(cfg.resume),
             domain=str(self.domain_pack.name),
             eval_episodes=int(cfg.stage2_eval_episodes),
-            evolve_rank=parse_evolve_rank(cfg.evolve_rank),
-            evolve_rank_score1_weight=float(cfg.evolve_rank_score1_weight),
             highway_n_envs=max(1, int(cfg.highway_n_envs or 1)),
             highway_label_workers=max(1, int(cfg.highway_label_workers or 1)),
             highway_warm_start=bool(cfg.highway_warm_start),

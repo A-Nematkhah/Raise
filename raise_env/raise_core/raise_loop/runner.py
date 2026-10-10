@@ -32,10 +32,7 @@ from raise_core.raise_loop.checkpoint import (
     save_checkpoint,
 )
 from raise_core.raise_loop.config import ClosedLoopConfig
-from raise_core.raise_loop.evolve_rank import (
-    parse_evolve_rank,
-    rank_population_for_evolution,
-)
+from raise_core.raise_loop.evolve_rank import rank_population_for_evolution
 from raise_core.raise_loop.logging_io import (
     append_epoch_record,
     closed_loop_dir,
@@ -510,12 +507,7 @@ class ClosedLoopRunner:
                         "duplicate_of": original.candidate_id,
                     }
 
-            evolve_mode = parse_evolve_rank(cfg.evolve_rank)
-            ranked_for_evo = rank_population_for_evolution(
-                ranked,
-                mode=evolve_mode,
-                hybrid_score1_weight=float(cfg.evolve_rank_score1_weight),
-            )
+            ranked_for_evo = rank_population_for_evolution(ranked)
             evolver.archive.add_population(ranked_for_evo, generation=g)
             evolver.reflection = evolver._build_reflection(
                 ranked_for_evo, generation=g
@@ -555,7 +547,6 @@ class ClosedLoopRunner:
                 },
                 "ranking": [c.candidate_id for c in ranked],
                 "best_score1": ranked[0].score if ranked else None,
-                "evolve_rank": evolve_mode,
                 "evolve_ranking": [c.candidate_id for c in ranked_for_evo],
                 "evolve_best_id": (
                     ranked_for_evo[0].candidate_id if ranked_for_evo else None
@@ -578,7 +569,6 @@ class ClosedLoopRunner:
             write_json(
                 os.path.join(closed_loop_dir(cfg.output_dir), f"pop_epoch_{g:03d}.json"),
                 {
-                    "evolve_rank": evolve_mode,
                     "to_label": [c.candidate_id for c in to_label],
                     # Archive fields (generation, lineage, code, Stage II
                     # metadata) let a resumed run rebuild the feedback archive.

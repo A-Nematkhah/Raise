@@ -55,10 +55,9 @@ def test_closed_loop_fast_two_epochs(tmp_path):
     assert len(trainer.trained) == len(set(trainer.trained)) == 7
     assert result.n_labeled_total == 7
 
-    # Evolution order is by fitness (scalar mode); Gen0 trained everyone.
+    # Evolution order is by fitness; Gen0 trained everyone.
     gen0 = epochs[0]
     fits = {cid: gen0["label_metrics"][cid]["fitness"] for cid in gen0["labeled_ids"]}
-    assert gen0["evolve_rank"] == "scalar"
     assert gen0["evolve_ranking"] == sorted(fits, key=fits.get, reverse=True)
     assert gen0["evolve_best_fitness"] == max(fits.values())
 
@@ -164,12 +163,9 @@ def test_format_epoch_summary():
             "evolve_best_id": "mut_0006",
             "evolve_best_fitness": 0.5,
             "evolve_best_score1": 0.606,
-            "evolve_rank": "scalar",
             "labeled_ids": ["mut_0006", "cro_0004"],
             "n_label_ok": 2,
             "n_label_failed": 0,
         }
     )
-    assert line.startswith("epoch 1: best=mut_0006 fitness=0.500 Score1=0.6060")
-    assert "[rank=scalar]" in line
-    assert "trained 2/4 ok=2 fail=0" in line
+    assert line == "epoch 1: best=mut_0006 fitness=0.500 Score1=0.6060 | trained 2/4 ok=2 fail=0"

@@ -1,12 +1,9 @@
-"""Tests for closed-loop evolve_rank (Score1 vs nav scalar vs hybrid)."""
+"""Tests for closed-loop parent order (fitness first, Score1 for the rest)."""
 
 from __future__ import annotations
 
-from raise_core.explore import RewardCandidate
-from raise_core.raise_loop.evolve_rank import (
-    parse_evolve_rank,
-    rank_population_for_evolution,
-)
+from raise_core.candidate import RewardCandidate
+from raise_core.raise_loop.evolve_rank import rank_population_for_evolution
 
 
 def _c(
@@ -37,41 +34,21 @@ def _c(
     )
 
 
-def test_parse_defaults():
-    assert parse_evolve_rank("") == "scalar"
-    assert parse_evolve_rank(None) == "scalar"
-    assert parse_evolve_rank("hybrid") == "hybrid"
-    assert parse_evolve_rank("Score1") == "score1"
-    assert parse_evolve_rank("pareto") == "scalar"
-
-
-def test_scalar_prefers_cruise_fitness_over_crash():
+def test_prefers_cruise_fitness_over_crash():
     """Bimodal run fingerprint: cruise@20 soft=1 must beat crash@25 for parents."""
     cruise = _c("cruise", score1=0.3, nav=1.039)
     crash = _c("crash", score1=0.92, nav=-0.632)
-    ranked = rank_population_for_evolution([crash, cruise], mode="scalar")
+    ranked = rank_population_for_evolution([crash, cruise])
     assert [c.candidate_id for c in ranked] == ["cruise", "crash"]
 
 
-def test_score1_mode_ignores_nav():
-    pop = [
-        _c("low_s1_high_nav", score1=0.3, nav=2.0),
-        _c("high_s1_low_nav", score1=0.9, nav=0.1),
-    ]
-    ranked = rank_population_for_evolution(pop, mode="score1")
-    assert [c.candidate_id for c in ranked] == [
-        "high_s1_low_nav",
-        "low_s1_high_nav",
-    ]
-
-
-def test_scalar_mode_prefers_nav_and_puts_unlabeled_last():
+def test_fitness_first_and_unlabeled_last():
     pop = [
         _c("unlab_high_s1", score1=0.99, nav=None),
         _c("lab_mid", score1=0.5, nav=1.0),
         _c("lab_best", score1=0.4, nav=1.5),
     ]
-    ranked = rank_population_for_evolution(pop, mode="scalar")
+    ranked = rank_population_for_evolution(pop)
     assert [c.candidate_id for c in ranked] == [
         "lab_best",
         "lab_mid",
@@ -79,26 +56,19 @@ def test_scalar_mode_prefers_nav_and_puts_unlabeled_last():
     ]
 
 
-def test_hybrid_weights_nav_more_than_score1():
-    # Same Score1; higher nav wins. With w=0.4, nav dominates ties on Score1.
+def test_score1_breaks_fitness_ties_and_orders_unlabeled():
     pop = [
-        _c("a", score1=0.8, nav=0.2),
-        _c("b", score1=0.8, nav=1.8),
+        _c("tie_low_s1", score1=0.2, nav=1.0),
+        _c("unlab_low", score1=0.1),
+        _c("tie_high_s1", score1=0.8, nav=1.0),
+        _c("unlab_high", score1=0.9),
+        _c("unlab_rejected", score1=None),
     ]
-    ranked = rank_population_for_evolution(
-        pop, mode="hybrid", hybrid_score1_weight=0.4
-    )
-    assert ranked[0].candidate_id == "b"
-
-
-def test_hybrid_can_prefer_strong_score1_when_nav_close():
-    pop = [
-        _c("score_champ", score1=0.95, nav=1.0),
-        _c("nav_slight", score1=0.50, nav=1.05),
+    ranked = rank_population_for_evolution(pop)
+    assert [c.candidate_id for c in ranked] == [
+        "tie_high_s1",
+        "tie_low_s1",
+        "unlab_high",
+        "unlab_low",
+        "unlab_rejected",
     ]
-    ranked = rank_population_for_evolution(
-        pop, mode="hybrid", hybrid_score1_weight=0.4
-    )
-    # Normalized: score_champ s1=1, nav~0; nav_slight s1=0, nav=1
-    # hybrid: 0.4*1+0.6*0=0.4 vs 0.4*0+0.6*1=0.6 → nav_slight wins
-    assert ranked[0].candidate_id == "nav_slight"

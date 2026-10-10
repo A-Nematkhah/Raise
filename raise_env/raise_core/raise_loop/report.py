@@ -26,8 +26,7 @@ def format_epoch_summary(rec: Dict[str, Any]) -> str:
     return (
         f"epoch {g}: best={rec.get('evolve_best_id') or '?'} "
         f"fitness={_fmt(rec.get('evolve_best_fitness'), '.3f')} "
-        f"Score1={_fmt(rec.get('evolve_best_score1'), '.4f')} "
-        f"[rank={rec.get('evolve_rank') or 'scalar'}] | "
+        f"Score1={_fmt(rec.get('evolve_best_score1'), '.4f')} | "
         f"trained {len(labeled)}/{rec.get('n_population', '?')} "
         f"ok={rec.get('n_label_ok', 0)} fail={rec.get('n_label_failed', 0)}"
     )

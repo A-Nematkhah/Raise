@@ -33,10 +33,6 @@ class ClosedLoopConfig:
     domain: str = "highway"
     # Stage II eval episodes (None → 20; 8 with stub trainers).
     eval_episodes: Optional[int] = None
-    # Order genomes for next-generation parents: scalar (fitness) | score1 | hybrid.
-    evolve_rank: str = "scalar"
-    # Weight on Score1 inside hybrid mode (remainder on fitness).
-    evolve_rank_score1_weight: float = 0.4
     # Highway speed knobs (same budget; higher wall throughput).
     highway_n_envs: int = 1
     highway_label_workers: int = 1
