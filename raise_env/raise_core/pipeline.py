@@ -68,6 +68,8 @@ class RaiseRunConfig:
     n_crossover: Optional[int] = None
     n_mutation: Optional[int] = None
     n_random: Optional[int] = None
+    # Mutation parents: lower (bottom half) | rank_weighted | tournament.
+    mutation_parents: str = "lower"
     # Crash-safe resume of closed loop + Stage III from output_dir.
     resume: bool = True
 
@@ -188,6 +190,7 @@ class RaisePipeline:
             n_crossover=cfg.n_crossover,
             n_mutation=cfg.n_mutation,
             n_random=cfg.n_random,
+            mutation_parents=str(cfg.mutation_parents),
             resume=bool(cfg.resume),
             domain=str(self.domain_pack.name),
             eval_episodes=int(cfg.stage2_eval_episodes),

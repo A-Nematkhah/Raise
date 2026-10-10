@@ -247,6 +247,8 @@ class ClosedLoopRunner:
             n_mutation=cfg.n_mutation,
             n_random=cfg.n_random,
             keep_runtime_elite=bool(cfg.keep_runtime_elite),
+            mutation_parents=str(cfg.mutation_parents),
+            seed=int(cfg.seed),
         )
         evolver = StageIEvolver(
             self.llm,

@@ -45,6 +45,9 @@ class FeedbackCardConfig:
     target_input_tokens: int = 5500
     history_entries: int = 3
     max_trajectories: int = 3
+    # Random restarts get a "reference" card of the best evaluated genome;
+    # off keeps them free of it (exploration not pulled towards the best).
+    random_calls: bool = True
     # Stage II instrumentation feeding the card (no reward / PPO change).
     training_dynamics: bool = True
     component_instrumentation: bool = True

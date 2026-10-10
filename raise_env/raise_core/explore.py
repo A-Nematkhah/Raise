@@ -19,6 +19,7 @@ import json
 import logging
 import math
 import os
+import random
 import re
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
@@ -127,6 +128,32 @@ def operator_counts(
     return resolved
 
 
+MUTATION_PARENTS = ("lower", "rank_weighted", "tournament")
+
+
+def select_mutation_parents(
+    ranked: Sequence[RewardCandidate], n: int, *, mode: str, rng: random.Random
+) -> List[RewardCandidate]:
+    """Parents for ``n`` mutation slots from a best-first ranking.
+
+    ``lower``: the bottom half in order, cycled (mutate the weak with their
+    evidence); ``rank_weighted``: drawn with probability proportional to
+    linear rank (best = N); ``tournament``: better of two drawn at random.
+    """
+    pool = list(ranked)
+    if mode == "lower":
+        lower = pool[len(pool) // 2 :] or pool[-1:]
+        return [lower[i % len(lower)] for i in range(n)]
+    if mode == "rank_weighted":
+        weights = [len(pool) - i for i in range(len(pool))]
+        return rng.choices(pool, weights=weights, k=n)
+    if mode == "tournament":
+        if len(pool) < 2:
+            return [pool[0]] * n
+        return [pool[min(rng.sample(range(len(pool)), 2))] for _ in range(n)]
+    raise ValueError(f"mutation_parents must be one of {MUTATION_PARENTS}, got {mode!r}")
+
+
 @dataclass
 class RetryBudget:
     """LLM regenerations left for invalid replies, shared across fill calls."""
@@ -149,6 +176,10 @@ class StageIConfig:
     include_external_knowledge: bool = True
     # Carry the best genome into the next generation (one of the N slots).
     keep_runtime_elite: bool = True
+    # How mutation parents are picked (``MUTATION_PARENTS``); draws are seeded
+    # by ``seed`` and the ranked ids, so a resumed run picks the same parents.
+    mutation_parents: str = "lower"
+    seed: int = 0
 
 
 class StageIEvolver:
@@ -203,6 +234,11 @@ class StageIEvolver:
             n_mutation=self.config.n_mutation,
             n_random=self.config.n_random,
         )
+        if self.config.mutation_parents not in MUTATION_PARENTS:
+            raise ValueError(
+                f"mutation_parents must be one of {MUTATION_PARENTS}, "
+                f"got {self.config.mutation_parents!r}"
+            )
 
     def _format_d1_initial(self, **kwargs: Any) -> str:
         return self._prompts.format_d1_initial(**kwargs)
@@ -336,6 +372,8 @@ class StageIEvolver:
         if subjects:
             records = [self._subject_record(c) for c in subjects]
         else:
+            if not self.feedback.random_calls:
+                return None
             evaluated = [
                 r for r in self.archive.records()
                 if r.evaluated and r.metadata["fitness"] == r.metadata["fitness"]
@@ -1063,10 +1101,12 @@ class StageIEvolver:
         generated_mutation = ops.mutation
         generated_random = ops.random
         keep_elite = ops.elite > 0
-        # Lower performers: bottom half (paper: mutate using their weakness).
-        lower = list(ranked[len(ranked) // 2 :])
-        if not lower:
-            lower = list(ranked[-1:])
+        rng = random.Random(
+            f"{cfg.seed}:" + ",".join(str(c.candidate_id) for c in ranked)
+        )
+        mutation_parents = select_mutation_parents(
+            ranked, generated_mutation, mode=cfg.mutation_parents, rng=rng
+        )
 
         retries = RetryBudget(cfg.max_invalid_replacements)
         next_pop: List[RewardCandidate] = []
@@ -1095,12 +1135,11 @@ class StageIEvolver:
                         parent_ids=(top_a.candidate_id, top_b.candidate_id),
                         source=top_a,
                     ),
-                )
             )
+        )
 
-        # Mutation on lower performers (cycle if fewer parents than slots).
-        for i in range(generated_mutation):
-            parent = lower[i % len(lower)]
+        # Mutation (parents per ``mutation_parents``; default the lower half).
+        for parent in mutation_parents:
 
             def _mut(attempt_no: int, _p=parent) -> RewardCandidate:
                 return self._try_mutate(

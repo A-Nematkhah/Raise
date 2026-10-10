@@ -28,6 +28,8 @@ class ClosedLoopConfig:
     n_crossover: Optional[int] = None
     n_mutation: Optional[int] = None
     n_random: Optional[int] = None
+    # Mutation parents: lower (bottom half) | rank_weighted | tournament.
+    mutation_parents: str = "lower"
     # Crash-safe resume from ``checkpoint.json`` written under the run dir.
     resume: bool = True
     domain: str = "highway"

@@ -35,6 +35,7 @@ from datetime import datetime  # noqa: E402
 
 from raise_core import console  # noqa: E402
 from raise_core.console import ensure_utf8_stdio  # noqa: E402
+from raise_core.explore import MUTATION_PARENTS  # noqa: E402
 from raise_core.feedback import FeedbackCardConfig  # noqa: E402
 from raise_core.pipeline import RaisePipeline, RaiseRunConfig  # noqa: E402
 
@@ -131,6 +132,13 @@ def build_parser() -> argparse.ArgumentParser:
             "crossover + mutation + random must equal --population.",
         )
     parser.add_argument(
+        "--mutation-parents",
+        choices=MUTATION_PARENTS,
+        default=_DEFAULTS.mutation_parents,
+        help="Mutation parents: lower = bottom half (default), rank_weighted = "
+        "drawn by linear rank, tournament = better of two random genomes",
+    )
+    parser.add_argument(
         "--highway-n-envs",
         type=int,
         default=_DEFAULTS.highway_n_envs,
@@ -204,6 +212,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--feedback-trajectories", type=int, default=_FEEDBACK.max_trajectories,
         help="Representative holdout episodes in the card",
+    )
+    parser.add_argument(
+        "--feedback-random-calls",
+        action=argparse.BooleanOptionalAction,
+        default=_FEEDBACK.random_calls,
+        help="Show random restarts a reference card of the best evaluated genome",
     )
     parser.add_argument(
         "--feedback-training-dynamics",
@@ -283,6 +297,7 @@ def main() -> int:
         n_crossover=args.n_crossover,
         n_mutation=args.n_mutation,
         n_random=args.n_random,
+        mutation_parents=args.mutation_parents,
         resume=bool(args.resume),
         highway_n_envs=max(1, int(args.highway_n_envs)),
         highway_label_workers=max(1, int(args.highway_label_workers)),
@@ -297,6 +312,7 @@ def main() -> int:
             target_input_tokens=int(args.target_input_tokens),
             history_entries=int(args.feedback_history),
             max_trajectories=int(args.feedback_trajectories),
+            random_calls=bool(args.feedback_random_calls),
             training_dynamics=bool(args.feedback_training_dynamics),
             component_instrumentation=bool(args.feedback_components),
         ),
