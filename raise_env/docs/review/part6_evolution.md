@@ -390,3 +390,35 @@ without the rejected candidate: ['good', 'mid', 'bad']
 **ترتیب پیشنهادی اصلاح:** L5 (تا تست‌ها مستقل از ترتیب import شوند) ← H1 ← M1 ← H2 ← M2 ← L1 تا L4، L7 و L8. M3 و L6 فقط به‌صورت گزینه و با پیش‌فرض فعلی.
 
 </div>
+
+---
+
+<div dir="rtl">
+
+## ۶. وضعیت اصلاحات
+
+همه‌ی یافته‌ها به ترتیب پیشنهادی اصلاح شدند، روی شاخه‌ی `simplify/highway-core`. برای H2 گزینه‌ی «قابل تنظیم» و برای M2 گزینه‌ی «حذف» انتخاب شد. M3 و L6 فقط به‌صورت گزینه اضافه شدند و پیش‌فرض‌ها همان رفتار قبلی است.
+
+| شناسه | وضعیت | commit | چه تغییر کرد |
+|---|---|---|---|
+| L5 | اصلاح شد | `dc808cd` | `RewardCandidate` به `raise_core/candidate.py` منتقل شد و `explore` آن را دوباره export می‌کند. `domains/highway/__init__` حالا خالی است و registry مستقیم به `domains.highway.pack` اشاره می‌کند. تست جدید `test_import_order.py` هر ماژول را در یک subprocess تازه به‌عنوان اولین import بار می‌کند. |
+| H1 | اصلاح شد | `1f21ab1` | ژنومی که با elitism منتقل می‌شود دوباره آموزش نمی‌بیند. policy ذخیره‌شده‌اش روی seedهای holdout همان نسل دوباره ارزیابی می‌شود (`trainer.reevaluate`، بدون آموزش). ارزیابی‌های قبلی در `fitness_history` می‌مانند. اگر ارزیابی دوباره شکست بخورد، fitness قبلی با `fitness_stale` حفظ می‌شود و در `stale_fitness_ids` می‌آید. `epochs.jsonl` فیلد `reevaluated_ids` را هم دارد. |
+| M1 | اصلاح شد | `b8076d9` | اثر انگشت ژنوم: SHA-1 درخت AST بدون docstring، پس فاصله‌گذاری و کامنت اثری ندارند. فرزند LLM که با ژنوم آرشیو یا هم‌نسل خودش یکی باشد، با دسته‌ی `duplicate` رد و دوباره تولید می‌شود. کپی fallback ارزیابی ژنوم مبدأ را به ارث می‌برد (`duplicate_of`) و فقط دوباره ارزیابی می‌شود، نه آموزش. ژنوم‌های تازه‌ی یکسان در یک نسل فقط یک بار آموزش می‌بینند. والد دوم crossover اولین ژنوم متفاوت با بهترین است. فیلدهای جدید: `n_unique_genomes` و `duplicate_ids`. |
+| H2 | اصلاح شد (قابل تنظیم) | `921382c` | `operator_counts()` تنها منبع سهم عملگرهاست و شرط elite + crossover + mutation + random = N را نگه می‌دارد. پیش‌فرض: یک random (وقتی دست‌کم ۳ فرزند باشد) و بقیه نصف بین mutation (نیمه‌ی بزرگ‌تر) و crossover. پس در N=۶: ۱ elite، ۲ crossover، ۲ mutation و ۱ random. گزینه‌های `--n-crossover`، `--n-mutation` و `--n-random` اضافه شدند و اولین سهم تعیین‌نشده باقی‌مانده را می‌گیرد. جمع ناسازگار حالا خطا می‌دهد (CLI با کد ۲ خارج می‌شود). manifest فیلد `operators` را دارد و هر نسل `origin_counts` (شامل fallbackها) و `n_carried` را. |
+| M2 | اصلاح شد (حذف) | `36d848f` | حالت‌های `score1` و `hybrid` و گزینه‌های `--evolve-rank` و `--evolve-rank-score1-weight` حذف شدند. ترتیب والدها فقط بر اساس fitness است. Score1 فقط tie-break و ترتیب کاندیدهای بدون شواهد Stage II است. |
+| L1 | اصلاح شد | `741f452` | یک بودجه‌ی تلاش برای هر نسل که بین همه‌ی اسلات‌ها مشترک است (`RetryBudget`). بدترین حالت حالا «تعداد فرزندان + ۱۶» فراخوانی است، نه ۱۷ فراخوانی برای هر اسلات. |
+| L2 | اصلاح شد | `741f452` | `global_best` از evolver، runner و checkpoint حذف شد. |
+| L3 | اصلاح شد | `741f452` | روند بهترین fitness در reflection حالا از `evolve_best_fitness` همان `history` ساخته می‌شود. پس بعد از ادامه‌ی اجرا هم با متن reflection سازگار می‌ماند. |
+| L4 | اصلاح شد | `921382c`، `741f452` | runner دیگر سهم‌ها را بی‌صدا جایگزین نمی‌کند (H2). پیش‌فرض `keep_runtime_elite` در `StageIConfig` هم مثل configهای اجرا `True` شد. |
+| L6 | گزینه اضافه شد | `44f8034` | `FeedbackCardConfig.random_calls` و `--no-feedback-random-calls`. پیش‌فرض روشن است، یعنی همان رفتار قبلی. |
+| L7 | اصلاح شد | `b8076d9`، `741f452` | `epochs.jsonl` حالا `n_unique_genomes` و `component_diversity` را دارد. دومی میانگین فاصله‌ی Jaccard مجموعه‌ی مؤلفه‌های پاداش بین جفت‌هاست (۰ یعنی همه یکسان). |
+| L8 | اصلاح شد | `741f452` | در `selection.py` فقط `candidate_fitness` و `metrics_fitness` ماندند. `navigation_scalar*`، `candidate_nav_scalar` و `is_same_genome` حذف شدند. کلید داده‌ی `selection_scalar` عمداً ماند، چون نویسنده‌های متریک و فایل‌های نتایج قبلی از آن استفاده می‌کنند. |
+| M3 | گزینه اضافه شد | `44f8034` | `--mutation-parents lower|rank_weighted|tournament` با پیش‌فرض `lower` (همان نیمه‌ی پایین). انتخاب تصادفی با seed اجرا و شناسه‌های رتبه‌بندی seed می‌شود، پس اجرای ادامه‌یافته همان والدها را انتخاب می‌کند. |
+
+**اثر روی اجرای واقعی:** با پیش‌فرض‌ها (N=۶، G=۴) هر نسل حالا یک random restart دارد و رتبه‌ی ۳ هم والد mutation است. elite هر نسل یک ارزیابی holdout اضافه (بدون آموزش) دارد، که با ۳۰ اپیزود حدود ۹۰ ثانیه است. اعداد Monte Carlo بخش H1 نشان می‌دهند که «بهبود» کاذب ‎+۰٫۱۲ تا ‎+۰٫۱۶ در منحنی همگرایی باید با این تغییر به حدود صفر برسد. این با یک اجرای واقعی هنوز سنجیده نشده است.
+
+**هنوز اندازه‌گیری نشده:** فراوانی واقعی تکرار ژنوم و fallback در اجرای Groq، و اثر M3 و L6. فیلدهای جدید `epochs.jsonl` (`duplicate_ids`، `origin_counts`، `component_diversity`) همین داده را در اجرای بعدی ثبت می‌کنند.
+
+**تست‌ها:** کل مجموعه (۳۲۷ تست سریع و تست کند `test_wrapper_step`) پاس شد. فایل‌های تست جدید: `test_import_order.py`، `test_genome_dedup.py`، `test_operator_counts.py`، `test_evolution_bookkeeping.py` و `test_evolution_options.py`. تست‌های جدید در `test_raise_loop.py` (ارزیابی دوباره‌ی elite) و `test_speed_knobs.py` (`reevaluate` با PPO واقعی ۶۴ قدمی) هم اضافه شدند.
+
+</div>
