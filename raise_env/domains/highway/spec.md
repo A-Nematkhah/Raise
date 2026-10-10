@@ -143,7 +143,96 @@ seeded bootstrap resamples of the evaluated episodes; differences smaller than
 about twice that are within evaluation noise.
 
 The trainer stamps `fitness` on the candidate; the LLM sees the raw holdout
-metrics plus this fitness (`raise_loop/proxy_feedback.py`).
+metrics plus this fitness, through the feedback card below (or, with
+`--no-feedback-card`, the plain evidence block of `raise_loop/proxy_feedback.py`).
+
+## LLM feedback card and input budget
+
+Mutation, crossover and random-restart prompts (single and batched) carry a
+**diagnostic feedback card** (`feedback_card.py`) in place of the plain
+reflection text. Gen0 has no evidence yet and gets the plain D.1 prompt. Every
+number comes from data the loop already stores; the card computes deltas and
+summaries but never re-evaluates. When data is missing, the section prints
+`unavailable (<reason>)`.
+
+| Section | Content | Source |
+|---------|---------|--------|
+| A | SR, CR, TR, mean/p10 speed, progress, lane changes, overtakes, fitness ± SE, speed gate, behaviour label, eval context | holdout `last_metrics`, `eval_context` |
+| B | SR/CR/TR, return, speed per quarter of the PPO budget | `training_dynamics`: outcomes of stochastic **training rollouts**, not separate checkpoint evaluations (none are run) |
+| C | mean per-episode sum of each reward component: all / successful / failed episodes, plus coverage of the total return | holdout `holdout_episodes[*].components` |
+| D | child vs parent (crossover: parent A vs B): per-metric delta, better/worse by direction (lower CR/TR, higher SR/speed/progress/fitness; lane changes and overtakes have no direction), `within noise` when \|Δ\| ≤ 2 SE (binomial SE for rates, `fitness_se` for fitness), behaviour change, structural code diff | archive |
+| E | up to 3 relatives: ancestors beyond the parent, earlier children of the subject, siblings, interleaved; recent high-fitness non-relatives only fill empty slots | archive lineage |
+| F | ≤ 3 representative holdout episodes (typical success, typical collision, off-road or slowest survivor) | `holdout_episodes` |
+| G | flags (crawling, speed with collisions, insufficient progress, unstable training, possible reward hacking, insufficient evidence) with `Observation:` lines (measured) and `Hypothesis:` lines (unverified) | A–C, F, H |
+| H | Mann-Whitney AUC: P(discounted return of a successful holdout episode > a failed one); outcome-ordering AUC on the fixed Stage I dataset | `holdout_episodes`, `score1_scenario_scores["safety"]` |
+| P | latest population table (the reflection note) | `_build_reflection` |
+
+The card closes with guidance: base each edit on a cited observation, treat
+hypotheses as unverified, and make one or two targeted, explainable edits.
+
+**Archive.** `raise_core/feedback.py::CandidateArchive` holds every evaluated
+candidate (code, lineage, Stage II metadata). It is persisted inside
+`closed_loop/pop_epoch_XXX.json` and rebuilt from those files on resume.
+
+**Instrumentation** (Stage II only; reward values and PPO settings unchanged).
+`_eval_metrics` keeps one compact record per holdout episode: outcome, steps,
+speed, progress, lane changes, overtakes, return, and the γ-discounted return
+with γ = `PPO_GAMMA`. `feedback.component_instrumentation` adds the per-episode
+sums of `info["raise_reward_components"]`. `feedback.training_dynamics` reads
+the `info` dicts SB3 already collects during PPO training. Neither adds an
+environment step.
+
+**Token budget** (`raise_core/token_budget.py`). Every request is measured on
+its complete input before it is sent: the client system message, the RAISE
+system prompt and the user prompt (code, card, instructions), plus 8 template
+tokens per message and 64 per request. Token counting:
+
+- gpt-oss providers (Groq, vLLM): exact `tiktoken` o200k count.
+- Other providers: that count × 1.15 as a proxy tokenizer.
+- Without `tiktoken`, or offline before its vocabulary is cached: a
+  word/punctuation estimate × 1.1, never below chars/3. Unscaled, this
+  estimate already reads 1.38–1.61× the real count on the RAISE prompts.
+
+If the request exceeds `target_input_tokens` (default 5500), the card is
+re-rendered at smaller levels, cumulatively:
+
+1. Trajectories 3 → 0.
+2. History code summaries (metrics and diffs stay).
+3. Population context, then history entries 3 → 0.
+4. Compact instructions: D.1 drops the external-knowledge block, D.2 uses a
+   short diagnosis instruction.
+5. B/C condensed to one line.
+6. B, C, E, F, H dropped.
+7. G dropped.
+
+The current code, the action-space and sandbox rules, sections A and D, and
+the output schema are never cut. A request over `max_input_tokens` (default
+6000) is **never sent**: it raises `PromptBudgetError`, and that slot uses its
+fallback (a parent clone, or the seed reward) without retrying.
+
+**Call log.** `closed_loop/llm_calls.jsonl` has one `request` record per call:
+
+- call type, phase, subject ids, provider and model;
+- card sections, history ids and unavailable sections;
+- input tokens, counting method, limits and truncation steps;
+- status: `sent` or `refused_over_budget`.
+
+It also has one `validation` record per resulting candidate (validator
+pass/fail), linked by `call_id`, which is also stored as the candidate's
+`llm_call_id`. The full rendered prompt is saved to
+`closed_loop/llm_prompts/<call_id>.txt`. API keys never enter prompts.
+
+CLI options:
+
+- `--feedback-card/--no-feedback-card`
+- `--max-input-tokens`, `--target-input-tokens`
+- `--feedback-history`, `--feedback-trajectories`
+- `--feedback-training-dynamics/--no-...`
+- `--feedback-components/--no-...`
+
+They map to `FeedbackCardConfig` (`RaiseRunConfig.feedback` →
+`ClosedLoopConfig.feedback`). The budget applies even with the card disabled;
+the disabled prompts are byte-identical to the pre-card ones.
 
 ## Run flow
 
@@ -181,6 +270,8 @@ Defaults: N=6, G=4, K2=12k, E2=30, K3=70k, E3=30 (`raise_core/pipeline.py`).
 | `env_wrapper.py` | Obs → state + reward injection |
 | `action_config.py` | Action-space modes |
 | `adapter.py` | Stage II/III SB3 PPO trainers |
+| `training_dynamics.py` | Training-rollout outcome windows (card section B) |
+| `feedback_card.py` | Diagnostic feedback card + truncation ladder |
 | `metrics.py` | Eval metrics + `highway_fitness` |
 | `watchdog.py` | PPO stall watchdog |
 | `post_run.py` / `viz.py` | Plots + rollout GIF after a non-fast run |

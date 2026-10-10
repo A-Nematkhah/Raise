@@ -8,6 +8,9 @@ raise_env/
 │   ├── llm.py                  # LLM clients (groq / ollama / vllm / seed / scripted)
 │   ├── sandbox/                # AST policy, spawned smoke test, compile
 │   ├── explore.py              # Gen0 proposal, Score1 scoring, crossover / mutation
+│   ├── feedback.py             # feedback-card config, candidate archive, lineage, code diff
+│   ├── token_budget.py         # LLM input-token counting + budget fitting
+│   ├── llm_call_log.py         # llm_calls.jsonl + rendered prompt snapshots
 │   ├── raise_loop/             # closed-loop runner, checkpoints, epoch logs, report
 │   ├── refine.py               # Stage II config / metrics / stub trainer
 │   ├── validate.py             # Stage III runner (long PPO, best by fitness)
@@ -15,7 +18,7 @@ raise_env/
 │   └── domains/                # DomainPack + registry / factories
 ├── domains/
 │   └── highway/                # HighwayEnv pack (see domains/highway/spec.md)
-│       ├── pack, prompts, adapter, env_wrapper, stage1, state, metrics
+│       ├── pack, prompts, adapter, env_wrapper, stage1, state, metrics, feedback_card
 │       ├── tests/
 │       └── data/               # highway Stage I dataset
 ├── scripts/                    # CLI entry points
@@ -39,7 +42,8 @@ scripts/run_raise.py
   → load_domain("highway") → DomainPack (prompts, Score1, trainers, smoke states)
   → ClosedLoopRunner: Gen0 → for each generation:
         Score1 → PPO train + eval new candidates → rank by fitness
-        → LLM crossover / mutation / random (+ elite) → checkpoint
+        → archive → LLM crossover / mutation / random (+ elite), each prompt
+          with a feedback card fitted to the input-token budget → checkpoint
   → Stage3Runner: long PPO per final candidate → best by fitness
   → JSON artifacts + plots
 ```
