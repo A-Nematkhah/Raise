@@ -207,7 +207,7 @@ def _evolver(tmp_path, *, reply=_REPLY, archive=None, **cfg) -> StageIEvolver:
         _RecordingLLM(reply),
         score_fn=lambda *_a, **_k: 0.0,
         validator=make_highway_validator(),
-        config=StageIConfig(population_size=4, n_crossover=1, n_mutation=2, n_random=1),
+        config=StageIConfig(population_size=4),
         prompts=hwy_prompts,
         feedback=FeedbackCardConfig(**cfg),
         llm_log_dir=str(tmp_path / "closed_loop"),

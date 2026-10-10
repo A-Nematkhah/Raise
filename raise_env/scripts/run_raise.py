@@ -117,6 +117,19 @@ def build_parser() -> argparse.ArgumentParser:
         default=_DEFAULTS.elitism,
         help="Carry each generation's best genome into the next generation",
     )
+    for op, what in (
+        ("crossover", "crossover children of the top two genomes"),
+        ("mutation", "mutation children of the lower half"),
+        ("random", "random restarts"),
+    ):
+        parser.add_argument(
+            f"--n-{op}",
+            type=int,
+            default=getattr(_DEFAULTS, f"n_{op}"),
+            help=f"Next-generation {what} (default: split of N; N=6 with elitism "
+            "is 1 elite + 2 crossover + 2 mutation + 1 random). Elite + "
+            "crossover + mutation + random must equal --population.",
+        )
     parser.add_argument(
         "--evolve-rank",
         default=_DEFAULTS.evolve_rank,
@@ -280,6 +293,9 @@ def main() -> int:
         stage3_eval_episodes=args.stage3_eval_episodes,
         use_stub=bool(args.fast),
         elitism=bool(args.elitism),
+        n_crossover=args.n_crossover,
+        n_mutation=args.n_mutation,
+        n_random=args.n_random,
         evolve_rank=args.evolve_rank,
         evolve_rank_score1_weight=float(args.evolve_rank_score1_weight),
         resume=bool(args.resume),
@@ -303,15 +319,21 @@ def main() -> int:
     )
     if args.fast:
         cfg.apply_fast_profile()
+    try:
+        operators = cfg.operators()
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
 
     logging.info(
-        "RAISE -> %s (fast=%s, N=%d, G=%d, K2=%d, K3=%d)",
+        "RAISE -> %s (fast=%s, N=%d, G=%d, K2=%d, K3=%d, operators=%s)",
         cfg.output_dir,
         cfg.fast,
         cfg.population,
         cfg.generations,
         cfg.stage2_train_steps,
         cfg.stage3_train_steps,
+        operators.to_dict(),
     )
     artifacts = RaisePipeline(cfg).run()
     logging.info("Done. Final candidate: %s", artifacts.best_stage3.candidate_id)

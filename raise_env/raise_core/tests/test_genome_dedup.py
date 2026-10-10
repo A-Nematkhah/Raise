@@ -40,8 +40,7 @@ def test_fingerprint_ignores_layout_comments_and_docstrings():
 
 
 def _evolver(completions, *, archive=None, log_path=None, **cfg) -> StageIEvolver:
-    base = dict(population_size=4, n_crossover=1, n_mutation=2, n_random=1,
-                max_invalid_replacements=3)
+    base = dict(population_size=4, max_invalid_replacements=3)
     base.update(cfg)
     evo = StageIEvolver(
         ScriptedLLMClient(completions),
@@ -100,12 +99,10 @@ def test_fallback_clone_takes_over_the_source_evaluation():
     # Every LLM reply repeats the elite, so every slot ends in its fallback.
     evo = _evolver([_fenced(_code(1.0))] * 40, keep_runtime_elite=True)
     gen1 = evo._next_generation([top, second, *lower])
-    clones = [c for c in gen1 if c.metadata.get("llm_fallback_clone")]
-    assert clones
+    clones = [c for c in gen1 if c.origin in ("crossover_fallback", "mutation_fallback")]
+    assert {c.origin for c in clones} == {"crossover_fallback", "mutation_fallback"}
     for clone in clones:
-        source = top if clone.origin == "crossover_fallback" else None
-        if source is None:
-            source = next(c for c in [top, second, *lower] if c.candidate_id == clone.parent_ids[0])
+        source = next(c for c in [top, second, *lower] if c.candidate_id == clone.parent_ids[0])
         assert clone.metadata["duplicate_of"] == source.candidate_id
         assert clone.metadata["fitness"] == source.metadata["fitness"]
         assert clone.metadata["checkpoint_path"] == source.metadata["checkpoint_path"]

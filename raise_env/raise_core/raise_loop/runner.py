@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from collections import Counter
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -246,28 +247,12 @@ class ClosedLoopRunner:
                 base_code=getattr(pack, "seed_reward_source", None),
             )
 
-        n = int(cfg.population_size)
-        n_crossover = int(cfg.n_crossover)
-        n_mutation = int(cfg.n_mutation)
-        n_random = int(cfg.n_random)
-        configured_buckets = [n_crossover, n_mutation, n_random]
-        if n_crossover + n_mutation + n_random != n:
-            n_crossover = min(2, n)
-            n_mutation = min(4, max(0, n - n_crossover))
-            n_random = n - n_crossover - n_mutation
-            console.warn(
-                f"closed-loop buckets {configured_buckets} do not sum to population "
-                f"{n}; using crossover={n_crossover} mutation={n_mutation} "
-                f"random={n_random}",
-                stage="closed-loop",
-            )
-
         s1_cfg = StageIConfig(
-            population_size=n,
+            population_size=int(cfg.population_size),
             generations=int(cfg.generations),
-            n_crossover=n_crossover,
-            n_mutation=n_mutation,
-            n_random=n_random,
+            n_crossover=cfg.n_crossover,
+            n_mutation=cfg.n_mutation,
+            n_random=cfg.n_random,
             keep_runtime_elite=bool(cfg.keep_runtime_elite),
         )
         evolver = StageIEvolver(
@@ -541,10 +526,17 @@ class ClosedLoopRunner:
                 if not _carried(c, g) and str(c.candidate_id) not in copies
             ]
             carried = [c for c in to_label if _carried(c, g)]
+            previous_ids = set(history[-1].get("ranking") or []) if history else set()
             epoch_rec = {
                 "epoch": g,
                 "n_population": len(ranked),
                 "n_unique_genomes": len({genome_fingerprint(c.code) for c in ranked}),
+                # How this generation was actually built (fallback clones show
+                # up as ``*_fallback``); ``n_carried`` came from the last one.
+                "origin_counts": dict(
+                    Counter(c.origin for c in ranked if c.candidate_id not in previous_ids)
+                ),
+                "n_carried": sum(1 for c in ranked if c.candidate_id in previous_ids),
                 "n_to_label": len(trained),
                 "labeled_ids": [c.candidate_id for c in trained],
                 # Same genome as a candidate trained this generation: took over
@@ -627,6 +619,7 @@ class ClosedLoopRunner:
             "n_labeled_total": n_labeled,
             "resumed": bool(resumed),
             "config": cfg_dict,
+            "operators": evolver.operators.to_dict(),
             "history": history,
         }
         write_json(

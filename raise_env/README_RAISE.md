@@ -62,7 +62,10 @@ candidate) and `stage3/checkpoint.json` (per Stage III candidate).
 2. Each of G generations: Score1 on the Stage I dataset, PPO train + holdout
    eval of every new candidate, rank by `highway_fitness`, LLM crossover /
    mutation (with the evaluation metrics in the prompt) / random restarts,
-   elitism.
+   elitism. Default next generation at N=6: 1 elite + 2 crossover + 2
+   mutation + 1 random; `--n-crossover`, `--n-mutation`, `--n-random` and
+   `--no-elitism` change the split (elite + children must equal
+   `--population`; an unset count absorbs the remainder).
 3. Stage III: long PPO on the final population; the final candidate is the
    best Stage III fitness.
 

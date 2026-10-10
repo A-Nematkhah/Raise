@@ -173,7 +173,8 @@ def test_next_generation_with_elite_uses_top2_and_lower_half():
     completions += [_valid_code(50.0 + i) for i in range(4)]  # mutation slots
     completions += [_valid_code(10.0)]  # random slot (elite takes one)
     evolver = _evolver(
-        ScriptedLLMClient(completions), population_size=8, keep_runtime_elite=True
+        ScriptedLLMClient(completions), population_size=8, keep_runtime_elite=True,
+        n_crossover=2, n_mutation=4,
     )
     ranked = _ranked_gen0(evolver)
     gen1 = evolver._next_generation(ranked)
@@ -198,7 +199,8 @@ def test_next_generation_exact_242_without_runtime_elite():
     completions += [_valid_code(50.0 + i) for i in range(4)]
     completions += ["\n\n".join([_valid_code(10.0), _valid_code(11.0)])]
     evolver = _evolver(
-        ScriptedLLMClient(completions), population_size=8, keep_runtime_elite=False
+        ScriptedLLMClient(completions), population_size=8, keep_runtime_elite=False,
+        n_crossover=2, n_mutation=4,
     )
     gen1 = evolver._next_generation(_ranked_gen0(evolver))
     assert sum(1 for c in gen1 if c.origin == "crossover") == 2

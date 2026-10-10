@@ -23,9 +23,11 @@ class ClosedLoopConfig:
     llm_provider: str = "seed"
     output_dir: str = "results/closed_loop"
     keep_runtime_elite: bool = True
-    n_crossover: int = 2
-    n_mutation: int = 4
-    n_random: int = 2
+    # Next-generation children per operator; None -> ``operator_counts`` default
+    # (N=6 with elitism: 1 elite + 2 crossover + 2 mutation + 1 random).
+    n_crossover: Optional[int] = None
+    n_mutation: Optional[int] = None
+    n_random: Optional[int] = None
     # Crash-safe resume from ``checkpoint.json`` written under the run dir.
     resume: bool = True
     domain: str = "highway"
@@ -57,8 +59,4 @@ class ClosedLoopConfig:
         self.device = "cpu"
         self.highway_n_envs = 1
         self.highway_label_workers = 1
-        # Keep 2/4/2 ratios scaled down for N=4: 1/2/1
-        n = int(self.population_size)
-        self.n_crossover = min(1, n)
-        self.n_mutation = min(2, max(0, n - self.n_crossover))
-        self.n_random = max(0, n - self.n_crossover - self.n_mutation)
+        self.n_crossover = self.n_mutation = self.n_random = None

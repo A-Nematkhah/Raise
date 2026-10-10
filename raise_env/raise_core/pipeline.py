@@ -26,6 +26,7 @@ from raise_core.domains import (
     make_validator_for_domain,
 )
 from raise_core.candidate import RewardCandidate
+from raise_core.explore import OperatorCounts, operator_counts
 from raise_core.feedback import FeedbackCardConfig
 from raise_core.llm import LLMClient, make_llm_client
 from raise_core.population_io import candidate_to_dict
@@ -63,6 +64,11 @@ class RaiseRunConfig:
     use_stub: bool = False
     # Carry the generation's best genome into the next generation.
     elitism: bool = True
+    # Next-generation children per operator; None -> default split
+    # (N=6 with elitism: 1 elite + 2 crossover + 2 mutation + 1 random).
+    n_crossover: Optional[int] = None
+    n_mutation: Optional[int] = None
+    n_random: Optional[int] = None
     # Next-generation parent order: scalar (fitness) | score1 | hybrid.
     evolve_rank: str = "scalar"
     evolve_rank_score1_weight: float = 0.4
@@ -99,6 +105,17 @@ class RaiseRunConfig:
         self.stage3_eval_episodes = 2
         self.use_stub = True
         self.llm_provider = "seed"
+        self.n_crossover = self.n_mutation = self.n_random = None
+
+    def operators(self) -> OperatorCounts:
+        """Next-generation operator counts; ``ValueError`` if they do not add up."""
+        return operator_counts(
+            int(self.population),
+            elitism=bool(self.elitism),
+            n_crossover=self.n_crossover,
+            n_mutation=self.n_mutation,
+            n_random=self.n_random,
+        )
 
 
 @dataclass
@@ -161,11 +178,8 @@ class RaisePipeline:
 
     def _closed_loop_config(self) -> ClosedLoopConfig:
         cfg = self.config
-        n = int(cfg.population)
-        n_crossover = min(2, n)
-        n_mutation = min(4, max(0, n - n_crossover))
         return ClosedLoopConfig(
-            population_size=n,
+            population_size=int(cfg.population),
             generations=int(cfg.generations),
             stage2_train_steps=int(cfg.stage2_train_steps),
             stage1_dataset_path=str(cfg.stage1_dataset_path),
@@ -175,9 +189,9 @@ class RaisePipeline:
             llm_provider=str(cfg.llm_provider),
             output_dir=str(cfg.output_dir),
             keep_runtime_elite=bool(cfg.elitism),
-            n_crossover=n_crossover,
-            n_mutation=n_mutation,
-            n_random=n - n_crossover - n_mutation,
+            n_crossover=cfg.n_crossover,
+            n_mutation=cfg.n_mutation,
+            n_random=cfg.n_random,
             resume=bool(cfg.resume),
             domain=str(self.domain_pack.name),
             eval_episodes=int(cfg.stage2_eval_episodes),

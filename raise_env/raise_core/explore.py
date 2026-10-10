@@ -62,19 +62,83 @@ def extract_llm_diagnosis(raw: str, *, max_chars: int = 500) -> Optional[str]:
     return preamble[: int(max_chars)]
 
 
+@dataclass(frozen=True)
+class OperatorCounts:
+    """How the next generation of size N is built (elite + children == N)."""
+
+    elite: int
+    crossover: int
+    mutation: int
+    random: int
+
+    @property
+    def total(self) -> int:
+        return self.elite + self.crossover + self.mutation + self.random
+
+    def to_dict(self) -> Dict[str, int]:
+        return {
+            "elite": self.elite,
+            "crossover": self.crossover,
+            "mutation": self.mutation,
+            "random": self.random,
+        }
+
+
+def operator_counts(
+    population_size: int,
+    *,
+    elitism: bool,
+    n_crossover: Optional[int] = None,
+    n_mutation: Optional[int] = None,
+    n_random: Optional[int] = None,
+) -> OperatorCounts:
+    """Resolve the next-generation operator counts for ``population_size``.
+
+    Default split of the N - elite children: one random restart (when at least
+    3 children), the rest halved between mutation (the larger half) and
+    crossover, so N=6 with elitism is 1 elite + 2 crossover + 2 mutation + 1
+    random. Unset counts take the default, except that the first unset one of
+    random, mutation, crossover absorbs the remainder; a split that still does
+    not add up to N raises ``ValueError``.
+    """
+    n = int(population_size)
+    elite = 1 if elitism else 0
+    children = n - elite
+    if children < 1:
+        raise ValueError(f"population_size={n} leaves no slot for a new child")
+    n_rand_default = 1 if children >= 3 else 0
+    n_mut_default = -(-(children - n_rand_default) // 2)
+    given = {"crossover": n_crossover, "mutation": n_mutation, "random": n_random}
+    counts = {
+        "crossover": children - n_rand_default - n_mut_default,
+        "mutation": n_mut_default,
+        "random": n_rand_default,
+    }
+    counts.update({k: int(v) for k, v in given.items() if v is not None})
+    free = next((k for k in ("random", "mutation", "crossover") if given[k] is None), None)
+    if free is not None:
+        counts[free] = children - sum(v for k, v in counts.items() if k != free)
+    resolved = OperatorCounts(elite=elite, **counts)
+    if min(counts.values()) < 0 or resolved.total != n:
+        raise ValueError(
+            f"operator counts {resolved.to_dict()} do not add up to population_size={n}"
+        )
+    return resolved
+
+
 @dataclass
 class StageIConfig:
     population_size: int = 8
     generations: int = 10
-    n_crossover: int = 2
-    n_mutation: int = 4
-    n_random: int = 2
+    # Next-generation children per operator; None -> ``operator_counts`` default.
+    n_crossover: Optional[int] = None
+    n_mutation: Optional[int] = None
+    n_random: Optional[int] = None
     # Extra LLM draws allowed when replacing invalids (Gen0 + each gen).
     max_invalid_replacements: int = 16
     func_name: str = "compute_reward"
     include_external_knowledge: bool = True
-    # When True: carry top-1 into next gen and steal one slot from random/mut/xover
-    # (engineering elitism). Paper-faithful default is False → exact 2/4/2.
+    # Carry the best genome into the next generation (one of the N slots).
     keep_runtime_elite: bool = False
 
 
@@ -126,13 +190,13 @@ class StageIEvolver:
         self._generation_genomes: Dict[str, str] = {}
         self._fingerprints: Dict[str, str] = {}
 
-        n = self.config.population_size
-        if self.config.n_crossover + self.config.n_mutation + self.config.n_random != n:
-            raise ValueError(
-                "n_crossover + n_mutation + n_random must equal population_size "
-                f"({self.config.n_crossover}+{self.config.n_mutation}+"
-                f"{self.config.n_random} != {n})"
-            )
+        self.operators = operator_counts(
+            self.config.population_size,
+            elitism=bool(self.config.keep_runtime_elite),
+            n_crossover=self.config.n_crossover,
+            n_mutation=self.config.n_mutation,
+            n_random=self.config.n_random,
+        )
 
     def _format_d1_initial(self, **kwargs: Any) -> str:
         return self._prompts.format_d1_initial(**kwargs)
@@ -976,19 +1040,11 @@ class StageIEvolver:
             (c for c in ranked[1:] if self._fingerprint(c.candidate_id, c.code) != fp_a),
             ranked[1],
         )
-        generated_crossover = cfg.n_crossover
-        generated_mutation = cfg.n_mutation
-        generated_random = cfg.n_random
-        keep_elite = bool(getattr(cfg, "keep_runtime_elite", False))
-        if keep_elite:
-            if generated_random > 0:
-                generated_random -= 1
-            elif generated_mutation > 0:
-                generated_mutation -= 1
-            elif generated_crossover > 0:
-                generated_crossover -= 1
-            else:
-                raise ValueError("At least one next-generation bucket must be positive.")
+        ops = self.operators
+        generated_crossover = ops.crossover
+        generated_mutation = ops.mutation
+        generated_random = ops.random
+        keep_elite = ops.elite > 0
         # Lower performers: bottom half (paper: mutate using their weakness).
         lower = list(ranked[len(ranked) // 2 :])
         if not lower:

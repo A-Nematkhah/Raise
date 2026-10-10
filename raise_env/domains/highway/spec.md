@@ -250,7 +250,12 @@ the disabled prompts are byte-identical to the pre-card ones.
    rank by fitness; the LLM breeds the next generation
    (crossover of the top 2 distinct genomes, mutation of the lower half with
    its evaluation evidence, random restarts; the best genome is carried over
-   with elitism). Genomes are compared by fingerprint (SHA-1 of the AST
+   with elitism). The split is `operator_counts`: by default N - elite
+   children get one random restart (when at least 3), the rest halved between
+   mutation (larger half) and crossover, so N=6 is 1 elite + 2 crossover + 2
+   mutation + 1 random; explicit counts that do not add up to N are an error.
+   The manifest records the split (`operators`), each epoch what was actually
+   built (`origin_counts`, fallback clones included, and `n_carried`). Genomes are compared by fingerprint (SHA-1 of the AST
    without docstrings, so layout and comments do not matter): an LLM child
    identical to an archived genome or to a sibling is rejected as `duplicate`
    and regenerated; a fallback clone takes over the evaluation of the genome it
