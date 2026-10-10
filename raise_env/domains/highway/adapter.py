@@ -23,9 +23,11 @@ from domains.highway.metrics import (
 )
 from domains.highway.objective_constants import PPO_GAMMA, SOFT_PROGRESS_M, V_TARGET
 from domains.highway.overtake import OvertakeTracker
+from domains.highway.training_dynamics import TrainingDynamicsRecorder
 from domains.highway.watchdog import StallWatchdog, stall_seconds_from_config
 from raise_core import console
 from raise_core.refine import ProxyMetrics, StubPolicyTrainer
+from raise_core.sandbox.runtime import MAX_REWARD_COMPONENT_KEYS
 from raise_core.validate import StubPolicyTrainer as Stage3StubTrainer
 from raise_core.validate import TrainEvalBundle
 
@@ -137,9 +139,15 @@ def _eval_metrics(
     soft_speed_mps: float | None = None,
     soft_progress_m: float = SOFT_PROGRESS_M,
     deterministic: bool = True,
+    record_components: bool = False,
 ) -> ProxyMetrics:
     """
     Evaluate a highway policy.
+
+    Also keeps one compact record per episode on ``metrics._highway_episodes``
+    (outcome, steps, speed, progress, lane changes, overtakes, undiscounted and
+    PPO-discounted return under the candidate reward; with
+    ``record_components`` also per-episode sums of the reward components).
 
     Survival metrics (SR/CR/TR) are episode-level rates.
     Continuous driving quality is packed into NT/PL/ITR/SD plus extra keys on
@@ -163,6 +171,7 @@ def _eval_metrics(
     ep_step_counts: list[int] = []
     outcomes: list[str] = []
     ep_overtakes: list[int] = []
+    episode_records: list[Dict[str, Any]] = []
 
     # Soft-success: survive AND mean_speed ≥ V_TARGET AND progress ≥ threshold.
     #
@@ -190,11 +199,23 @@ def _eval_metrics(
         ep_gap_sum = 0.0
         crashed = False
         off = False
+        ep_return = 0.0
+        ep_disc_return = 0.0
+        discount = 1.0
+        ep_components: Dict[str, float] = {}
         overtake_tracker = OvertakeTracker()
         overtake_tracker.observe(env)
         while not done:
             action, _ = model.predict(obs, deterministic=deterministic)
             obs, reward, terminated, truncated, info = env.step(action)
+            ep_return += float(reward)
+            ep_disc_return += discount * float(reward)
+            discount *= PPO_GAMMA
+            if record_components:
+                for key, value in (info.get("raise_reward_components") or {}).items():
+                    if key not in ep_components and len(ep_components) >= MAX_REWARD_COMPONENT_KEYS:
+                        key = "_other"
+                    ep_components[key] = ep_components.get(key, 0.0) + float(value)
             # Lane-change from lane index Δ (works for Discrete + Continuous).
             # Continuous lateral=False never changes lane → rate stays 0.
             cur_lane = info.get("raise_lane_index")
@@ -248,6 +269,19 @@ def _eval_metrics(
         gaps.append(ep_gap_sum / float(max(1, ep_steps)))
         ep_lane_changes.append(ep_lane_chg)
         ep_step_counts.append(ep_steps)
+        record: Dict[str, Any] = {
+            "outcome": outcomes[-1],
+            "steps": int(ep_steps),
+            "mean_speed": round(mean_spd, 3),
+            "progress": round(ep_dist, 3),
+            "lane_changes": int(ep_lane_chg),
+            "overtakes": int(overtake_tracker.passes),
+            "return": round(ep_return, 4),
+            "disc_return": round(ep_disc_return, 4),
+        }
+        if record_components:
+            record["components"] = {k: round(v, 4) for k, v in ep_components.items()}
+        episode_records.append(record)
 
     n = float(n_eps)
     total_km = float(sum(dists)) / 1000.0
@@ -282,6 +316,7 @@ def _eval_metrics(
         "outcome_unique": int(fields["outcome_unique"]),
         "fitness_se": bootstrap_fitness_se(*episodes, seed=base + offset),
     }
+    metrics._highway_episodes = episode_records  # type: ignore[attr-defined]
     return metrics
 
 
@@ -381,8 +416,12 @@ def _resolve_warm_start_path(candidate: Any) -> Optional[str]:
     return None
 
 
-def _ppo_progress_callback(total_timesteps: int, desc: str):
-    """SB3 callback that drives ``raise_core.console.progress``."""
+def _ppo_progress_callback(
+    total_timesteps: int,
+    desc: str,
+    dynamics: Optional[TrainingDynamicsRecorder] = None,
+):
+    """SB3 callback that drives ``raise_core.console.progress`` (and ``dynamics``)."""
     from stable_baselines3.common.callbacks import BaseCallback
 
     bar = console.progress(
@@ -404,6 +443,8 @@ def _ppo_progress_callback(total_timesteps: int, desc: str):
             if delta > 0:
                 bar.update(delta)
                 self._last = n
+            if dynamics is not None:
+                dynamics.observe(self.locals.get("infos") or (), self.locals.get("dones"), n)
             return True
 
         def _on_training_end(self) -> None:
@@ -554,7 +595,14 @@ class HighwayPPOTrainer:
                 warm_path = None
 
         t0 = time.perf_counter()
-        cb = _ppo_progress_callback(train_steps, desc=f"PPO {cid} ({stage_tag})")
+        dynamics = (
+            TrainingDynamicsRecorder(train_steps)
+            if bool(getattr(config, "highway_training_dynamics", False))
+            else None
+        )
+        cb = _ppo_progress_callback(
+            train_steps, desc=f"PPO {cid} ({stage_tag})", dynamics=dynamics
+        )
         model.learn(
             total_timesteps=max(1, train_steps),
             progress_bar=False,
@@ -611,10 +659,11 @@ class HighwayPPOTrainer:
             finally:
                 eval_env.close()
 
+        holdout_cfg = holdout_env_config()
         holdout_env = RewardInjectedHighwayEnv(
             candidate.reward_fn,
             seed=eval_seed + 7,
-            config=holdout_env_config(),
+            config=holdout_cfg,
         )
         if not eval_deterministic:
             # Action sampling must not depend on RNG consumed during training.
@@ -627,6 +676,7 @@ class HighwayPPOTrainer:
                 seed=eval_seed,
                 seed_offset=HOLDOUT_SEED_OFFSET,
                 deterministic=eval_deterministic,
+                record_components=bool(getattr(config, "highway_reward_components", False)),
             )
         finally:
             holdout_env.close()
@@ -646,6 +696,15 @@ class HighwayPPOTrainer:
         }
         metrics_dict["n_envs"] = float(n_envs)
         metrics_dict["warm_start"] = 1.0 if warm_path else 0.0
+        metrics_dict["holdout_episodes"] = list(getattr(holdout_metrics, "_highway_episodes", []))
+        metrics_dict["eval_context"] = {
+            "traffic": "holdout",
+            "vehicles_count": holdout_cfg.get("vehicles_count"),
+            "vehicles_density": holdout_cfg.get("vehicles_density", 1.0),
+            "duration_s": holdout_cfg.get("duration"),
+            "policy_frequency": holdout_cfg.get("policy_frequency"),
+            "deterministic": bool(eval_deterministic),
+        }
         metrics_dict = attach_fitness(metrics_dict)
 
         console.status(
@@ -668,6 +727,8 @@ class HighwayPPOTrainer:
         md["eval_deterministic"] = bool(eval_deterministic)
         md["train_wall_seconds"] = float(train_wall)
         md["eval_wall_seconds"] = float(eval_wall)
+        if dynamics is not None:
+            md["training_dynamics"] = dynamics.summary()
         candidate.metadata = md
 
         if self.stage in ("stage3", "3", "iii"):

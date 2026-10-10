@@ -45,6 +45,10 @@ class Stage2Config:
     # Eval scenario seed shared by every candidate trained in one generation
     # (None → per-candidate ``seed + round_index``).
     highway_eval_seed_base: Optional[int] = None
+    # Feedback-card instrumentation: training-rollout outcome windows and
+    # per-episode reward-component sums on holdout (no reward / PPO change).
+    highway_training_dynamics: bool = False
+    highway_reward_components: bool = False
 
 
 @dataclass
