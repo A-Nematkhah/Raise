@@ -18,6 +18,15 @@ import time
 from abc import ABC, abstractmethod
 from typing import List, Optional, Sequence
 
+from raise_core.key_manager import (
+    GroqKeyManager,
+    get_key_manager,
+    groq_key_pool_available,
+    resolve_single_groq_api_key,
+)
+from raise_core.llm_errors import CompletionTruncatedError, EmptyCompletionError
+
+
 class LLMClient(ABC):
     """Minimal text-completion interface (sister-project compatible)."""
 
@@ -33,14 +42,6 @@ class LLMClient(ABC):
         if n <= 0:
             raise ValueError("n must be positive")
         return [self.complete(prompt, max_tokens=max_tokens) for _ in range(n)]
-
-
-class CompletionTruncatedError(RuntimeError):
-    """Raised when a fenced completion strongly appears truncated."""
-
-
-class EmptyCompletionError(RuntimeError):
-    """Provider returned HTTP success with empty/missing message content."""
 
 
 def is_recoverable_llm_error(exc: BaseException) -> bool:
@@ -86,15 +87,16 @@ class ScriptedLLMClient(LLMClient):
 
 class GroqLLMClient(LLMClient):
     """
-    Live Groq chat completion (same design as mobile_robot_env GroqLLMClient).
+    Live Groq chat completion.
 
     Auth (first match wins):
       1. ``api_key=`` constructor argument (single key)
-      2. ``GROQ_API_KEY`` environment variable (single key)
-      3. ``raise_env/groq_keys.json`` key pool via :mod:`key_manager`
+      2. ``raise_env/groq_keys.json`` key pool via :mod:`key_manager`
          (rate-limit rotation; copy from ``groq_keys.json.example``)
+      3. ``GROQ_API_KEY`` environment variable (single key)
 
-    Requires optional dependency: ``pip install groq``.
+    A single key runs through the same :class:`GroqKeyManager` retry/wait logic
+    as a one-key pool. Requires optional dependency: ``pip install groq``.
     """
 
     provider = "groq"
@@ -108,8 +110,6 @@ class GroqLLMClient(LLMClient):
         max_tokens: int = 1500,
         api_key: Optional[str] = None,
         system_prompt: Optional[str] = None,
-        max_attempts: int = 3,
-        retry_delay_seconds: float = 3.0,
         use_key_pool: bool = True,
     ) -> None:
         self.model = model
@@ -118,140 +118,38 @@ class GroqLLMClient(LLMClient):
         self.system_prompt = system_prompt or (
             "You are a reward-function designer. Reply with one Python code block only."
         )
-        if int(max_attempts) < 1:
-            raise ValueError("max_attempts must be >= 1")
-        if float(retry_delay_seconds) < 0.0:
-            raise ValueError("retry_delay_seconds must be >= 0")
-        self.max_attempts = int(max_attempts)
-        self.retry_delay_seconds = float(retry_delay_seconds)
-
-        self._key_manager = None
         explicit = (api_key or "").strip() or None
-        if explicit:
-            self.api_key = explicit
-        else:
-            from raise_core.key_manager import (
-                groq_key_pool_available,
-                resolve_single_groq_api_key,
-            )
-
-            # Prefer multi-key pool (rotation + pacing) when groq_keys.json exists.
-            if use_key_pool and groq_key_pool_available():
-                from raise_core.key_manager import get_key_manager
-
-                self._key_manager = get_key_manager()
-                self.api_key = None
-            else:
-                env_key = resolve_single_groq_api_key()
-                self.api_key = env_key
-                if not self.api_key:
-                    raise RuntimeError(
-                        "GroqLLMClient requires GROQ_API_KEY, api_key=..., or "
-                        "raise_env/groq_keys.json (see groq_keys.json.example)"
-                    )
-
-    @staticmethod
-    def _is_non_retryable(exc: Exception) -> bool:
-        status = getattr(exc, "status_code", None)
-        text = str(exc).lower()
-        if status == 404 or "model_not_found" in text or "does not exist" in text:
-            return True
-        if status == 400 and "model" in text:
-            return True
-        return False
-
-    def complete(self, prompt: str, *, max_tokens: Optional[int] = None) -> str:
-        if not self.api_key and self._key_manager is None:
+        if explicit is None and use_key_pool and groq_key_pool_available():
+            self._key_manager = get_key_manager()
+            return
+        key = explicit or resolve_single_groq_api_key()
+        if not key:
             raise RuntimeError(
                 "GroqLLMClient requires GROQ_API_KEY, api_key=..., or "
                 "raise_env/groq_keys.json (see groq_keys.json.example)"
             )
-        messages = [
-            {"role": "system", "content": self.system_prompt},
-            {"role": "user", "content": prompt},
-        ]
+        self._key_manager = GroqKeyManager(keys=[key])
+
+    def complete(self, prompt: str, *, max_tokens: Optional[int] = None) -> str:
         create_kwargs = {
             "model": self.model,
-            "messages": messages,
+            "messages": [
+                {"role": "system", "content": self.system_prompt},
+                {"role": "user", "content": prompt},
+            ],
             "temperature": self.temperature,
             "max_tokens": int(max_tokens) if max_tokens is not None else self.max_tokens,
         }
-
-        if self._key_manager is not None:
-            # Key pool owns 429 rotation + transient network retries.
-            # Empty content is also retried inside chat_completion.
-            try:
-                response = self._key_manager.chat_completion(**create_kwargs)
-            except ImportError as exc:
-                raise RuntimeError(
-                    "GroqLLMClient requires the 'groq' package. "
-                    "Install with: pip install groq"
-                ) from exc
-            content = response.choices[0].message.content
-            if not content or not str(content).strip():
-                raise EmptyCompletionError("Groq returned an empty completion.")
-            return str(content)
-
         try:
-            from groq import Groq
+            response = self._key_manager.chat_completion(**create_kwargs)
         except ImportError as exc:
             raise RuntimeError(
-                "GroqLLMClient requires the 'groq' package. "
-                "Install with: pip install groq"
+                "GroqLLMClient requires the 'groq' package. Install with: pip install groq"
             ) from exc
-
-        from raise_core.key_manager import (
-            DEFAULT_REQUEST_TIMEOUT,
-            _is_rate_limit_error,
-            _is_transient_error,
-            get_groq_pacer,
-        )
-
-        pacer = get_groq_pacer()
-        # Disable SDK auto-retry; we pace explicitly to avoid 429 storms.
-        client = Groq(
-            api_key=self.api_key,
-            max_retries=0,
-            timeout=DEFAULT_REQUEST_TIMEOUT,
-        )
-        last_error: Optional[Exception] = None
-        for attempt in range(1, self.max_attempts + 1):
-            pacer.wait_turn()
-            try:
-                response = client.chat.completions.create(**create_kwargs)
-                pacer.observe_response(response)
-                content = response.choices[0].message.content
-                if not content or not str(content).strip():
-                    raise EmptyCompletionError("Groq returned an empty completion.")
-                return str(content)
-            except Exception as exc:  # noqa: BLE001 — retry transient errors
-                last_error = exc
-                if _is_rate_limit_error(exc):
-                    retry_after = getattr(exc, "retry_after", None)
-                    if retry_after is not None:
-                        try:
-                            pacer._hold_until = max(
-                                pacer._hold_until, time.time() + float(retry_after)
-                            )
-                        except (TypeError, ValueError):
-                            pass
-                if self._is_non_retryable(exc):
-                    raise RuntimeError(
-                        f"Groq LLM non-retryable error for model={self.model!r}: {exc}"
-                    ) from exc
-                recoverable = (
-                    isinstance(exc, EmptyCompletionError)
-                    or _is_transient_error(exc)
-                    or _is_rate_limit_error(exc)
-                )
-                if not recoverable:
-                    raise
-                if attempt >= self.max_attempts:
-                    break
-                time.sleep(self.retry_delay_seconds)
-        raise RuntimeError(
-            f"Groq LLM failed after {self.max_attempts} attempts. Last error: {last_error}"
-        ) from last_error
+        content = response.choices[0].message.content
+        if not content or not str(content).strip():
+            raise EmptyCompletionError("Groq returned an empty completion.")
+        return str(content)
 
 
 class VLLMLLMClient(LLMClient):
