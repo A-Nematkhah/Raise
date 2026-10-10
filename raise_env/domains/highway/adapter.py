@@ -87,6 +87,12 @@ class HighwayAdapter:
             )
         raise ValueError(f"Unknown stage for HighwayAdapter: {stage!r}")
 
+    def reevaluate(self, candidate: Any, *, round_index: int, config: Any) -> Any:
+        """Stage II eval-only pass of an already trained candidate."""
+        return self._stage2_trainer().reevaluate(
+            candidate, round_index=round_index, config=config
+        )
+
 
 class HighwayStage2Trainer:
     def __init__(self, adapter: HighwayAdapter) -> None:
@@ -96,6 +102,9 @@ class HighwayStage2Trainer:
         return self.adapter.train_and_eval(
             candidate, round_index=round_index, config=config, stage="stage2"
         )
+
+    def reevaluate(self, candidate: Any, *, round_index: int, config: Any) -> Any:
+        return self.adapter.reevaluate(candidate, round_index=round_index, config=config)
 
 
 class HighwayStage3Trainer:
@@ -127,6 +136,32 @@ def _log_cuda_fallback_once(requested: str) -> None:
         "there); set RAISE_HIGHWAY_FORCE_CUDA=1 to use the GPU",
         requested,
     )
+
+
+def _resolve_device(config: Any) -> str:
+    """CPU unless CUDA is requested and ``RAISE_HIGHWAY_FORCE_CUDA`` is set."""
+    device_raw = str(getattr(config, "device", "cpu"))
+    # MLP policies train better on CPU by default (SB3 guidance).
+    prefer_cpu = os.environ.get("RAISE_HIGHWAY_FORCE_CUDA", "").strip() not in (
+        "1",
+        "true",
+        "yes",
+    )
+    if prefer_cpu and device_raw.startswith("cuda"):
+        _log_cuda_fallback_once(device_raw)
+        return "cpu"
+    return device_raw if device_raw.startswith("cuda") else "cpu"
+
+
+def _ppo_class() -> Any:
+    try:
+        from stable_baselines3 import PPO
+    except ImportError as exc:  # pragma: no cover
+        raise ImportError(
+            "Highway PPO trainer needs stable-baselines3. "
+            "Install: pip install -r requirements.txt"
+        ) from exc
+    return PPO
 
 
 def _eval_metrics(
@@ -490,15 +525,7 @@ class HighwayPPOTrainer:
         config: Any,
         **kwargs: Any,
     ) -> Any:
-        try:
-            from stable_baselines3 import PPO
-        except ImportError as exc:  # pragma: no cover
-            raise ImportError(
-                "Highway PPO trainer needs stable-baselines3. "
-                "Install: pip install -r requirements.txt"
-            ) from exc
-
-        from domains.highway.env_wrapper import RewardInjectedHighwayEnv
+        PPO = _ppo_class()
 
         if candidate.reward_fn is None:
             raise ValueError(f"Candidate {candidate.candidate_id} has no reward_fn")
@@ -508,18 +535,7 @@ class HighwayPPOTrainer:
         seed = int(getattr(config, "seed", 425)) + int(round_index)
         n_envs = _highway_n_envs(config)
         eval_mode = _highway_eval_mode(config)
-        device_raw = str(getattr(config, "device", "cpu"))
-        # MLP policies train better on CPU by default (SB3 guidance).
-        prefer_cpu = os.environ.get("RAISE_HIGHWAY_FORCE_CUDA", "").strip() not in (
-            "1",
-            "true",
-            "yes",
-        )
-        if prefer_cpu and device_raw.startswith("cuda"):
-            device = "cpu"
-            _log_cuda_fallback_once(device_raw)
-        else:
-            device = device_raw if device_raw.startswith("cuda") else "cpu"
+        device = _resolve_device(config)
 
         out_root = str(getattr(config, "output_root", "trained_models/highway"))
         cid = str(candidate.candidate_id)
@@ -626,16 +642,94 @@ class HighwayPPOTrainer:
         except Exception:  # noqa: BLE001
             pass
 
+        holdout_metrics, metrics_dict = self._evaluate(
+            model,
+            candidate,
+            config=config,
+            seed=seed,
+            env_cfg=env_cfg,
+            stage_tag=stage_tag,
+        )
+        metrics_dict["n_envs"] = float(n_envs)
+        metrics_dict["warm_start"] = 1.0 if warm_path else 0.0
+        md = dict(candidate.metadata or {})
+        md["checkpoint_path"] = ckpt
+        md["train_steps"] = int(train_steps)
+        md["train_seed"] = int(seed)
+        md["ppo_n_steps"] = int(n_steps)
+        md["train_wall_seconds"] = float(train_wall)
+        if dynamics is not None:
+            md["training_dynamics"] = dynamics.summary()
+        candidate.metadata = md
+
+        if self.stage in ("stage3", "3", "iii"):
+            return TrainEvalBundle(
+                metrics=holdout_metrics,
+                checkpoint_path=ckpt,
+            )
+        return holdout_metrics
+
+    def reevaluate(self, candidate: Any, *, round_index: int, config: Any) -> Any:
+        """Evaluate the saved policy again (no training) on ``config``'s eval seeds.
+
+        A genome carried into a later generation is ranked against candidates
+        evaluated on that generation's scenarios, so its fitness must come
+        from the same scenarios rather than from the generation it won.
+        """
+        with StallWatchdog(
+            stall_seconds_from_config(config),
+            label=str(getattr(candidate, "candidate_id", "")),
+        ):
+            PPO = _ppo_class()
+            from domains.highway.env_wrapper import training_env_config
+
+            md = dict(candidate.metadata or {})
+            ckpt = md.get("checkpoint_path")
+            if not ckpt or not os.path.isfile(str(ckpt)):
+                raise FileNotFoundError(
+                    f"{candidate.candidate_id}: no saved policy to re-evaluate ({ckpt!r})"
+                )
+            configure_action_mode_from_config(config)
+            model = PPO.load(str(ckpt), device=_resolve_device(config))
+            holdout_metrics, _ = self._evaluate(
+                model,
+                candidate,
+                config=config,
+                seed=int(getattr(config, "seed", 425)) + int(round_index),
+                env_cfg=training_env_config(),
+                stage_tag="Stage II re-eval",
+            )
+            return holdout_metrics
+
+    def _evaluate(
+        self,
+        model: Any,
+        candidate: Any,
+        *,
+        config: Any,
+        seed: int,
+        env_cfg: Dict[str, Any],
+        stage_tag: str,
+    ) -> Any:
+        """Holdout evaluation (plus train traffic in ``both`` mode).
+
+        Writes ``last_metrics``, ``fitness`` and the eval fields onto the
+        candidate metadata; returns ``(holdout ProxyMetrics, metrics dict)``.
+        """
+        from domains.highway.env_wrapper import (
+            HOLDOUT_SEED_OFFSET,
+            RewardInjectedHighwayEnv,
+            holdout_env_config,
+        )
+
+        cid = str(candidate.candidate_id)
+        eval_episodes = int(getattr(config, "eval_episodes", 20))
+        eval_mode = _highway_eval_mode(config)
         console.status(
             f"PPO eval {cid} | episodes={eval_episodes} ({eval_mode})",
             stage=stage_tag,
         )
         t1 = time.perf_counter()
-        from domains.highway.env_wrapper import (
-            HOLDOUT_SEED_OFFSET,
-            holdout_env_config,
-        )
-
         eval_deterministic = bool(getattr(config, "highway_eval_deterministic", False))
         eval_seed_raw = getattr(config, "highway_eval_seed_base", None)
         eval_seed = seed if eval_seed_raw is None else int(eval_seed_raw)
@@ -694,8 +788,6 @@ class HighwayPPOTrainer:
             for k, v in holdout_dict.items()
             if k not in ("holdout", "train_dist")
         }
-        metrics_dict["n_envs"] = float(n_envs)
-        metrics_dict["warm_start"] = 1.0 if warm_path else 0.0
         metrics_dict["holdout_episodes"] = list(getattr(holdout_metrics, "_highway_episodes", []))
         metrics_dict["eval_context"] = {
             "traffic": "holdout",
@@ -718,25 +810,12 @@ class HighwayPPOTrainer:
         fit = float(metrics_dict["fitness"])
         md["fitness"] = fit
         md["selection_scalar"] = fit  # alias
-        md["checkpoint_path"] = ckpt
-        md["train_steps"] = int(train_steps)
-        md["train_seed"] = int(seed)
         md["eval_seed_base"] = int(eval_seed) + int(HOLDOUT_SEED_OFFSET)
         md["eval_episodes"] = int(eval_episodes)
-        md["ppo_n_steps"] = int(n_steps)
         md["eval_deterministic"] = bool(eval_deterministic)
-        md["train_wall_seconds"] = float(train_wall)
         md["eval_wall_seconds"] = float(eval_wall)
-        if dynamics is not None:
-            md["training_dynamics"] = dynamics.summary()
         candidate.metadata = md
-
-        if self.stage in ("stage3", "3", "iii"):
-            return TrainEvalBundle(
-                metrics=holdout_metrics,
-                checkpoint_path=ckpt,
-            )
-        return holdout_metrics
+        return holdout_metrics, metrics_dict
 
 
 def make_stage2_trainer(*, use_stub: bool = False) -> HighwayStage2Trainer:

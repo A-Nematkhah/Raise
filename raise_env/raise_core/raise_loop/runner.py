@@ -148,8 +148,41 @@ def _compact_metrics(candidate: RewardCandidate) -> Dict[str, Any]:
 
 
 def _needs_training(candidate: RewardCandidate) -> bool:
-    """Untrained executable genomes; carried-over elites keep their evaluation."""
+    """Untrained executable genomes."""
     return candidate.reward_fn is not None and (candidate.metadata or {}).get("fitness") is None
+
+
+def _needs_reevaluation(candidate: RewardCandidate, generation: int) -> bool:
+    """Trained genomes carried in from an earlier generation's evaluation."""
+    md = candidate.metadata or {}
+    return (
+        candidate.reward_fn is not None
+        and md.get("fitness") is not None
+        and md.get("eval_generation") != int(generation)
+    )
+
+
+def _carried(candidate: RewardCandidate, generation: int) -> bool:
+    """Carried genome of this generation, before or after its eval-only pass."""
+    md = candidate.metadata or {}
+    return (
+        _needs_reevaluation(candidate, generation)
+        or bool(md.get("fitness_history"))
+        or bool(md.get("fitness_stale"))
+    )
+
+
+_EVAL_KEYS = ("fitness", "selection_scalar", "last_metrics")
+
+
+def _past_evaluation(md: Dict[str, Any]) -> Dict[str, Any]:
+    metrics = md.get("last_metrics") if isinstance(md.get("last_metrics"), dict) else {}
+    return {
+        "generation": md.get("eval_generation"),
+        "fitness": md.get("fitness"),
+        "fitness_se": metrics.get("fitness_se"),
+        "eval_seed_base": md.get("eval_seed_base"),
+    }
 
 
 class ClosedLoopRunner:
@@ -262,6 +295,14 @@ class ClosedLoopRunner:
             highway_training_dynamics=card_on and bool(cfg.feedback.training_dynamics),
             highway_reward_components=card_on and bool(cfg.feedback.component_instrumentation),
         )
+
+        can_reevaluate = callable(getattr(self.trainer, "reevaluate", None))
+        if not can_reevaluate:
+            logger.warning(
+                "Stage II trainer %s has no reevaluate(); carried candidates keep "
+                "the fitness of the generation that evaluated them",
+                type(self.trainer).__name__,
+            )
 
         n_labeled = 0
         history: List[Dict[str, Any]] = []
@@ -376,7 +417,10 @@ class ClosedLoopRunner:
                     )
                 ):
                     evolver.global_best = ranked[0]
-                to_label = [c for c in ranked if _needs_training(c)]
+                to_label = [
+                    c for c in ranked
+                    if _needs_training(c) or (can_reevaluate and _needs_reevaluation(c, g))
+                ]
                 # ``population`` is now the scored list so a labeling resume
                 # skips re-scoring.
                 population = ranked
@@ -394,20 +438,43 @@ class ClosedLoopRunner:
             n_fail = 0
 
             def _label_one(cand: RewardCandidate, round_index: int) -> Dict[str, Any]:
-                metrics = self.trainer.train_and_eval(
-                    cand, round_index=int(round_index), config=stage2_cfg
-                )
+                if not _needs_reevaluation(cand, g):
+                    metrics = self.trainer.train_and_eval(
+                        cand, round_index=int(round_index), config=stage2_cfg
+                    )
+                    _store_stage2_metrics(cand, metrics)
+                    cand.metadata = {**cand.metadata, "eval_generation": g}
+                    return {"status": "ok", "kind": "trained"}
+                # Carried genome: same scenarios as this generation, no training.
+                prev = dict(cand.metadata or {})
+                history = list(prev.get("fitness_history") or []) + [_past_evaluation(prev)]
+                cand.metadata = {k: v for k, v in prev.items() if k not in _EVAL_KEYS}
+                try:
+                    metrics = self.trainer.reevaluate(
+                        cand, round_index=int(round_index), config=stage2_cfg
+                    )
+                except Exception:
+                    cand.metadata = {**prev, "fitness_stale": True}
+                    raise
                 _store_stage2_metrics(cand, metrics)
-                return {"status": "ok"}
+                cand.metadata = {
+                    **cand.metadata,
+                    "eval_generation": g,
+                    "fitness_history": history,
+                    "fitness_stale": False,
+                }
+                return {"status": "ok", "kind": "reevaluated"}
 
             def _on_done(cand: RewardCandidate, result: Dict[str, Any], _i: int) -> None:
                 nonlocal n_ok, n_fail, n_labeled
                 if str(result.get("status") or "") == "ok":
-                    n_ok += 1
-                    n_labeled += 1
+                    if result.get("kind") != "reevaluated":
+                        n_ok += 1
+                        n_labeled += 1
                     attach_proxy_feedback(cand, (cand.metadata or {}).get("last_metrics") or {})
                 else:
-                    n_fail += 1
+                    if not _carried(cand, g):
+                        n_fail += 1
                     logger.warning(
                         "Stage II failed for %s: %s",
                         cand.candidate_id,
@@ -425,7 +492,9 @@ class ClosedLoopRunner:
                 )
 
             stage2_cfg.highway_eval_seed_base = int(cfg.seed) + int(g) * 1000
-            attach_warm_start_checkpoints(to_label, list(population))
+            attach_warm_start_checkpoints(
+                [c for c in to_label if not _needs_reevaluation(c, g)], list(population)
+            )
             label_candidates_parallel(
                 to_label,
                 already_done=labeled_this_epoch,
@@ -446,11 +515,21 @@ class ClosedLoopRunner:
                 ranked_for_evo, generation=g
             )
 
+            trained = [c for c in to_label if not _carried(c, g)]
+            carried = [c for c in to_label if _carried(c, g)]
             epoch_rec = {
                 "epoch": g,
                 "n_population": len(ranked),
-                "n_to_label": len(to_label),
-                "labeled_ids": [c.candidate_id for c in to_label],
+                "n_to_label": len(trained),
+                "labeled_ids": [c.candidate_id for c in trained],
+                # Carried genomes evaluated again on this generation's seeds
+                # (no training); ``stale_fitness_ids`` failed that pass.
+                "reevaluated_ids": [
+                    c.candidate_id for c in carried if not (c.metadata or {}).get("fitness_stale")
+                ],
+                "stale_fitness_ids": [
+                    c.candidate_id for c in carried if (c.metadata or {}).get("fitness_stale")
+                ],
                 "label_metrics": {
                     str(c.candidate_id): _compact_metrics(c) for c in to_label
                 },

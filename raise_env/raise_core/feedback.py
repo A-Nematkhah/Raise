@@ -29,6 +29,8 @@ ARCHIVED_METADATA_KEYS = (
     "score1_scenario_scores",
     "score1_n_pairs",
     "llm_fallback_clone",
+    "eval_generation",
+    "fitness_history",
 )
 _POP_EPOCH_RE = re.compile(r"pop_epoch_(\d+)\.json$")
 
@@ -131,8 +133,8 @@ class CandidateArchive:
         old = self._records.get(record.candidate_id)
         if old is None:
             self._records[record.candidate_id] = record
-        elif record.evaluated and not old.evaluated:
-            # Carried-over genome evaluated after it was first archived.
+        elif record.evaluated:
+            # Carried genomes are evaluated again each generation: latest wins.
             old.metadata = dict(record.metadata)
 
     def add_population(self, candidates: Iterable[Any], *, generation: int) -> None:

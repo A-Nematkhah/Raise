@@ -2,7 +2,9 @@
 RAISE Stage II — short PPO train + evaluation of one reward candidate.
 
 The closed-loop runner calls ``trainer.train_and_eval(candidate, round_index=,
-config=Stage2Config)`` for every new candidate each generation. The highway
+config=Stage2Config)`` for every new candidate each generation, and
+``trainer.reevaluate(...)`` (eval only) for genomes carried in from an earlier
+generation, so every fitness it ranks comes from the same scenarios. The highway
 trainer (``domains.highway.adapter``) caches ``last_metrics`` / ``fitness`` /
 ``checkpoint_path`` on the candidate metadata.
 """
@@ -115,6 +117,20 @@ class StubPolicyTrainer(PolicyTrainer):
         round_index: int,
         config: Stage2Config,
     ) -> ProxyMetrics:
+        return self._metrics(candidate, round_index)
+
+    def reevaluate(
+        self,
+        candidate: RewardCandidate,
+        *,
+        round_index: int,
+        config: Stage2Config,
+    ) -> ProxyMetrics:
+        """Eval-only pass; the stub has no policy, so it re-derives the metrics."""
+        return self._metrics(candidate, round_index)
+
+    @staticmethod
+    def _metrics(candidate: RewardCandidate, round_index: int) -> ProxyMetrics:
         base = (_stable_code_hash(candidate.code) % 100) / 100.0
         jitter = 0.01 * (round_index % 5)
         sr = min(1.0, max(0.0, 0.4 + 0.5 * base + jitter))

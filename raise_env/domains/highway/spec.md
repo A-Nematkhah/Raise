@@ -242,7 +242,11 @@ the disabled prompts are byte-identical to the pre-card ones.
    executable candidate is PPO-trained for K2 env steps and evaluated on E2
    holdout episodes (eval seeds shared within the generation; every candidate
    trains from scratch, `--highway-warm-start` opts into copying a parent's
-   policy weights);
+   policy weights). A genome carried over by elitism is not retrained: its
+   saved policy is evaluated again on this generation's holdout seeds, so every
+   fitness ranked in a generation comes from the same scenarios (earlier
+   evaluations stay in `fitness_history`; a failed re-evaluation keeps the old
+   fitness, sets `fitness_stale` and is listed in `stale_fitness_ids`);
    rank by fitness; the LLM breeds the next generation
    (crossover of the top 2, mutation of the lower half with its evaluation
    evidence, random restarts; the best genome is carried over with elitism).

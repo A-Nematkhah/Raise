@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import logging
+import os
 from types import SimpleNamespace
 
+import pytest
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv
 
@@ -104,6 +106,53 @@ def test_stochastic_eval_label_reproducible(tmp_path):
         lm = md["last_metrics"]
         labels.append((lm["SR"], lm["CR"], lm["mean_speed"], lm["mean_progress"]))
     assert labels[0] == labels[1]
+
+
+def test_reevaluate_scores_saved_policy_without_training(tmp_path):
+    pack = load_domain("highway")
+    fn = make_validator_for_domain(pack).validate_code(D5_SEED_FUNCTION)
+    trainer = make_stage2_trainer_for_domain(pack, use_stub=False)
+    cand = RewardCandidate(candidate_id="elite", code=D5_SEED_FUNCTION, reward_fn=fn, valid=True)
+    cfg = Stage2Config(
+        train_env_steps=64,
+        eval_episodes=2,
+        seed=3,
+        device="cpu",
+        output_root=str(tmp_path),
+        highway_eval_mode="holdout_only",
+        highway_eval_seed_base=3,
+    )
+    trainer.train_and_eval(cand, round_index=0, config=cfg)
+    trained = dict(cand.metadata)
+    ckpt_mtime = os.path.getmtime(trained["checkpoint_path"])
+
+    cfg.highway_eval_seed_base = 1003  # next generation's scenarios
+    trainer.reevaluate(cand, round_index=1000, config=cfg)
+    md = cand.metadata
+    assert os.path.getmtime(md["checkpoint_path"]) == ckpt_mtime  # policy not retrained
+    assert md["train_steps"] == trained["train_steps"]
+    assert md["train_wall_seconds"] == trained["train_wall_seconds"]
+    assert md["eval_seed_base"] == trained["eval_seed_base"] + 1000
+    assert md["last_metrics"] is not trained["last_metrics"]
+    assert md["fitness"] == md["last_metrics"]["fitness"]
+    assert len(md["last_metrics"]["holdout_episodes"]) == 2
+
+    # Same seeds again: the eval-only pass is reproducible.
+    first = (md["fitness"], md["last_metrics"]["SR"])
+    trainer.reevaluate(cand, round_index=1000, config=cfg)
+    assert (cand.metadata["fitness"], cand.metadata["last_metrics"]["SR"]) == first
+
+
+def test_reevaluate_without_saved_policy_raises(tmp_path):
+    pack = load_domain("highway")
+    fn = make_validator_for_domain(pack).validate_code(D5_SEED_FUNCTION)
+    trainer = make_stage2_trainer_for_domain(pack, use_stub=False)
+    cand = RewardCandidate(
+        candidate_id="x", code=D5_SEED_FUNCTION, reward_fn=fn, valid=True,
+        metadata={"checkpoint_path": str(tmp_path / "missing.zip")},
+    )
+    with pytest.raises(FileNotFoundError):
+        trainer.reevaluate(cand, round_index=0, config=Stage2Config(output_root=str(tmp_path)))
 
 
 def test_train_vec_env_wraps_monitor():
