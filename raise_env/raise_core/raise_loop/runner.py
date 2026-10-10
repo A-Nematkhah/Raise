@@ -20,6 +20,7 @@ from raise_core.domains import (
     make_validator_for_domain,
 )
 from raise_core.explore import RewardCandidate, StageIConfig, StageIEvolver
+from raise_core.feedback import ArchiveRecord, CandidateArchive
 from raise_core.llm import LLMClient, make_llm_client
 from raise_core.population_io import load_candidate_dict
 from raise_core.raise_loop.checkpoint import (
@@ -231,7 +232,11 @@ class ClosedLoopRunner:
             rejection_log_path=os.path.join(
                 cfg.output_dir, "closed_loop", "stage1_rejections.jsonl"
             ),
+            feedback=cfg.feedback,
+            feedback_card=pack.feedback_card,
+            llm_log_dir=closed_loop_dir(cfg.output_dir),
         )
+        card_on = bool(cfg.feedback.enabled)
 
         eval_eps = getattr(cfg, "eval_episodes", None)
         if eval_eps is None:
@@ -253,6 +258,8 @@ class ClosedLoopRunner:
             highway_meta_fine_low=float(cfg.highway_meta_fine_low),
             highway_meta_fine_high=float(cfg.highway_meta_fine_high),
             highway_meta_fine_n=int(cfg.highway_meta_fine_n),
+            highway_training_dynamics=card_on and bool(cfg.feedback.training_dynamics),
+            highway_reward_components=card_on and bool(cfg.feedback.component_instrumentation),
         )
 
         n_labeled = 0
@@ -307,6 +314,7 @@ class ClosedLoopRunner:
             population = deserialize_population(
                 ckpt.get("population"), validator=self.validator
             )
+            evolver.archive = CandidateArchive.from_epoch_files(closed_loop_dir(cfg.output_dir))
             ckpt_extra = ckpt.get("extra") or {}
             n_labeled = int(ckpt_extra.get("n_labeled") or 0)
             evolver.restore_id_counter(
@@ -432,6 +440,7 @@ class ClosedLoopRunner:
                 mode=evolve_mode,
                 hybrid_score1_weight=float(cfg.evolve_rank_score1_weight),
             )
+            evolver.archive.add_population(ranked_for_evo, generation=g)
             evolver.reflection = evolver._build_reflection(
                 ranked_for_evo, generation=g
             )
@@ -471,8 +480,14 @@ class ClosedLoopRunner:
                 {
                     "evolve_rank": evolve_mode,
                     "to_label": [c.candidate_id for c in to_label],
+                    # Archive fields (generation, lineage, code, Stage II
+                    # metadata) let a resumed run rebuild the feedback archive.
                     "candidates": [
                         {
+                            **(
+                                evolver.archive.get(c.candidate_id)
+                                or ArchiveRecord.from_candidate(c, generation=g)
+                            ).to_dict(),
                             "candidate_id": str(c.candidate_id),
                             "score": c.score,
                             "fitness": (c.metadata or {}).get("fitness"),

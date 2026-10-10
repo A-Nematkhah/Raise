@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 
 from raise_core.domains.base import DomainPack
+from domains.highway import feedback_card as highway_feedback_card
 from domains.highway import prompts as highway_prompts
 from domains.highway.adapter import (
     HighwayAdapter,
@@ -28,6 +29,7 @@ def get_pack(*, with_adapter: bool = True) -> DomainPack:
             "Multi-lane highway driving (highway-fast-v0); SB3 PPO."
         ),
         prompts=highway_prompts,
+        feedback_card=highway_feedback_card,
         seed_reward_source=highway_prompts.D5_SEED_FUNCTION,
         spec_path=os.path.join(_PACK_DIR, "spec.md"),
         adapter=adapter,

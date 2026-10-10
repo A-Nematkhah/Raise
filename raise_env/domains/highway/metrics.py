@@ -58,7 +58,7 @@ _CRUISE_SPEED_SPREAD_MAX = 0.35
 _CONSTANT_CRUISE_PENALTY = 0.35
 
 # Lane changes per step below this count as "never changes lane".
-_LANE_LOCK_RATE = 0.02
+LANE_LOCK_RATE = 0.02
 _LANE_LOCK_PENALTY = 0.15
 
 
@@ -94,7 +94,7 @@ def _degeneracy_penalty(metrics: Mapping[str, Any]) -> float:
     """
     sr = _finite(metrics.get("SR", metrics.get("sr", 0.0)))
     lc = metrics.get("lane_change_rate")
-    lane_locked = lc is not None and _finite(lc) < _LANE_LOCK_RATE
+    lane_locked = lc is not None and _finite(lc) < LANE_LOCK_RATE
     speed = _finite(metrics.get("mean_speed", metrics.get("ITR", 0.0)))
     pen = 0.0
     # Never changing lane is suspicious with perfect survival, and is the

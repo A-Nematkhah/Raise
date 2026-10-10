@@ -7,6 +7,10 @@ evaluation feedback, random restarts). The closed-loop runner drives it.
 
 Invalid sandbox candidates are replaced by regenerating; after the retry
 budget the domain seed (or the parent source) fills the slot.
+
+Every LLM request goes through ``_request``: it renders the diagnostic
+feedback card (when enabled and evidence exists), fits the complete request
+into the input-token budget, logs the call and only then calls the client.
 """
 
 from __future__ import annotations
@@ -19,7 +23,9 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
+from domains.highway import feedback_card as highway_feedback_card
 from domains.highway import prompts as highway_prompts
+from raise_core.feedback import ArchiveRecord, CandidateArchive, FeedbackCardConfig
 from raise_core.llm import (
     EmptyCompletionError,
     LLMClient,
@@ -28,12 +34,14 @@ from raise_core.llm import (
     normalize_to_compute_reward,
     split_reward_function_sources,
 )
+from raise_core.llm_call_log import LLMCallLog
 from raise_core.scoring import Score1Result
 from raise_core import console
 from raise_core.rejection_log import categorize_validation_error
 from raise_core.sandbox import RewardValidator
 from raise_core.sandbox.errors import RewardSandboxError
 from raise_core.sandbox.runtime import RewardFunction, SandboxedReward
+from raise_core.token_budget import PromptBudgetError, fit_to_budget, make_token_counter
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +114,9 @@ class StageIEvolver:
         config: Optional[StageIConfig] = None,
         rejection_log_path: Optional[str] = None,
         prompts: Any = None,
+        feedback: Optional[FeedbackCardConfig] = None,
+        feedback_card: Any = None,
+        llm_log_dir: Optional[str] = None,
     ) -> None:
         self.llm = llm
         if score_fn is None:
@@ -127,6 +138,13 @@ class StageIEvolver:
         self.global_best: Optional[RewardCandidate] = None
         # Best-fitness trend across generations (numbers only; fed into reflection).
         self._best_fitness_trend: List[float] = []
+        self.feedback = feedback if feedback is not None else FeedbackCardConfig()
+        self._card_module = feedback_card if feedback_card is not None else highway_feedback_card
+        # Evaluated candidates (the closed-loop runner adds each generation).
+        self.archive = CandidateArchive()
+        self._token_counter = make_token_counter(str(getattr(llm, "provider", "") or ""))
+        self._call_log = LLMCallLog(llm_log_dir)
+        self._last_call: Dict[str, Any] = {}
 
         n = self.config.population_size
         if self.config.n_crossover + self.config.n_mutation + self.config.n_random != n:
@@ -232,16 +250,164 @@ class StageIEvolver:
                 record["extracted_preview"],
             )
 
+    def _d1_prompt(self, card: Optional[str], compact: bool, *, batch: int = 0) -> str:
+        """D.1 prompt (single function, or ``batch`` functions when > 0)."""
+        kwargs: Dict[str, Any] = {
+            "func_name": self.config.func_name,
+            "include_seed": True,
+            "include_external_knowledge": self.config.include_external_knowledge,
+            "reflection": self.reflection if card is None else card,
+        }
+        if compact:
+            kwargs["compact"] = True
+        if batch > 0:
+            return self._format_d1_initial_batch(batch, **kwargs)
+        return self._format_d1_initial(**kwargs)
+
     def _seed_code(self) -> str:
         return normalize_to_compute_reward(str(self._prompts.D5_SEED_FUNCTION))
 
     def _seed_fallback_candidate(self, *, origin: str = "seed_fallback") -> RewardCandidate:
         return self._clone_valid(self._seed_code(), origin=origin)
 
-    def _llm_raw(self, user_prompt: str, *, max_tokens: Optional[int] = None) -> str:
-        sys_txt = self.system_prompt
-        full = f"{sys_txt}\n\n{user_prompt}"
-        raw = self.llm.complete(full, max_tokens=max_tokens)
+    # ------------------------------------------------------------------ LLM requests
+
+    def _subject_record(self, cand: RewardCandidate) -> ArchiveRecord:
+        rec = self.archive.get(cand.candidate_id)
+        if rec is not None:
+            return rec
+        gens = [r.generation for r in self.archive.records()]
+        return ArchiveRecord.from_candidate(cand, generation=max(gens) if gens else 0)
+
+    def _make_card(self, call_type: str, subjects: Sequence[RewardCandidate]) -> Any:
+        """Feedback card for this call, or None (disabled / no evidence yet)."""
+        if not self.feedback.enabled:
+            return None
+        if subjects:
+            records = [self._subject_record(c) for c in subjects]
+        else:
+            evaluated = [
+                r for r in self.archive.records()
+                if r.evaluated and r.metadata["fitness"] == r.metadata["fitness"]
+            ]
+            if not evaluated:
+                return None
+            records = [max(evaluated, key=lambda r: float(r.metadata["fitness"]))]
+            call_type = "reference"
+        note = self.reflection.split(" || ")[-1].strip() if self.reflection else ""
+        return self._card_module.FeedbackCard(
+            call_type=call_type,
+            subjects=records,
+            archive=self.archive,
+            config=self.feedback,
+            population_note=note,
+        )
+
+    def _request(
+        self,
+        call_type: str,
+        build_prompt: Callable[[Optional[str], bool], str],
+        *,
+        subjects: Sequence[RewardCandidate] = (),
+        phase: str = "",
+        attempt: int = 0,
+        max_tokens: Optional[int] = None,
+    ) -> str:
+        """
+        Fit, validate, log and send one LLM request.
+
+        ``build_prompt(card_text, compact)`` returns the user prompt; ``card_text``
+        is None when no card applies (the legacy reflection/evidence is used).
+        Raises ``PromptBudgetError`` (request not sent) when even the smallest
+        rendering exceeds ``feedback.max_input_tokens``.
+        """
+        card = self._make_card(call_type, subjects)
+        ladder = self._card_module.truncation_ladder(self.feedback) if card is not None else []
+        client_system = str(getattr(self.llm, "system_prompt", "") or "")
+
+        def render(level: int):
+            if card is None:
+                if level > 0:
+                    return None
+                user = build_prompt(None, False)
+                info: Dict[str, Any] = {"sections": [], "history_ids": [], "unavailable": {}}
+                return [client_system, f"{self.system_prompt}\n\n{user}"], "none", info
+            if level >= len(ladder):
+                return None
+            trim = ladder[level]
+            rendered = card.render(trim)
+            user = build_prompt(rendered.text, trim.compact_instructions)
+            info = {
+                "sections": rendered.sections,
+                "history_ids": rendered.history_ids,
+                "unavailable": rendered.unavailable,
+            }
+            return [client_system, f"{self.system_prompt}\n\n{user}"], trim.name, info
+
+        call_id = self._call_log.next_call_id(call_type)
+        record: Dict[str, Any] = {
+            "call_id": call_id,
+            "call_type": call_type,
+            "phase": phase,
+            "attempt": int(attempt),
+            "subject_ids": [str(c.candidate_id) for c in subjects],
+            "feedback_card": card is not None,
+            "provider": str(getattr(self.llm, "provider", "") or ""),
+            "model": getattr(self.llm, "model", None),
+            "max_output_tokens": max_tokens or getattr(self.llm, "max_tokens", None),
+            "token_method": self._token_counter.method,
+            "max_input_tokens": int(self.feedback.max_input_tokens),
+            "target_input_tokens": int(self.feedback.target_input_tokens),
+        }
+        try:
+            fit = fit_to_budget(
+                render,
+                self._token_counter,
+                max_input_tokens=int(self.feedback.max_input_tokens),
+                target_input_tokens=int(self.feedback.target_input_tokens),
+            )
+        except PromptBudgetError as exc:
+            self._call_log.write_request(
+                {
+                    **record,
+                    "status": "refused_over_budget",
+                    "input_tokens": exc.fit.tokens,
+                    "truncation_steps": exc.fit.steps,
+                },
+                exc.fit.messages,
+            )
+            logger.error("[Stage I] %s request not sent: %s", call_type, exc)
+            raise
+        if fit.steps:
+            logger.info(
+                "[Stage I] %s prompt truncated to %d tokens: %s",
+                call_type,
+                fit.tokens,
+                "; ".join(fit.steps),
+            )
+        if not fit.within_target:
+            logger.warning(
+                "[Stage I] %s prompt is %d tokens (target %d, hard limit %d)",
+                call_type,
+                fit.tokens,
+                int(self.feedback.target_input_tokens),
+                int(self.feedback.max_input_tokens),
+            )
+        self._call_log.write_request(
+            {
+                **record,
+                "status": "sent",
+                "input_tokens": fit.tokens,
+                "within_target": fit.within_target,
+                "truncation_steps": fit.steps,
+                "sections": fit.info["sections"],
+                "history_ids": fit.info["history_ids"],
+                "unavailable_sections": fit.info["unavailable"],
+            },
+            fit.messages,
+        )
+        self._last_call = {"call_id": call_id, "card": card is not None}
+        raw = self.llm.complete(fit.messages[-1], max_tokens=max_tokens)
         if not raw or not str(raw).strip():
             raise EmptyCompletionError(
                 "LLM returned empty completion (retry layer should raise)."
@@ -287,14 +453,24 @@ class StageIEvolver:
         metadata: Optional[dict] = None,
     ) -> RewardCandidate:
         md = dict(metadata or {})
+        call_id = self._last_call.get("call_id") if raw_completion else None
         if raw_completion:
             md["llm_diagnosis"] = extract_llm_diagnosis(raw_completion)
+        if call_id:
+            md["llm_call_id"] = call_id
         cand = self._make_candidate(
             code,
             origin=origin,
             parent_ids=parent_ids,
             metadata=md,
         )
+        if call_id:
+            self._call_log.write_validation(
+                call_id=call_id,
+                candidate_id=cand.candidate_id,
+                accepted=cand.valid,
+                validation_error=cand.validation_error,
+            )
         self._log_rejection(
             phase=phase,
             attempt=attempt,
@@ -323,6 +499,10 @@ class StageIEvolver:
         while len(out) < needed and attempts < budget:
             try:
                 cand = factory(attempts + 1)
+            except PromptBudgetError as exc:
+                # Deterministic: re-rendering the same evidence cannot shrink it.
+                logger.error("Phase %s: over the input-token budget, using fallback (%s)", phase, exc)
+                break
             except Exception as exc:  # noqa: BLE001
                 if not is_recoverable_llm_error(exc):
                     raise
@@ -401,20 +581,16 @@ class StageIEvolver:
             stage="Stage I",
         )
         with console.timed("Gen0 LLM batch", stage="Stage I"):
-            batch_prompt = self._format_d1_initial_batch(
-                needed,
-                func_name=cfg.func_name,
-                include_seed=True,
-                include_external_knowledge=cfg.include_external_knowledge,
-                reflection=self.reflection,
-            )
             try:
-                raw_batch = self._llm_raw(
-                    batch_prompt,
+                raw_batch = self._request(
+                    "initial_batch",
+                    lambda card, compact: self._d1_prompt(card, compact, batch=needed),
+                    phase="gen0_batch",
+                    attempt=1,
                     max_tokens=self._batch_max_tokens(needed),
                 )
             except Exception as exc:  # noqa: BLE001
-                if not is_recoverable_llm_error(exc):
+                if not (is_recoverable_llm_error(exc) or isinstance(exc, PromptBudgetError)):
                     raise
                 logger.warning(
                     "Gen0 batch LLM failed (%s): %s; falling back to per-slot regen",
@@ -487,13 +663,9 @@ class StageIEvolver:
         )
 
         def _one(attempt_no: int) -> RewardCandidate:
-            prompt = self._format_d1_initial(
-                func_name=cfg.func_name,
-                include_seed=True,
-                include_external_knowledge=cfg.include_external_knowledge,
-                reflection=self.reflection,
+            raw = self._request(
+                "initial", self._d1_prompt, phase="gen0_regen", attempt=attempt_no
             )
-            raw = self._llm_raw(prompt)
             code = self._completion_to_code(raw)
             return self._attempt_candidate(
                 code,
@@ -603,13 +775,24 @@ class StageIEvolver:
         phase: str,
         attempt: int,
     ) -> RewardCandidate:
-        prompt = self._format_d2_crossover(
-            parent_a.code,
-            parent_b.code,
-            reflection,
-            func_name=self.config.func_name,
+        def _prompt(card: Optional[str], compact: bool) -> str:
+            kwargs: Dict[str, Any] = {"func_name": self.config.func_name}
+            if compact:
+                kwargs["compact"] = True
+            return self._format_d2_crossover(
+                parent_a.code,
+                parent_b.code,
+                reflection if card is None else card,
+                **kwargs,
+            )
+
+        raw = self._request(
+            "crossover",
+            _prompt,
+            subjects=(parent_a, parent_b),
+            phase=phase,
+            attempt=attempt,
         )
-        raw = self._llm_raw(prompt)
         code = self._completion_to_code(raw)
         return self._attempt_candidate(
             code,
@@ -642,12 +825,20 @@ class StageIEvolver:
                 f"(Stage II training failed or was skipped). "
                 f"Global reflection: {reflection}"
             )
-        prompt = self._format_d2_mutation(
-            parent.code,
-            weakness,
-            func_name=self.config.func_name,
+
+        def _prompt(card: Optional[str], compact: bool) -> str:
+            kwargs: Dict[str, Any] = {"func_name": self.config.func_name}
+            if compact:
+                kwargs["compact"] = True
+            return self._format_d2_mutation(
+                parent.code,
+                weakness if card is None else card,
+                **kwargs,
+            )
+
+        raw = self._request(
+            "mutation", _prompt, subjects=(parent,), phase=phase, attempt=attempt
         )
-        raw = self._llm_raw(prompt)
         code = self._completion_to_code(raw)
         return self._attempt_candidate(
             code,
@@ -656,17 +847,12 @@ class StageIEvolver:
             attempt=attempt,
             raw_completion=raw,
             parent_ids=(parent.candidate_id,),
-            metadata={"weakness": weakness},
+            # With a card the full evidence lives in the logged prompt snapshot.
+            metadata={} if self._last_call.get("card") else {"weakness": weakness},
         )
 
     def _try_random_restart(self, *, phase: str, attempt: int) -> RewardCandidate:
-        prompt = self._format_d1_initial(
-            func_name=self.config.func_name,
-            include_seed=True,
-            include_external_knowledge=self.config.include_external_knowledge,
-            reflection=self.reflection,
-        )
-        raw = self._llm_raw(prompt)
+        raw = self._request("random", self._d1_prompt, phase=phase, attempt=attempt)
         code = self._completion_to_code(raw)
         return self._attempt_candidate(
             code,
@@ -688,18 +874,17 @@ class StageIEvolver:
                 phase="random",
             )
         batch_id = f"random_batch_{self._counter:04d}"
-        prompt = self._format_d1_initial_batch(
-            needed,
-            func_name=self.config.func_name,
-            include_seed=True,
-            include_external_knowledge=self.config.include_external_knowledge,
-            reflection=self.reflection,
-        )
         try:
-            raw = self._llm_raw(prompt, max_tokens=self._batch_max_tokens(needed))
+            raw = self._request(
+                "random_batch",
+                lambda card, compact: self._d1_prompt(card, compact, batch=needed),
+                phase="random_batch",
+                attempt=1,
+                max_tokens=self._batch_max_tokens(needed),
+            )
             codes = split_reward_function_sources(raw, func_name=self.config.func_name)
         except Exception as exc:  # noqa: BLE001
-            if not is_recoverable_llm_error(exc):
+            if not (is_recoverable_llm_error(exc) or isinstance(exc, PromptBudgetError)):
                 raise
             logger.warning(
                 "random batch LLM failed (%s): %s; regenerating per-slot",

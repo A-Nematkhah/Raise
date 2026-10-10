@@ -10,6 +10,7 @@ from raise_core.explore import (
     StageIEvolver,
     extract_llm_diagnosis,
 )
+from raise_core.feedback import FeedbackCardConfig
 from raise_core.llm import ScriptedLLMClient
 from raise_core.raise_loop.proxy_feedback import attach_proxy_feedback, evidence_block
 
@@ -52,12 +53,13 @@ def _cand(cid: str = "c0", *, score: float = 0.5, metrics=None) -> RewardCandida
     )
 
 
-def _evolver() -> StageIEvolver:
+def _evolver(*, card: bool = True) -> StageIEvolver:
     return StageIEvolver(
         ScriptedLLMClient([D5_SEED_FUNCTION] * 2),
         score_fn=lambda *_a, **_k: type("R", (), {"score": 0.0, "rejected": False})(),
         validator=make_highway_validator(),
         prompts=hwy_prompts,
+        feedback=FeedbackCardConfig(enabled=card),
     )
 
 
@@ -117,9 +119,10 @@ def test_build_reflection_is_fitness_table_with_diagnoses():
 
 
 def test_mutation_weakness_uses_evidence_block():
+    """With the feedback card disabled, mutation keeps the plain evidence text."""
     parent = _cand("p0", score=0.4)
     attach_proxy_feedback(parent, _hwy_metrics(TR=0.7))
-    evo = _evolver()
+    evo = _evolver(card=False)
     captured = {}
 
     def _fake_format(code, weakness, **kwargs):

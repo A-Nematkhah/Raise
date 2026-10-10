@@ -57,6 +57,8 @@ class DomainPack:
     make_stage3_trainer: Optional[Callable[..., Any]] = None
     selection_scalar_name: str = "navigation_scalar"
     metadata: Dict[str, Any] = field(default_factory=dict)
+    # Diagnostic feedback card module (``FeedbackCard`` + ``truncation_ladder``).
+    feedback_card: Optional[ModuleType] = None
 
     def format_d1_initial(self, **kwargs: Any) -> str:
         return self.prompts.format_d1_initial(**kwargs)

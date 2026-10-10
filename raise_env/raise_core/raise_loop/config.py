@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
+
+from raise_core.feedback import FeedbackCardConfig
 
 
 @dataclass
@@ -43,6 +45,8 @@ class ClosedLoopConfig:
     highway_meta_fine_low: float = 15.0
     highway_meta_fine_high: float = 35.0
     highway_meta_fine_n: int = 21
+    # Diagnostic feedback card + LLM input-token budget.
+    feedback: FeedbackCardConfig = field(default_factory=FeedbackCardConfig)
 
     def apply_fast_profile(self) -> None:
         self.use_stub = True

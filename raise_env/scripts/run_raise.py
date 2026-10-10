@@ -35,11 +35,13 @@ from datetime import datetime  # noqa: E402
 
 from raise_core import console  # noqa: E402
 from raise_core.console import ensure_utf8_stdio  # noqa: E402
+from raise_core.feedback import FeedbackCardConfig  # noqa: E402
 from raise_core.pipeline import RaisePipeline, RaiseRunConfig  # noqa: E402
 
 os.chdir(_ROOT)
 
 _DEFAULTS = RaiseRunConfig()
+_FEEDBACK = FeedbackCardConfig()
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -176,6 +178,45 @@ def build_parser() -> argparse.ArgumentParser:
         default=_DEFAULTS.highway_meta_fine_n,
         help="meta_fine: number of target_speeds in linspace(low, high)",
     )
+    parser.add_argument(
+        "--feedback-card",
+        action=argparse.BooleanOptionalAction,
+        default=_FEEDBACK.enabled,
+        help="Diagnostic feedback card in mutation/crossover/random prompts "
+        "(--no-feedback-card restores the plain evidence/reflection text)",
+    )
+    parser.add_argument(
+        "--max-input-tokens",
+        type=int,
+        default=_FEEDBACK.max_input_tokens,
+        help="Hard limit on the full LLM request (system + user prompt); never exceeded",
+    )
+    parser.add_argument(
+        "--target-input-tokens",
+        type=int,
+        default=_FEEDBACK.target_input_tokens,
+        help="Card truncation target for the full LLM request",
+    )
+    parser.add_argument(
+        "--feedback-history", type=int, default=_FEEDBACK.history_entries,
+        help="Lineage history entries in the card",
+    )
+    parser.add_argument(
+        "--feedback-trajectories", type=int, default=_FEEDBACK.max_trajectories,
+        help="Representative holdout episodes in the card",
+    )
+    parser.add_argument(
+        "--feedback-training-dynamics",
+        action=argparse.BooleanOptionalAction,
+        default=_FEEDBACK.training_dynamics,
+        help="Record training-rollout outcome windows during Stage II PPO",
+    )
+    parser.add_argument(
+        "--feedback-components",
+        action=argparse.BooleanOptionalAction,
+        default=_FEEDBACK.component_instrumentation,
+        help="Record per-episode reward-component sums during Stage II holdout eval",
+    )
     resume_group = parser.add_mutually_exclusive_group()
     resume_group.add_argument(
         "--resume",
@@ -249,6 +290,15 @@ def main() -> int:
         highway_action_mode=str(args.highway_action_mode),
         highway_action_continuous_lateral=bool(args.highway_action_continuous_lateral),
         highway_meta_fine_n=int(args.highway_meta_fine_n),
+        feedback=FeedbackCardConfig(
+            enabled=bool(args.feedback_card),
+            max_input_tokens=int(args.max_input_tokens),
+            target_input_tokens=int(args.target_input_tokens),
+            history_entries=int(args.feedback_history),
+            max_trajectories=int(args.feedback_trajectories),
+            training_dynamics=bool(args.feedback_training_dynamics),
+            component_instrumentation=bool(args.feedback_components),
+        ),
         device=args.device,
     )
     if args.fast:

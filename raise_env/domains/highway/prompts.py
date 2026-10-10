@@ -58,6 +58,13 @@ _DIAGNOSIS_BEFORE_CODE = (
     "parent."
 )
 
+# Token-budget fallback for ``_DIAGNOSIS_BEFORE_CODE`` (same contract, fewer words).
+_DIAGNOSIS_BEFORE_CODE_COMPACT = (
+    "Before the code fence, write a 2-4 sentence diagnosis grounded only in the "
+    "evidence above, then revise the function to address it (rewrite it entirely "
+    "if the success rate is near zero). The fence must contain ONLY the function."
+)
+
 _RETURN_CONTRACT = (
     "Return exactly ``(total_reward, reward_components)`` where "
     "``total_reward`` is a finite float used for RL, and "
@@ -201,7 +208,7 @@ Synthesis Task:
 - Strip any getattr/hasattr patterns; use direct state.* / v.* access.
 - Define exactly one function: def {func_name}(state, memory): ... returning (float, dict[str, float]).
 {sandbox_rules}
-""" + _DIAGNOSIS_BEFORE_CODE + """
+{diagnosis}
 """
 
 D2_MUTATION_PROMPT = """You are a reward function optimizer for highway driving. Mutate the underperforming parent using the evidence below with minimal edits.
@@ -215,7 +222,7 @@ Mutation Task:
 - Keep direct dot access; no getattr/hasattr.
 - Define exactly one function: def {func_name}(state, memory): ... returning (float, dict[str, float]).
 {sandbox_rules}
-""" + _DIAGNOSIS_BEFORE_CODE + """
+{diagnosis}
 """
 
 D4_EXTERNAL_KNOWLEDGE = f"""# External Knowledge — Highway Fast
@@ -269,7 +276,10 @@ def format_d1_initial(
     include_seed: bool = True,
     include_external_knowledge: bool = True,
     reflection: str = "",
+    compact: bool = False,
 ) -> str:
+    """D.1 single-function prompt; ``compact`` drops the external-knowledge block
+    (it repeats the system prompt's selection objective)."""
     seed_block = ""
     if include_seed:
         seed_block = (
@@ -284,7 +294,7 @@ def format_d1_initial(
             f"Reflective guidance / evidence from prior generations:\n{reflection.strip()}\n"
         )
     external_block = ""
-    if include_external_knowledge:
+    if include_external_knowledge and not compact:
         external_block = f"External knowledge:\n{D4_EXTERNAL_KNOWLEDGE}\n"
     return D1_USER_PROMPT.format(
         func_name=func_name,
@@ -315,6 +325,7 @@ def format_d1_initial_batch(
     include_seed: bool = True,
     include_external_knowledge: bool = True,
     reflection: str = "",
+    compact: bool = False,
 ) -> str:
     if n < 1:
         raise ValueError("batch size n must be >= 1")
@@ -328,7 +339,7 @@ def format_d1_initial_batch(
     if reflection.strip():
         reflection_block = f"Reflection / evidence:\n{reflection.strip()}\n"
     external_block = ""
-    if include_external_knowledge:
+    if include_external_knowledge and not compact:
         external_block = f"External knowledge:\n{D4_EXTERNAL_KNOWLEDGE}\n"
     return D1_BATCH_USER_PROMPT.format(
         n=int(n),
@@ -346,6 +357,7 @@ def format_d2_crossover(
     reflection: str,
     *,
     func_name: str = "compute_reward",
+    compact: bool = False,
 ) -> str:
     return D2_CROSSOVER_PROMPT.format(
         code_A=code_a.rstrip(),
@@ -356,6 +368,7 @@ def format_d2_crossover(
             func_name=func_name,
             reward_state_access=_REWARD_STATE_ACCESS,
         ),
+        diagnosis=_DIAGNOSIS_BEFORE_CODE_COMPACT if compact else _DIAGNOSIS_BEFORE_CODE,
     )
 
 
@@ -366,6 +379,7 @@ def format_d2_mutation(
     func_name: str = "compute_reward",
     func_signature: str = "def compute_reward(state, memory):",
     elitist_code: Optional[str] = None,
+    compact: bool = False,
 ) -> str:
     code = parent_code if elitist_code is None else elitist_code
     return D2_MUTATION_PROMPT.format(
@@ -377,4 +391,5 @@ def format_d2_mutation(
             func_name=func_name,
             reward_state_access=_REWARD_STATE_ACCESS,
         ),
+        diagnosis=_DIAGNOSIS_BEFORE_CODE_COMPACT if compact else _DIAGNOSIS_BEFORE_CODE,
     )

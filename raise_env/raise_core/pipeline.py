@@ -26,6 +26,7 @@ from raise_core.domains import (
     make_validator_for_domain,
 )
 from raise_core.explore import RewardCandidate
+from raise_core.feedback import FeedbackCardConfig
 from raise_core.llm import LLMClient, make_llm_client
 from raise_core.population_io import candidate_to_dict
 from raise_core.raise_loop import ClosedLoopConfig, ClosedLoopRunner
@@ -80,6 +81,8 @@ class RaiseRunConfig:
     highway_meta_fine_low: float = 15.0
     highway_meta_fine_high: float = 35.0
     highway_meta_fine_n: int = 21
+    # Diagnostic feedback card + LLM input-token budget.
+    feedback: FeedbackCardConfig = field(default_factory=FeedbackCardConfig)
 
     device: str = "cuda"
     fast: bool = False
@@ -189,6 +192,7 @@ class RaisePipeline:
             highway_meta_fine_low=float(cfg.highway_meta_fine_low),
             highway_meta_fine_high=float(cfg.highway_meta_fine_high),
             highway_meta_fine_n=int(cfg.highway_meta_fine_n),
+            feedback=cfg.feedback,
         )
 
     def _stage3_config(self) -> Stage3Config:

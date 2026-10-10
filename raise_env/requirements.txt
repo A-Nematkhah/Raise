@@ -16,6 +16,9 @@ tqdm==4.66.1
 # only for --llm vllm (OpenAI-compatible client):
 #   pip install "openai>=1.0"
 groq>=1.0.0
+# Exact o200k token counts for the LLM input budget (optional: without it a
+# conservative estimate is used; the vocabulary downloads once on first use).
+tiktoken>=0.9
 
 # Development / CI
 pytest>=7.0.0
