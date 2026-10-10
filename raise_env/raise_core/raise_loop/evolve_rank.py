@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import List, Literal, Sequence, Tuple
 
-from raise_core.explore import RewardCandidate
+from raise_core.candidate import RewardCandidate
 from raise_core.selection import candidate_fitness, candidate_nav_scalar
 
 EvolveRankMode = Literal["score1", "scalar", "hybrid"]

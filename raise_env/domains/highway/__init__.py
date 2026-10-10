@@ -1,7 +1,5 @@
-"""Highway domain pack."""
+"""Highway domain pack (``domains.highway.pack.get_pack``).
 
-from __future__ import annotations
-
-from domains.highway.pack import get_pack
-
-__all__ = ["get_pack"]
+Kept import-free: importing a submodule such as ``domains.highway.metrics``
+must not load the trainer stack, which imports ``raise_core`` back.
+"""

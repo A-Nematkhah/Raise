@@ -15,7 +15,7 @@ from dataclasses import dataclass, replace
 from typing import Any, Dict, List, Optional, Sequence
 
 from raise_core import console
-from raise_core.explore import RewardCandidate
+from raise_core.candidate import RewardCandidate
 from raise_core.population_io import deserialize_population, load_candidate_dict
 from raise_core.refine import ProxyMetrics, _stable_code_hash
 from raise_core.sandbox import RewardValidator

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-from raise_core.explore import RewardCandidate
+from raise_core.candidate import RewardCandidate
 
 
 def _f(metrics: Mapping[str, Any], *keys: str, default: float = 0.0) -> float:

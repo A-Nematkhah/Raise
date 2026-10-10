@@ -19,12 +19,13 @@ import json
 import logging
 import os
 import re
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from domains.highway import feedback_card as highway_feedback_card
 from domains.highway import prompts as highway_prompts
+from raise_core.candidate import RewardCandidate
 from raise_core.feedback import ArchiveRecord, CandidateArchive, FeedbackCardConfig
 from raise_core.llm import (
     EmptyCompletionError,
@@ -40,7 +41,7 @@ from raise_core import console
 from raise_core.rejection_log import categorize_validation_error
 from raise_core.sandbox import RewardValidator
 from raise_core.sandbox.errors import RewardSandboxError
-from raise_core.sandbox.runtime import RewardFunction, SandboxedReward
+from raise_core.sandbox.runtime import SandboxedReward
 from raise_core.token_budget import PromptBudgetError, fit_to_budget, make_token_counter
 
 logger = logging.getLogger(__name__)
@@ -59,31 +60,6 @@ def extract_llm_diagnosis(raw: str, *, max_chars: int = 500) -> Optional[str]:
     if not preamble:
         return None
     return preamble[: int(max_chars)]
-
-
-@dataclass
-class RewardCandidate:
-    """One evolvable reward individual."""
-
-    candidate_id: str
-    code: str
-    reward_fn: Optional[RewardFunction] = None
-    score: Optional[float] = None
-    valid: bool = False
-    origin: str = "unknown"  # initial | mutation | crossover | random
-    parent_ids: tuple = ()
-    validation_error: Optional[str] = None
-    metadata: dict = field(default_factory=dict)
-
-    @property
-    def is_executable(self) -> bool:
-        return self.valid and self.reward_fn is not None
-
-    def as_reward_function(self) -> RewardFunction:
-        """Return the validated reward callable (Stage I Score1 entry point)."""
-        if self.reward_fn is None:
-            raise ValueError(f"Candidate {self.candidate_id} has no reward_fn")
-        return self.reward_fn
 
 
 @dataclass

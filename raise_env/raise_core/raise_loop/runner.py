@@ -19,7 +19,8 @@ from raise_core.domains import (
     make_stage2_trainer_for_domain,
     make_validator_for_domain,
 )
-from raise_core.explore import RewardCandidate, StageIConfig, StageIEvolver
+from raise_core.candidate import RewardCandidate
+from raise_core.explore import StageIConfig, StageIEvolver
 from raise_core.feedback import ArchiveRecord, CandidateArchive
 from raise_core.llm import LLMClient, make_llm_client
 from raise_core.population_io import load_candidate_dict

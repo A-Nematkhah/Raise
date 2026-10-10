@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Sequence
 
-from raise_core.explore import RewardCandidate
+from raise_core.candidate import RewardCandidate
 
 
 def candidate_to_dict(cand: RewardCandidate) -> Dict[str, Any]:

@@ -1,8 +1,8 @@
 """
 Domain pack registry for reward search.
 
-Each environment family is a package under ``domains/`` exposing
-``get_pack() -> DomainPack``. The only registered domain is ``highway``.
+Each environment family registers a module (``domains/<name>/pack.py``)
+exposing ``get_pack() -> DomainPack``. The only registered domain is ``highway``.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from raise_core.domains.base import DomainPack, EnvAdapter
 DEFAULT_DOMAIN = "highway"
 
 _REGISTRY = {
-    "highway": "domains.highway",
+    "highway": "domains.highway.pack",
 }
 
 

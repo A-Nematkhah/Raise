@@ -12,7 +12,7 @@ from __future__ import annotations
 from typing import Any, Mapping, Optional, Sequence
 
 from domains.highway.metrics import highway_fitness
-from raise_core.explore import RewardCandidate
+from raise_core.candidate import RewardCandidate
 
 
 def is_highway_metrics(metrics: Mapping[str, Any]) -> bool:

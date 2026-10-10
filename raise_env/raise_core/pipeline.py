@@ -25,7 +25,7 @@ from raise_core.domains import (
     make_stage3_trainer_for_domain,
     make_validator_for_domain,
 )
-from raise_core.explore import RewardCandidate
+from raise_core.candidate import RewardCandidate
 from raise_core.feedback import FeedbackCardConfig
 from raise_core.llm import LLMClient, make_llm_client
 from raise_core.population_io import candidate_to_dict

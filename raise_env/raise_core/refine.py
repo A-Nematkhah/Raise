@@ -14,7 +14,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Dict, Optional
 
-from raise_core.explore import RewardCandidate
+from raise_core.candidate import RewardCandidate
 
 
 @dataclass
