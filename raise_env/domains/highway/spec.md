@@ -255,7 +255,11 @@ the disabled prompts are byte-identical to the pre-card ones.
    mutation (larger half) and crossover, so N=6 is 1 elite + 2 crossover + 2
    mutation + 1 random; explicit counts that do not add up to N are an error.
    The manifest records the split (`operators`), each epoch what was actually
-   built (`origin_counts`, fallback clones included, and `n_carried`). Genomes are compared by fingerprint (SHA-1 of the AST
+   built (`origin_counts`, fallback clones included, and `n_carried`) and the
+   population's diversity (`n_unique_genomes`, `component_diversity` = mean
+   pairwise Jaccard distance of the reward-component sets). Invalid LLM replies
+   are regenerated from one budget per generation (`max_invalid_replacements`,
+   shared by all slots); a slot that finds it empty takes its fallback. Genomes are compared by fingerprint (SHA-1 of the AST
    without docstrings, so layout and comments do not matter): an LLM child
    identical to an archived genome or to a sibling is rejected as `duplicate`
    and regenerated; a fallback clone takes over the evaluation of the genome it

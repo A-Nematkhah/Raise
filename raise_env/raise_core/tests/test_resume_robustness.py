@@ -90,7 +90,7 @@ def test_resume_known_ids_reads_checkpoint_and_train_dirs(tmp_path):
     (stage2 / "notes").mkdir()
     ckpt = {
         "population": [{"candidate_id": "ini_0001"}],
-        "global_best": {"candidate_id": "cro_0007"},
+        "to_label": [{"candidate_id": "cro_0007"}],
         "history": [{"ranking": ["ran_0009"], "labeled_ids": ["ini_0001"]}],
     }
     ids = set(_resume_known_ids(ckpt, str(stage2)))

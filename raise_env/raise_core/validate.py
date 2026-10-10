@@ -19,7 +19,7 @@ from raise_core.candidate import RewardCandidate
 from raise_core.population_io import deserialize_population, load_candidate_dict
 from raise_core.refine import ProxyMetrics, _stable_code_hash
 from raise_core.sandbox import RewardValidator
-from raise_core.selection import candidate_nav_scalar, navigation_scalar_from_dict
+from raise_core.selection import candidate_fitness, metrics_fitness
 from raise_core.stage3_checkpoint import (
     build_checkpoint,
     load_checkpoint,
@@ -150,7 +150,7 @@ def _trained_metrics(candidate: RewardCandidate, bundle: TrainEvalBundle) -> Dic
         # Highway trainer already stamped the full metrics dict + fitness.
         return dict(md["last_metrics"])
     metrics: Dict[str, Any] = bundle.metrics.as_dict()
-    metrics["fitness"] = navigation_scalar_from_dict(metrics)
+    metrics["fitness"] = metrics_fitness(metrics)
     return metrics
 
 
@@ -240,7 +240,7 @@ class Stage3Runner:
             )
         )
         prev = (
-            candidate_nav_scalar(self.best_trained)
+            candidate_fitness(self.best_trained)
             if self.best_trained is not None
             else float("-inf")
         )

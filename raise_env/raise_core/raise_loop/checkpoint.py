@@ -10,11 +10,7 @@ import os
 from typing import Any, Dict, Optional, Sequence
 
 from raise_core.json_io import atomic_write_json, read_json_dict, utc_now_z
-from raise_core.population_io import (
-    candidate_to_dict,
-    deserialize_population,
-    serialize_population,
-)
+from raise_core.population_io import deserialize_population, serialize_population
 
 _CHECKPOINT_NAME = "checkpoint.json"
 _RESUME_NAME = "RESUME.json"
@@ -29,7 +25,6 @@ def build_checkpoint(
     population: Optional[Sequence[Any]] = None,
     to_label: Optional[Sequence[Any]] = None,
     labeled_ids_this_epoch: Optional[Sequence[str]] = None,
-    global_best: Any = None,
     reflection: str = "",
     history: Optional[Sequence[Any]] = None,
     config: Optional[Dict[str, Any]] = None,
@@ -45,7 +40,6 @@ def build_checkpoint(
         "population": serialize_population(population),
         "to_label": serialize_population(to_label),
         "labeled_ids_this_epoch": [str(x) for x in (labeled_ids_this_epoch or [])],
-        "global_best": candidate_to_dict(global_best) if global_best is not None else None,
         "reflection": str(reflection or ""),
         "history": list(history or []),
         "config": dict(config or {}),

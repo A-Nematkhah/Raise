@@ -22,9 +22,8 @@ from raise_core.domains import (
 )
 from raise_core.candidate import RewardCandidate, evaluation_fields, genome_fingerprint
 from raise_core.explore import StageIConfig, StageIEvolver
-from raise_core.feedback import ArchiveRecord, CandidateArchive
+from raise_core.feedback import ArchiveRecord, CandidateArchive, component_diversity
 from raise_core.llm import LLMClient, make_llm_client
-from raise_core.population_io import load_candidate_dict
 from raise_core.raise_loop.checkpoint import (
     build_checkpoint,
     deserialize_population,
@@ -45,7 +44,7 @@ from raise_core.raise_loop.parallel_label import (
 from raise_core.raise_loop.proxy_feedback import attach_proxy_feedback
 from raise_core.raise_loop.report import format_epoch_summary, write_closed_loop_report
 from raise_core.refine import ProxyMetrics, Stage2Config
-from raise_core.selection import candidate_fitness, navigation_scalar_from_dict
+from raise_core.selection import candidate_fitness, metrics_fitness
 
 logger = logging.getLogger(__name__)
 
@@ -98,9 +97,6 @@ def _resume_known_ids(ckpt: Dict[str, Any], stage2_root: str) -> List[str]:
             for row in (ckpt.get(key) or [])
             if isinstance(row, dict)
         )
-    best = ckpt.get("global_best")
-    if isinstance(best, dict):
-        ids.append(str(best.get("candidate_id")))
     for rec in ckpt.get("history") or []:
         if not isinstance(rec, dict):
             continue
@@ -120,7 +116,7 @@ def _store_stage2_metrics(candidate: RewardCandidate, metrics: ProxyMetrics) -> 
     md = dict(candidate.metadata or {})
     if md.get("fitness") is None or not isinstance(md.get("last_metrics"), dict):
         md["last_metrics"] = metrics.as_dict()
-        md["fitness"] = navigation_scalar_from_dict(md["last_metrics"])
+        md["fitness"] = metrics_fitness(md["last_metrics"])
     candidate.metadata = md
 
 
@@ -326,7 +322,6 @@ class ClosedLoopRunner:
                 population=population,
                 to_label=to_label,
                 labeled_ids_this_epoch=labeled_ids or [],
-                global_best=evolver.global_best,
                 reflection=evolver.reflection,
                 history=history,
                 config=cfg_dict,
@@ -343,11 +338,6 @@ class ClosedLoopRunner:
             start_epoch = max(0, int(ckpt.get("next_epoch") or 0))
             history = [r for r in (ckpt.get("history") or []) if isinstance(r, dict)]
             evolver.reflection = str(ckpt.get("reflection") or "")
-            saved_best = ckpt.get("global_best")
-            if isinstance(saved_best, dict):
-                evolver.global_best = load_candidate_dict(
-                    dict(saved_best), validator=self.validator
-                )
             population = deserialize_population(
                 ckpt.get("population"), validator=self.validator
             )
@@ -404,14 +394,6 @@ class ClosedLoopRunner:
                 labeled_this_epoch = set()
                 epoch_resumed = False
                 ranked = evolver.score_population(population)
-                if evolver.global_best is None or (
-                    ranked[0].score is not None
-                    and (
-                        evolver.global_best.score is None
-                        or float(ranked[0].score) > float(evolver.global_best.score)
-                    )
-                ):
-                    evolver.global_best = ranked[0]
                 to_label = [
                     c for c in ranked
                     if _needs_training(c) or (can_reevaluate and _needs_reevaluation(c, g))
@@ -510,7 +492,9 @@ class ClosedLoopRunner:
             ranked_for_evo = rank_population_for_evolution(ranked)
             evolver.archive.add_population(ranked_for_evo, generation=g)
             evolver.reflection = evolver._build_reflection(
-                ranked_for_evo, generation=g
+                ranked_for_evo,
+                generation=g,
+                fitness_trend=[rec.get("evolve_best_fitness") for rec in history],
             )
 
             trained = [
@@ -523,6 +507,7 @@ class ClosedLoopRunner:
                 "epoch": g,
                 "n_population": len(ranked),
                 "n_unique_genomes": len({genome_fingerprint(c.code) for c in ranked}),
+                "component_diversity": component_diversity([c.code for c in ranked]),
                 # How this generation was actually built (fallback clones show
                 # up as ``*_fallback``); ``n_carried`` came from the last one.
                 "origin_counts": dict(

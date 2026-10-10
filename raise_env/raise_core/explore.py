@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import re
 from dataclasses import dataclass, replace
@@ -127,6 +128,13 @@ def operator_counts(
 
 
 @dataclass
+class RetryBudget:
+    """LLM regenerations left for invalid replies, shared across fill calls."""
+
+    left: int
+
+
+@dataclass
 class StageIConfig:
     population_size: int = 8
     generations: int = 10
@@ -134,12 +142,13 @@ class StageIConfig:
     n_crossover: Optional[int] = None
     n_mutation: Optional[int] = None
     n_random: Optional[int] = None
-    # Extra LLM draws allowed when replacing invalids (Gen0 + each gen).
+    # Extra LLM draws for invalid replies, shared by all slots of a generation
+    # (Gen0 and each bred generation); exhausted slots take their fallback.
     max_invalid_replacements: int = 16
     func_name: str = "compute_reward"
     include_external_knowledge: bool = True
     # Carry the best genome into the next generation (one of the N slots).
-    keep_runtime_elite: bool = False
+    keep_runtime_elite: bool = True
 
 
 class StageIEvolver:
@@ -175,9 +184,6 @@ class StageIEvolver:
         self.rejection_log_path = rejection_log_path
         self._counter = 0
         self.reflection: str = ""
-        self.global_best: Optional[RewardCandidate] = None
-        # Best-fitness trend across generations (numbers only; fed into reflection).
-        self._best_fitness_trend: List[float] = []
         self.feedback = feedback if feedback is not None else FeedbackCardConfig()
         self._card_module = feedback_card if feedback_card is not None else highway_feedback_card
         # Evaluated candidates (the closed-loop runner adds each generation).
@@ -584,10 +590,16 @@ class StageIEvolver:
         max_extra: int,
         phase: str = "fill",
         fallback: Optional[Callable[[], RewardCandidate]] = None,
+        shared: Optional[RetryBudget] = None,
     ) -> List[RewardCandidate]:
-        """Collect ``needed`` valid candidates; regenerate up to max_extra on failure."""
+        """Collect ``needed`` valid candidates; regenerate up to max_extra on failure.
+
+        With ``shared``, failed attempts are also drawn from that budget.
+        """
         out: List[RewardCandidate] = []
         attempts = 0
+        if shared is not None:
+            max_extra = min(max_extra, max(0, shared.left))
         budget = needed + max_extra
         while len(out) < needed and attempts < budget:
             try:
@@ -612,6 +624,8 @@ class StageIEvolver:
             attempts += 1
             if cand.valid:
                 out.append(cand)
+        if shared is not None:
+            shared.left -= attempts - len(out)
         # Default fallback: domain seed so closed-loop never dies on LLM flakes.
         pad = fallback if fallback is not None else self._seed_fallback_candidate
         while len(out) < needed:
@@ -968,7 +982,9 @@ class StageIEvolver:
             raw_completion=raw,
         )
 
-    def _fill_random_batch(self, needed: int) -> List[RewardCandidate]:
+    def _fill_random_batch(
+        self, needed: int, shared: Optional[RetryBudget] = None
+    ) -> List[RewardCandidate]:
         """Batch D.1-style random restarts (one LLM call when ``needed > 1``)."""
         if needed <= 0:
             return []
@@ -978,6 +994,7 @@ class StageIEvolver:
                 lambda n: self._try_random_restart(phase="random", attempt=n),
                 max_extra=self.config.max_invalid_replacements,
                 phase="random",
+                shared=shared,
             )
         batch_id = f"random_batch_{self._counter:04d}"
         try:
@@ -1023,6 +1040,7 @@ class StageIEvolver:
                     lambda n: self._try_random_restart(phase="random_regen", attempt=n),
                     max_extra=self.config.max_invalid_replacements,
                     phase="random_regen",
+                    shared=shared,
                 )
             )
         return out
@@ -1050,6 +1068,7 @@ class StageIEvolver:
         if not lower:
             lower = list(ranked[-1:])
 
+        retries = RetryBudget(cfg.max_invalid_replacements)
         next_pop: List[RewardCandidate] = []
         if keep_elite:
             next_pop.append(top_a)
@@ -1069,6 +1088,7 @@ class StageIEvolver:
                     _cross,
                     max_extra=cfg.max_invalid_replacements,
                     phase="crossover",
+                    shared=retries,
                     fallback=lambda: self._clone_valid(
                         top_a.code,
                         origin="crossover_fallback",
@@ -1093,6 +1113,7 @@ class StageIEvolver:
                     _mut,
                     max_extra=cfg.max_invalid_replacements,
                     phase="mutation",
+                    shared=retries,
                     fallback=lambda _p=parent: self._clone_valid(
                         _p.code,
                         origin="mutation_fallback",
@@ -1104,15 +1125,23 @@ class StageIEvolver:
 
         # Occasional random restarts (D.1-style) — batched when n_random > 1.
         if generated_random > 0:
-            next_pop.extend(self._fill_random_batch(generated_random))
+            next_pop.extend(self._fill_random_batch(generated_random, retries))
 
         assert len(next_pop) == cfg.population_size
         return next_pop
 
     def _build_evidence_reflection(
-        self, ranked: Sequence[RewardCandidate], *, generation: int
+        self,
+        ranked: Sequence[RewardCandidate],
+        *,
+        generation: int,
+        fitness_trend: Sequence[float] = (),
     ) -> str:
-        """Fitness-ordered population table + best-fitness trend + diagnoses."""
+        """Fitness-ordered population table + best-fitness trend + diagnoses.
+
+        ``fitness_trend`` is the best fitness of each earlier generation (the
+        run history); this generation's best is appended, last five shown.
+        """
 
         def _num(source: Dict[str, Any], *keys: str) -> float:
             for key in keys:
@@ -1145,12 +1174,12 @@ class StageIEvolver:
                 }
             )
 
+        values = [float(v) for v in fitness_trend if v is not None and math.isfinite(float(v))]
         if best_fitness is not None:
-            self._best_fitness_trend.append(float(best_fitness))
-            self._best_fitness_trend = self._best_fitness_trend[-5:]
+            values.append(float(best_fitness))
         trend = (
             f"Gen{generation} best_fitness_trend=["
-            + ", ".join(f"{v:.3f}" for v in self._best_fitness_trend)
+            + ", ".join(f"{v:.3f}" for v in values[-5:])
             + "]"
         )
         table_bits = [
@@ -1176,10 +1205,16 @@ class StageIEvolver:
         return f"{trend}. {table}. {diag}"
 
     def _build_reflection(
-        self, ranked: Sequence[RewardCandidate], *, generation: int
+        self,
+        ranked: Sequence[RewardCandidate],
+        *,
+        generation: int,
+        fitness_trend: Sequence[float] = (),
     ) -> str:
         """Reflective note for the next generation (last three notes kept)."""
-        note = self._build_evidence_reflection(ranked, generation=generation)
+        note = self._build_evidence_reflection(
+            ranked, generation=generation, fitness_trend=fitness_trend
+        )
         if not self.reflection.strip():
             return note
         parts = [p.strip() for p in self.reflection.split(" || ") if p.strip()]

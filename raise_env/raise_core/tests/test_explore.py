@@ -225,9 +225,6 @@ def test_fill_valid_soft_fails_empty_completion_and_pads_seed():
     evolver = _evolver(
         FlakyLLM(),
         population_size=2,
-        n_crossover=1,
-        n_mutation=1,
-        n_random=0,
         max_invalid_replacements=2,
     )
     # Gen0 batch raises empty → regen → more empties → seed fallback fills.

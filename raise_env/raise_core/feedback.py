@@ -306,6 +306,20 @@ def code_structure(code: str) -> CodeStructure:
     return CodeStructure(tuple(components), tuple(constants.items()), n_lines, True)
 
 
+def component_diversity(codes: Sequence[str]) -> Optional[float]:
+    """Mean pairwise Jaccard distance of the reward-component sets (0 = same).
+
+    Two codes without any component count as identical; ``None`` below 2 codes.
+    """
+    sets = [set(code_structure(code).components) for code in codes]
+    distances = [
+        1.0 - len(a & b) / len(a | b) if a | b else 0.0
+        for i, a in enumerate(sets)
+        for b in sets[i + 1 :]
+    ]
+    return sum(distances) / len(distances) if distances else None
+
+
 def _num(v: float) -> str:
     return f"{v:g}"
 
