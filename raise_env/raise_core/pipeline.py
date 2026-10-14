@@ -8,6 +8,7 @@ breeding) for G generations, then Stage III long PPO on the final population.
 from __future__ import annotations
 
 import os
+import sys
 import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -103,6 +104,9 @@ class RaiseRunConfig:
     feedback: FeedbackCardConfig = field(default_factory=FeedbackCardConfig)
 
     device: str = "cuda"
+    # Intra-op CPU threads for torch / OpenMP / MKL (0 = library default).
+    # The PPO MLPs are tiny; uncapped, torch keeps every core busy for no gain.
+    torch_threads: int = 1
     fast: bool = False
 
     def apply_fast_profile(self) -> None:
@@ -160,6 +164,21 @@ def _stage2_history(epochs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return rows
 
 
+def limit_cpu_threads(n: int) -> None:
+    """Cap torch / OpenMP / MKL intra-op threads to ``n`` (``n <= 0`` is a no-op).
+
+    The env vars only take effect if torch is not imported yet; they are also
+    inherited by spawned workers.
+    """
+    if n <= 0:
+        return
+    for var in ("OMP_NUM_THREADS", "MKL_NUM_THREADS"):
+        os.environ[var] = str(n)
+    torch = sys.modules.get("torch")
+    if torch is not None:
+        torch.set_num_threads(n)
+
+
 class RaisePipeline:
     """Run closed-loop evolution + Stage III and persist JSON artifacts."""
 
@@ -172,6 +191,7 @@ class RaisePipeline:
     ) -> None:
         self.config = config or RaiseRunConfig()
         self.llm = llm
+        limit_cpu_threads(int(self.config.torch_threads))
         self.domain_pack = domain_pack or load_domain(self.config.domain)
         # Smoke states read the active action space (int vs tuple action).
         self.domain_pack.apply_config(self.config)

@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
+
+import torch
 
 from raise_core import pipeline as pipeline_mod
 from raise_core.domains import make_stage3_trainer_for_domain
@@ -45,6 +48,22 @@ def test_pipeline_fast(tmp_path):
     # Stage III best is the highest Stage III fitness.
     fits = [(c.metadata or {})["fitness"] for c in arts.stage3_population]
     assert (arts.best_stage3.metadata or {})["fitness"] == max(fits)
+
+
+def test_limit_cpu_threads(monkeypatch):
+    monkeypatch.setenv("OMP_NUM_THREADS", "8")
+    monkeypatch.setenv("MKL_NUM_THREADS", "8")
+    before = torch.get_num_threads()
+    try:
+        pipeline_mod.limit_cpu_threads(0)
+        assert os.environ["OMP_NUM_THREADS"] == "8"
+        assert torch.get_num_threads() == before
+        pipeline_mod.limit_cpu_threads(1)
+        assert os.environ["OMP_NUM_THREADS"] == "1"
+        assert os.environ["MKL_NUM_THREADS"] == "1"
+        assert torch.get_num_threads() == 1
+    finally:
+        torch.set_num_threads(before)
 
 
 class _MetadataReassigningStage3:

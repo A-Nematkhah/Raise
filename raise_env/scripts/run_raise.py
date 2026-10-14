@@ -186,6 +186,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Parallel Stage II training threads",
     )
     parser.add_argument(
+        "--torch-threads",
+        type=int,
+        default=_DEFAULTS.torch_threads,
+        help="CPU intra-op threads for torch/OpenMP/MKL (0 = library default)",
+    )
+    parser.add_argument(
         "--eval-mode",
         choices=("both", "holdout_only"),
         default=_DEFAULTS.eval_mode,
@@ -371,6 +377,7 @@ def main() -> int:
             component_instrumentation=bool(args.feedback_components),
         ),
         device=args.device,
+        torch_threads=max(0, int(args.torch_threads)),
     )
     if args.fast:
         cfg.apply_fast_profile()
