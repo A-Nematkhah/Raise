@@ -9,7 +9,8 @@ trainers) fall back to ``SR - CR - 0.5 * TR``.
 
 from __future__ import annotations
 
-from typing import Any, Mapping, Optional, Sequence
+import math
+from typing import Any, List, Mapping, Optional, Sequence
 
 from domains.highway.metrics import highway_fitness
 from raise_core.candidate import RewardCandidate
@@ -62,3 +63,39 @@ def pick_best_trained(
     if not scored:
         return None
     return max(scored, key=candidate_fitness)
+
+
+def candidate_fitness_se(candidate: RewardCandidate) -> float:
+    """Bootstrap SE of the cached fitness (0.0 when the trainer reports none)."""
+    metrics = (candidate.metadata or {}).get("last_metrics") or {}
+    try:
+        se = float(metrics.get("fitness_se"))
+    except (TypeError, ValueError):
+        return 0.0
+    return se if math.isfinite(se) and se > 0.0 else 0.0
+
+
+def statistical_ties(
+    snapshots: Sequence[RewardCandidate],
+    best: RewardCandidate,
+    *,
+    z: float = 2.0,
+) -> List[str]:
+    """Ids whose fitness is within ``z * max(se_best, se_i)`` of ``best``.
+
+    A gap inside that band is evaluation noise, so the argmax among these
+    candidates is not a meaningful ranking.
+    """
+    best_fit = candidate_fitness(best)
+    best_se = candidate_fitness_se(best)
+    ties: List[str] = []
+    for cand in snapshots:
+        if cand.candidate_id == best.candidate_id:
+            continue
+        fit = candidate_fitness(cand)
+        if fit == float("-inf"):
+            continue
+        band = z * max(best_se, candidate_fitness_se(cand))
+        if best_fit - fit <= band:
+            ties.append(str(cand.candidate_id))
+    return ties

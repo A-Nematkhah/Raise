@@ -104,7 +104,8 @@ def test_stage3_receives_highway_config(tmp_path, monkeypatch):
     assert seen
     s3 = seen[0]
     assert s3.highway_eval_mode == "holdout_only"
-    assert s3.highway_warm_start is True
+    # Stage II warm start does not leak into Stage III's K3 comparison.
+    assert s3.highway_warm_start is False
     assert s3.highway_n_envs == 2
     assert s3.train_env_steps == cfg.stage3_train_steps
     assert s3.highway_n_steps == 64
@@ -113,5 +114,6 @@ def test_stage3_receives_highway_config(tmp_path, monkeypatch):
 
 def test_warm_start_off_by_default():
     assert RaiseRunConfig().highway_warm_start is False
+    assert RaiseRunConfig().stage3_warm_start is False
     assert Stage2Config().highway_warm_start is False
     assert Stage3Config().highway_warm_start is False

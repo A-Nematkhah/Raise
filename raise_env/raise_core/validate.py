@@ -5,6 +5,12 @@ Every candidate of the final closed-loop population is trained once for K3
 environment steps and evaluated on E3 episodes. The best is the trained
 candidate with the highest fitness. Crash-safe: progress is checkpointed
 after each candidate under ``{run}/stage3/checkpoint.json``.
+
+Every candidate trains with the same seed and is evaluated on scenarios
+(``seed + STAGE3_EVAL_SEED_OFFSET``) that no closed-loop generation saw. The
+winner's fitness is a max over noisy estimates, so it is biased upward; the
+pipeline re-evaluates the winner alone on a further unseen seed family
+(``seed + FINAL_EVAL_SEED_OFFSET``) for the number to report.
 """
 
 from __future__ import annotations
@@ -19,7 +25,12 @@ from raise_core.candidate import RewardCandidate
 from raise_core.population_io import deserialize_population, load_candidate_dict
 from raise_core.refine import ProxyMetrics, _stable_code_hash
 from raise_core.sandbox import RewardValidator
-from raise_core.selection import candidate_fitness, metrics_fitness
+from raise_core.selection import (
+    candidate_fitness,
+    candidate_fitness_se,
+    metrics_fitness,
+    statistical_ties,
+)
 from raise_core.stage3_checkpoint import (
     build_checkpoint,
     load_checkpoint,
@@ -31,6 +42,11 @@ logger = logging.getLogger(__name__)
 
 # K3 default (environment steps per candidate).
 STAGE3_STEPS: int = 70_000
+
+# Eval seed bases relative to the run seed. Closed-loop generation g uses
+# ``seed + g * 1000``, so these stay clear of any realistic G.
+STAGE3_EVAL_SEED_OFFSET: int = 10_000_000
+FINAL_EVAL_SEED_OFFSET: int = 20_000_000
 
 # Stage II results that must not leak into Stage III selection.
 _STAGE2_RESULT_KEYS = (
@@ -64,6 +80,8 @@ class Stage3Config:
     # Same PPO rollout / eval policy mode as Stage II so both stages are comparable.
     highway_n_steps: int = 64
     highway_eval_deterministic: bool = False
+    # None -> ``seed + round_index`` (the closed loop's generation-0 scenarios).
+    highway_eval_seed_base: Optional[int] = None
 
 
 @dataclass
@@ -133,6 +151,18 @@ class StubPolicyTrainer(PolicyTrainer):
         )
         return TrainEvalBundle(metrics=metrics, checkpoint_path=None)
 
+    def reevaluate(
+        self,
+        candidate: RewardCandidate,
+        *,
+        round_index: int,
+        config: Stage3Config,
+    ) -> ProxyMetrics:
+        """Eval-only pass; the stub has no policy, so it re-derives the metrics."""
+        return self.train_and_eval(
+            candidate, round_index=round_index, config=config
+        ).metrics
+
 
 def _stage3_input(candidate: RewardCandidate) -> RewardCandidate:
     """Detached copy without Stage II results (Stage II fitness kept for reports)."""
@@ -182,6 +212,17 @@ class Stage3Runner:
             "seed": int(cfg.seed),
             "device": str(cfg.device),
             "output_root": str(cfg.output_root),
+            "highway_action_mode": str(cfg.highway_action_mode),
+            "highway_action_continuous_lateral": bool(cfg.highway_action_continuous_lateral),
+            "highway_meta_fine_low": float(cfg.highway_meta_fine_low),
+            "highway_meta_fine_high": float(cfg.highway_meta_fine_high),
+            "highway_meta_fine_n": int(cfg.highway_meta_fine_n),
+            "highway_eval_mode": str(cfg.highway_eval_mode),
+            "highway_warm_start": bool(cfg.highway_warm_start),
+            "highway_n_envs": int(cfg.highway_n_envs),
+            "highway_n_steps": int(cfg.highway_n_steps),
+            "highway_eval_deterministic": bool(cfg.highway_eval_deterministic),
+            "highway_eval_seed_base": cfg.highway_eval_seed_base,
         }
 
     def _warn_config_drift(self, saved: Dict[str, Any]) -> None:
@@ -336,8 +377,90 @@ class Stage3Runner:
         self._persist(status="done", population=pop, next_index=n)
         return list(self.trained)
 
+    def selection_summary(self) -> Dict[str, Any]:
+        """Winner plus the candidates statistically tied with it (manifest row)."""
+        n_failed = sum(1 for r in self.history if r.status == "failed")
+        best = self.best_trained
+        if best is None:
+            return {
+                "status": "all_failed" if self.history else "empty",
+                "n_trained": len(self.trained),
+                "n_failed": n_failed,
+            }
+        ties = statistical_ties(self.trained, best)
+        if ties:
+            console.warn(
+                f"best {best.candidate_id} is within 2 SE of {', '.join(ties)}; "
+                "the Stage III ranking among them is noise",
+                stage="Stage III",
+            )
+        return {
+            "status": "ok",
+            "best_id": str(best.candidate_id),
+            "fitness": candidate_fitness(best),
+            "fitness_se": candidate_fitness_se(best),
+            "tied_ids": ties,
+            "n_trained": len(self.trained),
+            "n_failed": n_failed,
+            "eval_episodes": int(self.config.eval_episodes),
+            "eval_seed_base": self.config.highway_eval_seed_base,
+        }
+
+    def final_eval(
+        self, candidate: RewardCandidate, *, episodes: int, seed_base: int
+    ) -> Optional[Dict[str, Any]]:
+        """Re-evaluate the selected policy alone on unseen scenarios.
+
+        Selection already used the Stage III scores, so only an evaluation on
+        fresh seeds gives an unbiased estimate of the winner's fitness.
+        Returns ``None`` when disabled or the trainer cannot re-evaluate.
+        """
+        reevaluate = getattr(self.trainer, "reevaluate", None)
+        if int(episodes) <= 0 or reevaluate is None:
+            return None
+        md = dict(candidate.metadata or {})
+        for key in _STAGE2_RESULT_KEYS:
+            if key != "checkpoint_path":
+                md.pop(key, None)
+        probe = replace(candidate, metadata=md)
+        cfg = replace(
+            self.config,
+            eval_episodes=int(episodes),
+            highway_eval_seed_base=int(seed_base),
+        )
+        console.banner(
+            f"Final blind eval - {candidate.candidate_id} ({int(episodes)} episodes)"
+        )
+        row: Dict[str, Any] = {
+            "candidate_id": str(candidate.candidate_id),
+            "episodes": int(episodes),
+            "seed_base": int(seed_base),
+        }
+        try:
+            result = reevaluate(probe, round_index=0, config=cfg)
+        except Exception as exc:  # noqa: BLE001 - the trained winner is still valid
+            logger.exception("final eval failed for %s", candidate.candidate_id)
+            console.warn(f"final eval failed ({exc})", stage="Stage III")
+            return {**row, "status": "failed", "error": f"{type(exc).__name__}: {exc}"}
+        bundle = result if isinstance(result, TrainEvalBundle) else TrainEvalBundle(result)
+        metrics = _trained_metrics(probe, bundle)
+        row.update(
+            status="ok",
+            fitness=float(metrics["fitness"]),
+            fitness_se=metrics.get("fitness_se"),
+            metrics=metrics,
+        )
+        console.status(
+            f"final eval {candidate.candidate_id} fitness={row['fitness']:.3f} "
+            f"(Stage III selection score {candidate_fitness(candidate):.3f})",
+            stage="Stage III",
+        )
+        return row
+
 
 __all__ = [
+    "FINAL_EVAL_SEED_OFFSET",
+    "STAGE3_EVAL_SEED_OFFSET",
     "STAGE3_STEPS",
     "PolicyTrainer",
     "Stage3Config",

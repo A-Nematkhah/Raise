@@ -87,11 +87,16 @@ class HighwayAdapter:
             )
         raise ValueError(f"Unknown stage for HighwayAdapter: {stage!r}")
 
-    def reevaluate(self, candidate: Any, *, round_index: int, config: Any) -> Any:
-        """Stage II eval-only pass of an already trained candidate."""
-        return self._stage2_trainer().reevaluate(
-            candidate, round_index=round_index, config=config
-        )
+    def reevaluate(
+        self, candidate: Any, *, round_index: int, config: Any, stage: str = "stage2"
+    ) -> Any:
+        """Eval-only pass of an already trained candidate."""
+        stage_key = str(stage).strip().lower()
+        if stage_key in ("3", "stage3", "iii"):
+            trainer = self._stage3_trainer()
+        else:
+            trainer = self._stage2_trainer()
+        return trainer.reevaluate(candidate, round_index=round_index, config=config)
 
 
 class HighwayStage2Trainer:
@@ -120,6 +125,11 @@ class HighwayStage3Trainer:
             config=config,
             stage="stage3",
             **kwargs,
+        )
+
+    def reevaluate(self, candidate: Any, *, round_index: int, config: Any) -> Any:
+        return self.adapter.reevaluate(
+            candidate, round_index=round_index, config=config, stage="stage3"
         )
 
 
@@ -697,7 +707,11 @@ class HighwayPPOTrainer:
                 config=config,
                 seed=int(getattr(config, "seed", 425)) + int(round_index),
                 env_cfg=training_env_config(),
-                stage_tag="Stage II re-eval",
+                stage_tag=(
+                    "Stage III re-eval"
+                    if self.stage in ("stage3", "3", "iii")
+                    else "Stage II re-eval"
+                ),
             )
             return holdout_metrics
 

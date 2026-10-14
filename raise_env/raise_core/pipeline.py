@@ -33,7 +33,13 @@ from raise_core.population_io import candidate_to_dict
 from raise_core.raise_loop import ClosedLoopConfig, ClosedLoopRunner
 from raise_core.raise_loop.logging_io import write_json
 from raise_core.selection import candidate_fitness, pick_best_trained
-from raise_core.validate import STAGE3_STEPS, Stage3Config, Stage3Runner
+from raise_core.validate import (
+    FINAL_EVAL_SEED_OFFSET,
+    STAGE3_EVAL_SEED_OFFSET,
+    STAGE3_STEPS,
+    Stage3Config,
+    Stage3Runner,
+)
 
 
 @dataclass
@@ -62,6 +68,11 @@ class RaiseRunConfig:
     # Stage III: long PPO on the final population.
     stage3_train_steps: int = STAGE3_STEPS
     stage3_eval_episodes: int = 30
+    # Off: Stage III compares candidates at K3 steps each, and a warm start
+    # would add the Stage II steps to some of them.
+    stage3_warm_start: bool = False
+    # Episodes of the blind re-evaluation of the Stage III winner (0 = skip).
+    final_eval_episodes: int = 100
 
     # Stub trainers (pytest / --fast).
     use_stub: bool = False
@@ -105,6 +116,7 @@ class RaiseRunConfig:
         self.stage2_eval_episodes = 2
         self.stage3_train_steps = 8
         self.stage3_eval_episodes = 2
+        self.final_eval_episodes = 2
         self.use_stub = True
         self.llm_provider = "seed"
         self.n_crossover = self.n_mutation = self.n_random = None
@@ -226,8 +238,9 @@ class RaisePipeline:
             highway_meta_fine_high=float(cfg.highway_meta_fine_high),
             highway_meta_fine_n=int(cfg.highway_meta_fine_n),
             highway_eval_mode=str(cfg.highway_eval_mode or "both"),
-            highway_warm_start=bool(cfg.highway_warm_start),
+            highway_warm_start=bool(cfg.stage3_warm_start),
             highway_n_envs=max(1, int(cfg.highway_n_envs or 1)),
+            highway_eval_seed_base=int(cfg.seed) + STAGE3_EVAL_SEED_OFFSET,
         )
 
     def run(self) -> RaiseArtifacts:
@@ -311,7 +324,24 @@ class RaisePipeline:
             config=self._stage3_config(),
         )
         stage3_pop = s3_runner.run(stage2_pop)
-        best_s3 = s3_runner.best_trained or best_s2
+        stage3_selection = s3_runner.selection_summary()
+        final_eval: Optional[Dict[str, Any]] = None
+        if s3_runner.best_trained is None:
+            console.warn(
+                f"no Stage III candidate trained; falling back to the Stage II best "
+                f"{best_s2.candidate_id} (its fitness is a Stage II score)",
+                stage="pipeline",
+            )
+            best_s3 = best_s2
+        else:
+            best_s3 = s3_runner.best_trained
+            final_eval = s3_runner.final_eval(
+                best_s3,
+                episodes=int(cfg.final_eval_episodes),
+                seed_base=int(cfg.seed) + FINAL_EVAL_SEED_OFFSET,
+            )
+            if final_eval is not None:
+                best_s3.metadata = {**(best_s3.metadata or {}), "final_eval": final_eval}
         write_json(
             os.path.join(cfg.output_dir, "stage3_population.json"),
             {
@@ -337,6 +367,13 @@ class RaisePipeline:
         manifest["best_stage1_id"] = best_s1.candidate_id
         manifest["best_stage2_id"] = best_s2.candidate_id
         manifest["best_stage3_id"] = best_s3.candidate_id
+        manifest["stage3_selection"] = stage3_selection
+        # Full metrics (per-episode rows) stay on final_candidate.json.
+        manifest["final_eval"] = (
+            None
+            if final_eval is None
+            else {k: v for k, v in final_eval.items() if k != "metrics"}
+        )
         manifest["closed_loop_summary"] = dict(cl_result.manifest)
         write_json(os.path.join(cfg.output_dir, "manifest.json"), manifest)
 
