@@ -41,6 +41,8 @@ def ensure_utf8_stdio() -> None:
 
 def is_interactive() -> bool:
     """True when stderr looks like a live terminal (not a pipe / CI capture)."""
+    if os.environ.get("RAISE_PLAIN_PROGRESS", "").strip() in ("1", "true", "yes"):
+        return False
     if os.environ.get("RAISE_FORCE_TQDM", "").strip() in ("1", "true", "yes"):
         return True
     if os.environ.get("CI") or os.environ.get("GITHUB_ACTIONS"):
@@ -51,6 +53,24 @@ def is_interactive() -> bool:
         return False
 
 
+class _TqdmAwareStreamHandler(logging.StreamHandler):
+    """Write log lines via ``tqdm.write`` so active progress bars do not erase them."""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            msg = self.format(record)
+            try:
+                from tqdm import tqdm  # type: ignore
+
+                tqdm.write(msg, file=self.stream)
+            except Exception:  # noqa: BLE001
+                stream = self.stream
+                stream.write(msg + self.terminator)
+                self.flush()
+        except Exception:  # noqa: BLE001
+            self.handleError(record)
+
+
 def configure_run_logging(*, verbose: bool = False) -> None:
     """
     Readable default logs: INFO for RAISE, quiet HTTP/SDK noise.
@@ -59,10 +79,16 @@ def configure_run_logging(*, verbose: bool = False) -> None:
     full request dumps (those made 1h runs unreadable).
     """
     root_level = logging.INFO
+    handler = _TqdmAwareStreamHandler(sys.stderr)
+    handler.setFormatter(
+        logging.Formatter(
+            fmt="%(asctime)s %(levelname)s %(message)s",
+            datefmt="%H:%M:%S",
+        )
+    )
     logging.basicConfig(
         level=root_level,
-        format="%(asctime)s %(levelname)s %(message)s",
-        datefmt="%H:%M:%S",
+        handlers=[handler],
         force=True,
     )
     set_verbose(bool(verbose))
@@ -160,31 +186,62 @@ def timed(label: str, *, stage: Optional[str] = None) -> Iterator[None]:
 
 
 class _PlainProgress:
-    """Minimal fallback when tqdm is unavailable or non-interactive."""
+    """Periodic INFO progress when tqdm is unavailable or non-interactive."""
 
-    def __init__(self, total: Optional[int], desc: str, *, log_every: int = 0) -> None:
+    def __init__(
+        self,
+        total: Optional[int],
+        desc: str,
+        *,
+        log_every: int = 0,
+        min_log_interval: float = 15.0,
+    ) -> None:
         self.total = total
         self.desc = desc
         self.n = 0
         self._log_every = log_every
+        self._min_log_interval = float(min_log_interval)
+        self._last_log_t = time.perf_counter()
+        self._last_logged_n = 0
         if total and total > 0 and log_every <= 0:
-            self._log_every = max(1, total // 10)
+            # ~10 ticks for long PPO runs; denser for short budgets.
+            self._log_every = max(1, min(max(1, total // 10), max(1, total)))
         if desc:
             status(f"{desc} (0/{total})" if total else f"{desc} ...")
 
+    def _emit(self) -> None:
+        if self.total:
+            n_show = min(self.n, self.total)
+            pct = 100.0 * n_show / max(1, self.total)
+            status(f"{self.desc} {n_show}/{self.total} ({pct:.0f}%)")
+        else:
+            status(f"{self.desc} {self.n}")
+        self._last_log_t = time.perf_counter()
+        self._last_logged_n = self.n
+
     def update(self, n: int = 1) -> None:
-        self.n += n
-        if self.total and self._log_every and (
-            self.n % self._log_every == 0 or self.n >= self.total
-        ):
-            pct = 100.0 * self.n / max(1, self.total)
-            status(f"{self.desc} {self.n}/{self.total} ({pct:.0f}%)")
+        prev = self.n
+        self.n += max(0, int(n))
+        if self.n == prev:
+            return
+        now = time.perf_counter()
+        timed_out = (now - self._last_log_t) >= self._min_log_interval
+        if self.total and self._log_every:
+            # Crossed a 10%-style bucket (handles large SB3 step deltas).
+            crossed = (self.n // self._log_every) > (prev // self._log_every)
+            finished = self.n >= self.total
+            if crossed or finished or timed_out:
+                self._emit()
+        elif timed_out or (self._log_every and self.n - self._last_logged_n >= self._log_every):
+            self._emit()
 
     def close(self) -> None:
         if self.total and self.n < self.total:
             status(f"{self.desc} {self.n}/{self.total} (stopped early)")
         elif self.desc and not self.total:
             status(f"{self.desc} finished ({self.n} steps)")
+        elif self.total and self.n >= self.total and self._last_logged_n < self.n:
+            self._emit()
 
     def __enter__(self) -> "_PlainProgress":
         return self
@@ -203,15 +260,16 @@ def progress(
     mininterval: float = 0.5,
 ) -> Any:
     """
-    tqdm progress bar when interactive; otherwise a quiet periodic logger.
+    tqdm progress bar when interactive; otherwise periodic INFO lines.
 
     Can wrap an iterable ``progress(range(n), desc=...)`` or be used as a
     manual bar ``with progress(total=n, desc=...) as p: p.update(1)``.
+
+    Non-interactive / CI / redirected stderr must not use a disabled tqdm
+    bar (that prints nothing for the whole PPO budget).
     """
-    disable = not is_interactive()
-    try:
-        from tqdm import tqdm  # type: ignore
-    except ImportError:
+    use_tqdm = is_interactive()
+    if not use_tqdm:
         if iterable is not None:
             items = list(iterable) if total is None else iterable
             n_total = total if total is not None else (
@@ -228,13 +286,31 @@ def progress(
             return _gen()
         return _PlainProgress(total, desc)
 
+    try:
+        from tqdm import tqdm  # type: ignore
+    except ImportError:
+        if iterable is not None:
+            items = list(iterable) if total is None else iterable
+            n_total = total if total is not None else (
+                len(items) if hasattr(items, "__len__") else None
+            )
+            bar = _PlainProgress(n_total, desc)
+
+            def _gen_plain():
+                for item in items:
+                    yield item
+                    bar.update(1)
+                bar.close()
+
+            return _gen_plain()
+        return _PlainProgress(total, desc)
+
     kwargs = dict(
         total=total,
         desc=desc,
         leave=leave,
         unit=unit,
         mininterval=mininterval,
-        disable=disable,
         file=sys.stderr,
         dynamic_ncols=True,
     )

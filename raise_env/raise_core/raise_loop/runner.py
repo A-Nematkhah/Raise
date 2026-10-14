@@ -465,6 +465,14 @@ class ClosedLoopRunner:
 
             n_ok = 0
             n_fail = 0
+            n_pending = sum(
+                1 for c in to_label if str(c.candidate_id) not in labeled_this_epoch
+            )
+            console.status(
+                f"epoch {g}: Stage II labeling {n_pending} candidate(s) "
+                f"(workers={max(1, int(cfg.label_workers or 1))})",
+                stage="closed-loop",
+            )
 
             def _label_one(cand: RewardCandidate, round_index: int) -> Dict[str, Any]:
                 if not _needs_reevaluation(cand, g):
