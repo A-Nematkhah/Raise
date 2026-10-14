@@ -311,3 +311,33 @@ len(text) >= 0.95 * int(max_tokens) and opening is not None and "```" not in tex
 8. **L1 تا L6:** متن معیار انتخاب، حفظ کامنت‌ها، عبارت‌های mutation، تمیزکاری.
 
 </div>
+
+---
+
+<div dir="rtl">
+
+## ۵. وضعیت اصلاحات
+
+همه‌ی یافته‌ها روی شاخه‌ی `simplify/highway-core` اصلاح شدند. بخش زیادی از H1 (خواندن `retry-after`، صبر تا آزادشدن کلید، مسیر تک‌کلید، برچسب کلید بدون پسوند) از قبل در درخت کاری بود؛ این دور بقیه را بست.
+
+| شناسه | وضعیت | commit | چه تغییر کرد |
+|---|---|---|---|
+| H1 | اصلاح شد | `dfcdb9c`، `f08f95d` | بودجه‌ی انتظار پیش‌فرض از ۱۸۰ به ۶۰۰ ثانیه رسید (`GROQ_MAX_WAIT_SECONDS`). بعد از اتمام بودجه، `GroqRateLimitError` در `is_recoverable_llm_error` است تا Stage I اسلات را soft-fail کند و کل اجرای چندساعته نمیرد. منطق `retry-after` و صبر وقتی همه کلیدها در cooldown هستند از قبل بود. |
+| H2 | اصلاح شد | `3c32c8f` | پرامپت batch نسل صفر همان `_REWARD_STATE_ACCESS` و قوانین sandbox را می‌گیرد، به‌همراه ممنوعیت تابع کمکی. |
+| M1 | اصلاح شد | `f08f95d` | کلاینت‌های Groq و vLLM روی `finish_reason == "length"` خطای `CompletionTruncatedError` می‌دهند. حدس طول برای کلاینت‌های بدون `finish_reason` ماند؛ fence بدون برچسب هم پوشش داده شد. |
+| M2 | اصلاح شد | `3803a19`، `f08f95d` | گزینه‌ی `reasoning_effort` برای Groq (فقط مدل‌های gpt-oss) و پرچم‌های CLI `--llm-max-tokens` و `--llm-reasoning-effort`. |
+| M3 | اصلاح شد | `3c32c8f`، `f08f95d` | system کلاینت و انتهای `D1_SYSTEM_PROMPT` خنثی شدند: کد در یک بلوک ```python؛ هر توضیح قبل از fence. |
+| M4 | اصلاح شد | `f08f95d` | vLLM دیگر متن `reasoning` را به‌جای پاسخ برنمی‌گرداند (`EmptyCompletionError`). خطاهای دائمی (400/401/404) retry نمی‌شوند. |
+| M5 | اصلاح شد | `f08f95d` | کلاینت‌ها `last_usage` (توکن، `finish_reason`، latency، تعداد تلاش) را نگه می‌دارند و `_request` رکورد `response` را در `llm_calls.jsonl` می‌نویسد. |
+| L1 | اصلاح شد | `3c32c8f` | متن معیار انتخاب: دروازه‌ی سرعت روی دهک پایین (`speed_p10`) و صفر شدن امتیاز پیشرفت/سرعت وقتی CR از حدود یک‌سوم بیشتر شود. |
+| L2 | اصلاح شد | `f08f95d` | `normalize` / `strip_redundant_scalar_subscripts` فقط وقتی درخت عوض شده `ast.unparse` می‌کند؛ کامنت‌ها حفظ می‌شوند. |
+| L3 | اصلاح شد | `3c32c8f` | mutation: «parent» و «targeted change» به‌جای underperforming / minimal edits؛ تشخیص برای SR≈۰ «بازنویسی بزرگ‌تر» می‌گوید نه «حتماً کل تابع». |
+| L4 | با H2 پوشش داده شد | `3c32c8f` | ممنوعیت تابع کمکی در پرامپت batch. |
+| L5 | اصلاح شد | `3c32c8f` | `lambda` از فهرست ممنوعه‌ی پرامپت حذف شد (sandbox آن را رد نمی‌کند). تکرار معیار انتخاب در D1 تکی از قبل با `compact` / حذف D4 در نردبان کوتاه‌سازی مدیریت می‌شد. |
+| L6 | اصلاح شد | `f08f95d`، `3c32c8f` | docstring ماژول `llm.py` به‌روز شد؛ پارامتر بی‌استفاده‌ی `elitist_code` حذف شد. بقیه‌ی موارد (برچسب کلید، عدم نوشتن مستقیم روی `_hold_until`، یکتایی `_is_non_retryable`) از قبل درست بودند. |
+
+**اثر روی اجرای واقعی:** با کارت بازخورد، فراخوانی‌های نسل‌های بعد دیگر به‌خاطر چند 429 پشت‌سرهم در کمتر از یک دقیقه نمی‌میرند؛ تا حدود ۱۰ دقیقه صبر می‌کنند و بعد soft-fail می‌شوند. Gen0 batch باید کمتر `getattr` و فیلد خیالی بدهد. پاسخ‌های بریده‌ی reasoning با `finish_reason=length` از بودجه‌ی «کد نامعتبر» جدا می‌شوند و قابل retry هستند. هزینه‌ی واقعی توکن از لاگ `response` قابل جمع است.
+
+**تست‌ها:** کل مجموعه پاس شد: ۳۵۶ تست سریع (به‌علاوه‌ی `test_key_manager` با `caplog` که جدا بدون `-p no:logging` اجرا شد) و تست کند `test_wrapper_step`. فایل جدید `test_llm_part3_fixes.py` و پوشش اضافه‌شده در `test_llm_extract`، `test_prompt_semantics`، `test_key_manager` و `test_ollama_client`.
+
+</div>
