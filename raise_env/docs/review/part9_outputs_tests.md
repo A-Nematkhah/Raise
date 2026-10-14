@@ -126,4 +126,20 @@ Seed پیش‌فرض ۴۲۵ نزدیک فضای آموزش است، نه لزو�
 
 **ترتیب پیشنهادی:** H1 ← M1 ← M2 ← L1 ← M3 ← L2.
 
+---
+
+## ۵. وضعیت اصلاحات
+
+| شناسه | وضعیت | چه شد |
+|---|---|---|
+| H1 | انجام شد | هر سطر `epochs.jsonl` حالا `evolve_best_fitness_se` هم دارد (برای elite منتقل‌شده هم، که در `label_metrics` نیست). نمودار best fitness نوار خطای ±۲ SE و شناسه‌ی کاندید را نشان می‌دهد. برای اجراهای قدیمی SE از `label_metrics` خوانده می‌شود. |
+| M1 | انجام شد | پنل بالا Score1 همان کاندید fitness-best (`evolve_best_score1`) را رسم می‌کند. max Score1 جمعیت به‌صورت خط‌چین کم‌رنگ و با برچسب جدا نشان داده می‌شود. |
+| M2 | انجام شد | GIF روی ترافیک holdout و خانواده‌ی seed ارزیابی کور (`seed + 20_000_000`) ساخته می‌شود. `viz_manifest.json` فیلدهای `traffic`، `seed_base` و `deterministic` را ثبت می‌کند. با یک policy واقعی بررسی شد. |
+| L1 | انجام شد | `manifest.json` → `post_run` شامل تعداد نمودارها، موفقیت viz و خطاها است. |
+| M3 | انجام شد (بخشی) | تست‌های جدید: `closed_loop_series`، تولید نمودار روی خروجی واقعی `--fast`، `post_run_summary`، `_resolve_checkpoint`، rollout با env ساختگی (holdout در برابر train) و پرچم‌های CLI (`--print-config`). `console.py` و `print_raise_report.py` هنوز تست ندارند. |
+| L2 | انجام شد | fixture نمودار با فیلدهای فعلی `epochs.jsonl` جایگزین شد. |
+| L3 | بدون تغییر | دامنه‌ی CI قابل قبول است. |
+
+**تست‌ها:** `domains/highway/tests/test_post_run_plots.py` (بازنویسی)، `domains/highway/tests/test_viz.py` (جدید).
+
 </div>

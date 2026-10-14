@@ -189,4 +189,23 @@ Stage III:     holdout base = 425 + 50003 = 50428   ← برابر gen0
 
 **ترتیب پیشنهادی اصلاح:** H2 ← H1 ← M3 ← M1 ← M2 ← Lها.
 
+---
+
+## ۶. وضعیت اصلاحات
+
+| شناسه | وضعیت | چه شد |
+|---|---|---|
+| H2 | انجام شد | Stage III روی `seed + 10_000_000` ارزیابی می‌شود (`STAGE3_EVAL_SEED_OFFSET`)، نه روی سناریوهای نسل صفر. holdout مؤثر با seed=425 از ۵۰۴۲۸ به ۱۰۰۵۰۴۲۸ رسید (با آموزش واقعی ۶۴ قدمی بررسی شد). |
+| H1 | انجام شد | (۱) ارزیابی کور نهایی: برنده به‌تنهایی و بدون آموزش روی `seed + 20_000_000` با `--final-eval-episodes` (پیش‌فرض ۱۰۰) دوباره ارزیابی می‌شود. نتیجه در `manifest.json` → `final_eval` و متریک کامل در `final_candidate.json` ذخیره می‌شود. fitness انتخاب دست نمی‌خورد. (۲) `manifest.json` → `stage3_selection.tied_ids` کاندیدهایی را نشان می‌دهد که اختلافشان با برنده کمتر از `2·max(SE)` است، و یک هشدار هم در کنسول چاپ می‌شود. قاعده‌ی انتخاب (argmax) عوض نشد. |
+| M3 | انجام شد | snapshot در Stage III حالا همه‌ی knobهای highway را پوشش می‌دهد (action mode، meta_fine، eval mode، warm start، n_envs، n_steps، deterministic، eval seed). |
+| M1 | انجام شد | `highway_warm_start` فقط روی Stage II اثر دارد. برای Stage III پرچم جدای `--stage3-warm-start` با پیش‌فرض خاموش اضافه شد. |
+| M2 | انجام شد | پرچم‌های `--domain`، `--highway-meta-fine-low` و `--highway-meta-fine-high` اضافه شدند. |
+| L1 | انجام شد | وقتی هیچ کاندیدی در Stage III آموزش نبیند، `stage3_selection.status = all_failed` ثبت می‌شود، یک هشدار چاپ می‌شود و ارزیابی نهایی انجام نمی‌شود. |
+| L2 | انجام شد | در `spec.md` توضیح داده شد که `train_seed` یکسان عمدی است. |
+| L3 | — | یافته‌ای نداشت. |
+
+**تست‌ها:** `raise_core/tests/test_stage3_part8_fixes.py`، به‌روزرسانی `test_pipeline.py`.
+
+**یادداشت پایان‌نامه:** عددی که باید گزارش شود `final_eval.fitness` است، نه `best_stage3`. هزینه‌ی ارزیابی کور با ۱۰۰ اپیزود چند دقیقه است.
+
 </div>
