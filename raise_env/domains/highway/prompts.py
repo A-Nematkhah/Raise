@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Optional
-
 from domains.highway.action_config import action_space_prompt_block
 from raise_core.sandbox.config import (
     SAFE_MATH_ATTRIBUTES,
@@ -31,12 +29,13 @@ _SELECTION_OBJECTIVE = (
     "on held-out rollouts. Candidates are ranked by one holdout fitness "
     "score (higher is better) that combines survival (survival rate minus "
     "twice the collision rate minus the off-road rate, scaled by a speed gate "
-    "that grows as the policy drives closer to free-flowing traffic speed) "
+    "based on the policy's low-end speed — the 10th percentile — so brief "
+    "high-speed spikes do not count as fast driving) "
     "with forward progress and mean speed, which only count in proportion to "
     "positive survival, minus penalties for lagging, degenerate or very slow "
-    "driving. A collision costs more than a survived episode earns, so "
-    "progress made before crashing earns nothing. Pure low-speed "
-    "lane-keeping is not preferred either. Reason about these "
+    "driving. When the collision rate exceeds about one third of episodes, "
+    "survival goes non-positive and the whole progress/speed score is zeroed. "
+    "Pure low-speed lane-keeping is not preferred either. Reason about these "
     "trade-offs directly from the evidence given to you."
 )
 
@@ -48,11 +47,11 @@ _DIAGNOSIS_BEFORE_CODE = (
     "trade-off, a degenerate strategy visible in the numbers, or something "
     "else you notice.\n"
     "2) Then revise the reward function to address your own diagnosis.\n"
-    "- If the survival/success rate is always near zero, rewrite the entire "
-    "reward function.\n"
+    "- If the survival/success rate is always near zero, a larger rewrite of "
+    "the reward function is appropriate.\n"
     "Output your diagnosis as plain text BEFORE the code fence. The code fence "
     "must contain ONLY the function, no diagnosis text inside it.\n"
-    "A 'small precise change' can still mean removing or replacing a constant "
+    "A targeted change can still mean removing or replacing a constant "
     "entirely if the evidence suggests it no longer reflects reality — don't "
     "assume an inherited number is correct just because it came from the "
     "parent."
@@ -61,8 +60,9 @@ _DIAGNOSIS_BEFORE_CODE = (
 # Token-budget fallback for ``_DIAGNOSIS_BEFORE_CODE`` (same contract, fewer words).
 _DIAGNOSIS_BEFORE_CODE_COMPACT = (
     "Before the code fence, write a 2-4 sentence diagnosis grounded only in the "
-    "evidence above, then revise the function to address it (rewrite it entirely "
-    "if the success rate is near zero). The fence must contain ONLY the function."
+    "evidence above, then revise the function to address it (a larger rewrite "
+    "is fine if the success rate is near zero). The fence must contain ONLY "
+    "the function."
 )
 
 _RETURN_CONTRACT = (
@@ -92,9 +92,8 @@ D1_SYSTEM_PROMPT = (
     + _BASE_MODEL_SPEED_PRIOR
     + _RETURN_CONTRACT
     + " "
-    + "Return **only** valid Python code enclosed within a fenced code block "
-    "for this initial generation (no commentary outside the block). "
-    "The code must be fully executable."
+    + "Put the code in exactly one ```python fenced block; any explanation must "
+    "come before the fence. The code must be fully executable."
 )
 
 D1_USER_PROMPT = """Please write a Python function named {func_name} for highway driving (highway-fast-v0).
@@ -184,7 +183,7 @@ Sandbox rules (CRITICAL — invalid code is discarded):
   ``(total_reward: float, reward_components: dict[str, float])``.
 - ``total_reward`` is the only value used for RL; ``reward_components`` is a flat
   dict of named terms (≤12 str keys, finite float values, no nesting) for reflection.
-- Do NOT use import/from, classes, while loops, print, lambda, comprehensions,
+- Do NOT use import/from, classes, while loops, print, comprehensions,
   generator expressions, or reflection builtins.
 - Forbidden: getattr, hasattr, __import__, eval, exec, type, setattr, delattr, globals, locals, vars, open.
 - Access HighwayRewardState only via dot notation (see below).
@@ -211,14 +210,14 @@ Synthesis Task:
 {diagnosis}
 """
 
-D2_MUTATION_PROMPT = """You are a reward function optimizer for highway driving. Mutate the underperforming parent using the evidence below with minimal edits.
+D2_MUTATION_PROMPT = """You are a reward function optimizer for highway driving. Mutate the parent using the evidence below with a targeted change.
 Prior Reflection / evidence:
 - {reflection}
-Underperforming Parent Code to Mutate:
+Parent Code to Mutate:
 - {func_signature}
 - {parent_code}
 Mutation Task:
-- Create a mutated `{func_name}` with a small precise change that addresses your diagnosis.
+- Create a mutated `{func_name}` with a targeted change that addresses your diagnosis.
 - Keep direct dot access; no getattr/hasattr.
 - Define exactly one function: def {func_name}(state, memory): ... returning (float, dict[str, float]).
 {sandbox_rules}
@@ -305,16 +304,32 @@ def format_d1_initial(
     )
 
 
+_D1_BATCH_SANDBOX_RULES = """
+Sandbox rules (CRITICAL — invalid code is discarded):
+- Define exactly {n} top-level functions `{func_name}_v1` … `{func_name}_v{n}`, each
+  returning ``(total_reward: float, reward_components: dict[str, float])``.
+- Do NOT define helper functions — each reward must be a single self-contained def.
+- ``total_reward`` is the only value used for RL; ``reward_components`` is a flat
+  dict of named terms (≤12 str keys, finite float values, no nesting) for reflection.
+- Do NOT use import/from, classes, while loops, print, comprehensions,
+  generator expressions, or reflection builtins.
+- Forbidden: getattr, hasattr, __import__, eval, exec, type, setattr, delattr, globals, locals, vars, open.
+- Access HighwayRewardState only via dot notation (see below).
+- Use ``memory`` (dict) for cross-timestep shaping; never invent state.history.
+{reward_state_access}
+- Hyperparameters as locals only; no extra args beyond (state, memory).
+- No module-level lists/dicts/sets (they would survive episode resets).
+- """ + _MAGNITUDE_RULE + """
+"""
+
 D1_BATCH_USER_PROMPT = """Please write **{n} diverse** Python reward functions for highway-fast-v0 driving.
 Each function: def {func_name}_vK(state, memory) for K=1..{n}, returning (finite float, dict[str, float]).
-Use HighwayRewardState fields only (state.ego.*, state.others, state.collision/off_road/timeout, state.progress, state.speed, memory).
-FORBIDDEN fields (will be rejected): lane_position, distance, robot, humans, gx, gy, history.
-No imports, classes, getattr/hasattr. """ + _MATH_RULE + """
+{sandbox_rules}
 {action_space_block}
 {seed_block}
 {reflection_block}
 {external_knowledge_block}
-Return only one fenced Python code block containing all {n} functions.
+Return exactly one fenced Python code block containing all {n} functions.
 """
 
 
@@ -344,6 +359,11 @@ def format_d1_initial_batch(
     return D1_BATCH_USER_PROMPT.format(
         n=int(n),
         func_name=func_name,
+        sandbox_rules=_D1_BATCH_SANDBOX_RULES.format(
+            n=int(n),
+            func_name=func_name,
+            reward_state_access=_REWARD_STATE_ACCESS,
+        ),
         action_space_block=action_space_prompt_block(),
         seed_block=seed_block,
         reflection_block=reflection_block,
@@ -378,14 +398,12 @@ def format_d2_mutation(
     *,
     func_name: str = "compute_reward",
     func_signature: str = "def compute_reward(state, memory):",
-    elitist_code: Optional[str] = None,
     compact: bool = False,
 ) -> str:
-    code = parent_code if elitist_code is None else elitist_code
     return D2_MUTATION_PROMPT.format(
         reflection=reflection.strip() or "(none)",
         func_signature=func_signature,
-        parent_code=code.rstrip(),
+        parent_code=parent_code.rstrip(),
         func_name=func_name,
         sandbox_rules=_D2_SANDBOX_RULES.format(
             func_name=func_name,
