@@ -9,12 +9,18 @@ the same scenarios, so the scenario does not separate the labels.
 
 Robot behaviours (holonomic; Score1 re-expresses actions for unicycle runs):
 
-- ``orca``          upstream ORCA policy (sees the humans)
-- ``orca_cautious`` upstream ORCA with ``safety_space`` 0.15 m
-- ``linear``        upstream Linear policy: straight to the goal at v_pref
-- ``linear_slow``   straight to the goal at 0.3 v_pref (freezing-like)
-- ``stop``          stands still (the "freezing robot")
-- ``random``        uniformly random CADRL action each step (seeded)
+- ``orca``            upstream ORCA (``safety_space`` 0)
+- ``orca_ss005``      ORCA with ``safety_space`` 0.05 m
+- ``orca_ss010``      ORCA with ``safety_space`` 0.10 m
+- ``orca_cautious``   ORCA with ``safety_space`` 0.15 m
+- ``orca_ss025``      ORCA with ``safety_space`` 0.25 m
+- ``orca_slow08``     ORCA at 0.8 ``v_pref`` (slower successes)
+- ``orca_slow06``     ORCA at 0.6 ``v_pref``
+- ``orca_reckless``   ORCA with ``time_horizon`` 1.0 s (reacts late; close successes)
+- ``linear``          straight to the goal at ``v_pref``
+- ``linear_slow``     straight to the goal at 0.3 ``v_pref``
+- ``stop``            stands still (the "freezing robot")
+- ``random``          uniformly random CADRL action each step (seeded)
 """
 
 from __future__ import annotations
@@ -30,7 +36,7 @@ import argparse  # noqa: E402
 import math  # noqa: E402
 import sys  # noqa: E402
 from collections import Counter  # noqa: E402
-from typing import Any, Callable, Dict, List  # noqa: E402
+from typing import Any, Callable, Dict, List, Tuple  # noqa: E402
 
 import numpy as np  # noqa: E402
 from crowd_sim.envs.policy.linear import Linear  # noqa: E402
@@ -48,9 +54,19 @@ from domains.crowdnav.stage1 import (  # noqa: E402
 from raise_core.console import ensure_utf8_stdio  # noqa: E402
 
 UPSTREAM_COMMIT = "20d678085c06831e658a65b9e20c8bb6f6ecdc10"
-BEHAVIOURS = ("orca", "orca_cautious", "linear", "linear_slow", "stop", "random")
+# (safety_space m, speed scale, time_horizon s). None time_horizon -> ORCA default (5 s).
+_ORCA_SPECS: Dict[str, Tuple[float, float, float | None]] = {
+    "orca": (0.0, 1.0, None),
+    "orca_ss005": (0.05, 1.0, None),
+    "orca_ss010": (0.10, 1.0, None),
+    "orca_cautious": (0.15, 1.0, None),
+    "orca_ss025": (0.25, 1.0, None),
+    "orca_slow08": (0.0, 0.8, None),
+    "orca_slow06": (0.0, 0.6, None),
+    "orca_reckless": (0.0, 1.0, 1.0),
+}
+BEHAVIOURS = tuple(_ORCA_SPECS) + ("linear", "linear_slow", "stop", "random")
 _SLOW_FRACTION = 0.3
-_CAUTIOUS_SAFETY_SPACE = 0.15
 
 
 def _joint_state(env: RewardInjectedCrowdNavEnv) -> JointState:
@@ -63,12 +79,21 @@ def _make_controller(
     behaviour: str, env: RewardInjectedCrowdNavEnv, rng: np.random.Generator
 ) -> Callable[[], Any]:
     """Per-step upstream action for ``behaviour`` (called after ``env.reset``)."""
-    if behaviour in ("orca", "orca_cautious"):
+    if behaviour in _ORCA_SPECS:
+        safety, speed_scale, time_horizon = _ORCA_SPECS[behaviour]
         policy = ORCA()
         policy.time_step = env.time_step
-        if behaviour == "orca_cautious":
-            policy.safety_space = _CAUTIOUS_SAFETY_SPACE
-        return lambda: policy.predict(_joint_state(env))
+        policy.safety_space = float(safety)
+        if time_horizon is not None:
+            policy.time_horizon = float(time_horizon)
+
+        def _orca() -> Any:
+            a = policy.predict(_joint_state(env))
+            if speed_scale == 1.0:
+                return a
+            return ActionXY(a.vx * speed_scale, a.vy * speed_scale)
+
+        return _orca
     if behaviour in ("linear", "linear_slow"):
         policy = Linear()
         scale = 1.0 if behaviour == "linear" else _SLOW_FRACTION
@@ -160,6 +185,15 @@ def main(argv: List[str] | None = None) -> int:
             "seed": int(args.seed),
             "episodes_per_behaviour": int(args.episodes),
             "behaviours": behaviours,
+            "orca_specs": {
+                k: {
+                    "safety_space": s,
+                    "speed_scale": v,
+                    "time_horizon": th,
+                }
+                for k, (s, v, th) in _ORCA_SPECS.items()
+            },
+
         },
     )
     by_behaviour: Dict[str, Counter] = {}

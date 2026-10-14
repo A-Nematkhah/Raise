@@ -72,9 +72,9 @@ minimum distance in danger).
 ## Stage I (Score1)
 
 Score1 is a cheap sanity filter over a dataset of real upstream rollouts
-(`scripts/collect_crowdnav_stage1_dataset.py`: ORCA, cautious ORCA, Linear,
-slow Linear, stop and random robots on the same `train` scenarios). Returns
-are discounted with PPO's γ.
+(`scripts/collect_crowdnav_stage1_dataset.py`: ORCA at several clearance /
+speed / reaction settings, Linear, slow Linear, stop and random robots on
+the same `train` scenarios). Returns are discounted with PPO's γ.
 
 ```
 safety  = 2·AUC − 1 of success ≻ timeout ≻ collision on discounted returns

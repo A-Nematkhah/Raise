@@ -7,10 +7,11 @@ candidates on. Regenerate it with (about 10 s on CPU):
 python scripts/collect_crowdnav_stage1_dataset.py --out domains/crowdnav/data/stage1_dataset
 ```
 
-Defaults: 40 upstream `train` scenarios (seed 7) × 6 robot behaviours
-(`orca`, `orca_cautious`, `linear`, `linear_slow`, `stop`, `random`), all
-rollouts of the vendored, unmodified `crowd_sim`. Labels are the upstream
-episode outcomes (`ReachGoal` → `success`, `Collision`, `Timeout`).
+Defaults: 40 upstream `train` scenarios (seed 7) × 12 robot behaviours
+(ORCA at several `safety_space` / speed / `time_horizon` settings, plus
+Linear, slow Linear, stop and random), all rollouts of the vendored,
+unmodified `crowd_sim`. Labels are the upstream episode outcomes
+(`ReachGoal` → `success`, `Collision`, `Timeout`).
 
 Files:
 
