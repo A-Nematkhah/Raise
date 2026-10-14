@@ -239,7 +239,8 @@ the disabled prompts are byte-identical to the pre-card ones.
 1. **Gen0**: the LLM proposes N reward functions (one batched call); each passes
    AST policy → spawned smoke test → compile.
 2. **Each generation g < G**: Score1 on the Stage I dataset; every new
-   executable candidate is PPO-trained for K2 env steps and evaluated on E2
+   executable candidate Score1 did not hard-reject (rejects are listed in
+   `skipped_score1_ids` and never trained) is PPO-trained for K2 env steps and evaluated on E2
    holdout episodes (eval seeds shared within the generation; every candidate
    trains from scratch, `--highway-warm-start` opts into copying a parent's
    policy weights). A genome carried over by elitism is not retrained: its
@@ -270,6 +271,17 @@ the disabled prompts are byte-identical to the pre-card ones.
    copies (`duplicate_of`) and is re-evaluated instead of retrained; identical
    new genomes in one generation are trained once (`duplicate_ids`,
    `n_unique_genomes` in `epochs.jsonl`).
+   Resume (`--resume`): `closed_loop/checkpoint.json` is the source of
+   truth; the copy in the run root is a fallback when it is unreadable. A
+   checkpoint is written after every Stage II label; only successful labels
+   count as done, so a resumed run retries failed ones (`labeled_ids` vs
+   `failed_ids` in the epoch row). An epoch that is run again replaces its row
+   in `epochs.jsonl` (and drops later rows) instead of appending a duplicate;
+   a torn line is skipped with a warning. In a row marked `resumed`, the
+   counters `n_label_ok` / `n_label_failed` cover only the resumed process,
+   while `labeled_ids` covers the whole epoch. Changed run settings
+   (N, G, K2, E2, seed, operator counts, action/eval mode) are logged as a
+   warning and the resumed run continues with the new ones.
 3. **Stage III**: every candidate of the final population is trained once for
    K3 env steps and evaluated on E3 episodes; the final candidate is the best
    Stage III fitness. No LLM call.
