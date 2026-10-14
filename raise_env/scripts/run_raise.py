@@ -35,6 +35,7 @@ from datetime import datetime  # noqa: E402
 
 from raise_core import console  # noqa: E402
 from raise_core.console import ensure_utf8_stdio  # noqa: E402
+from raise_core.domains import available_domains  # noqa: E402
 from raise_core.explore import MUTATION_PARENTS  # noqa: E402
 from raise_core.feedback import FeedbackCardConfig  # noqa: E402
 from raise_core.pipeline import RaisePipeline, RaiseRunConfig  # noqa: E402
@@ -59,6 +60,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run directory (default: results/highway_<timestamp>)",
     )
     parser.add_argument("--seed", type=int, default=_DEFAULTS.seed)
+    parser.add_argument(
+        "--domain", choices=available_domains(), default=_DEFAULTS.domain
+    )
     parser.add_argument(
         "--llm",
         type=str,
@@ -126,6 +130,24 @@ def build_parser() -> argparse.ArgumentParser:
         "--stage3-eval-episodes", type=int, default=_DEFAULTS.stage3_eval_episodes
     )
     parser.add_argument(
+        "--stage3-warm-start",
+        action=argparse.BooleanOptionalAction,
+        default=_DEFAULTS.stage3_warm_start,
+        help=(
+            "Warm-start Stage III PPO from the Stage II policy (off by default: "
+            "warm-started candidates would train longer than K3)"
+        ),
+    )
+    parser.add_argument(
+        "--final-eval-episodes",
+        type=int,
+        default=_DEFAULTS.final_eval_episodes,
+        help=(
+            "Blind re-evaluation of the Stage III winner on unseen scenarios "
+            "(0 = skip); report this fitness, not the selection score"
+        ),
+    )
+    parser.add_argument(
         "--elitism",
         action=argparse.BooleanOptionalAction,
         default=_DEFAULTS.elitism,
@@ -174,7 +196,7 @@ def build_parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=_DEFAULTS.highway_warm_start,
         help=(
-            "Warm-start PPO from the parent's checkpoint when available "
+            "Stage II: warm-start PPO from the parent's checkpoint when available "
             "(off by default: warm-started children get a larger effective budget)"
         ),
     )
@@ -192,6 +214,18 @@ def build_parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=_DEFAULTS.highway_action_continuous_lateral,
         help="ContinuousAction: include steering (Box(2,)); False → accel-only Box(1,)",
+    )
+    parser.add_argument(
+        "--highway-meta-fine-low",
+        type=float,
+        default=_DEFAULTS.highway_meta_fine_low,
+        help="meta_fine: lowest target speed (m/s)",
+    )
+    parser.add_argument(
+        "--highway-meta-fine-high",
+        type=float,
+        default=_DEFAULTS.highway_meta_fine_high,
+        help="meta_fine: highest target speed (m/s)",
     )
     parser.add_argument(
         "--highway-meta-fine-n",
@@ -295,6 +329,7 @@ def main() -> int:
     cfg = RaiseRunConfig(
         output_dir=output_dir,
         seed=args.seed,
+        domain=args.domain,
         llm_provider=args.llm,
         llm_model=args.llm_model,
         llm_max_tokens=args.llm_max_tokens,
@@ -307,6 +342,8 @@ def main() -> int:
         stage2_eval_episodes=args.stage2_eval_episodes,
         stage3_train_steps=args.stage3_train_steps,
         stage3_eval_episodes=args.stage3_eval_episodes,
+        stage3_warm_start=bool(args.stage3_warm_start),
+        final_eval_episodes=max(0, int(args.final_eval_episodes)),
         use_stub=bool(args.fast),
         elitism=bool(args.elitism),
         n_crossover=args.n_crossover,
@@ -320,6 +357,8 @@ def main() -> int:
         highway_eval_mode=str(args.highway_eval_mode),
         highway_action_mode=str(args.highway_action_mode),
         highway_action_continuous_lateral=bool(args.highway_action_continuous_lateral),
+        highway_meta_fine_low=float(args.highway_meta_fine_low),
+        highway_meta_fine_high=float(args.highway_meta_fine_high),
         highway_meta_fine_n=int(args.highway_meta_fine_n),
         feedback=FeedbackCardConfig(
             enabled=bool(args.feedback_card),
