@@ -4,8 +4,8 @@ RAISE Stage II — short PPO train + evaluation of one reward candidate.
 The closed-loop runner calls ``trainer.train_and_eval(candidate, round_index=,
 config=Stage2Config)`` for every new candidate each generation, and
 ``trainer.reevaluate(...)`` (eval only) for genomes carried in from an earlier
-generation, so every fitness it ranks comes from the same scenarios. The highway
-trainer (``domains.highway.adapter``) caches ``last_metrics`` / ``fitness`` /
+generation, so every fitness it ranks comes from the same scenarios. The domain
+trainer (``domains.crowdnav.adapter``) caches ``last_metrics`` / ``fitness`` /
 ``checkpoint_path`` on the candidate metadata.
 """
 
@@ -21,7 +21,7 @@ from raise_core.candidate import RewardCandidate
 
 @dataclass
 class Stage2Config:
-    """Stage II budget + highway trainer knobs."""
+    """Stage II budget + domain trainer knobs."""
 
     # PPO budget per candidate (environment steps).
     train_env_steps: int = 12_000
@@ -29,33 +29,37 @@ class Stage2Config:
     seed: int = 425
     output_root: str = "trained_models/stage2"
     device: str = "cpu"
-    highway_n_envs: int = 1
-    highway_warm_start: bool = False
-    highway_eval_mode: str = "both"
-    highway_action_mode: str = "meta_default"
-    highway_action_continuous_lateral: bool = True
-    highway_meta_fine_low: float = 15.0
-    highway_meta_fine_high: float = 35.0
-    highway_meta_fine_n: int = 21
+    n_envs: int = 1
+    warm_start: bool = False
+    eval_mode: str = "both"
+    # Upstream scenario split for the selection eval (val | test; train with
+    # eval_mode=both is always added as the train-split check).
+    eval_split: str = "val"
+    # Robot / action space (domains.crowdnav.settings).
+    action_mode: str = "discrete"
+    robot_kinematics: str = "holonomic"
+    action_speed_samples: int = 5
+    action_rotation_samples: int = 16
+    env_config_path: Optional[str] = None
     # PPO entropy bonus (SB3 default 0.0) and holdout eval policy mode.
     # Stochastic eval: deterministic argmax labels flip with the training seed.
-    highway_ent_coef: float = 0.0
-    highway_eval_deterministic: bool = False
+    ppo_ent_coef: float = 0.0
+    eval_deterministic: bool = False
     # PPO rollout length cap per env and optimisation epochs per rollout.
-    highway_n_steps: int = 64
-    highway_n_epochs: int = 10
+    ppo_n_steps: int = 256
+    ppo_n_epochs: int = 10
     # Eval scenario seed shared by every candidate trained in one generation
     # (None → per-candidate ``seed + round_index``).
-    highway_eval_seed_base: Optional[int] = None
+    eval_seed_base: Optional[int] = None
     # Feedback-card instrumentation: training-rollout outcome windows and
     # per-episode reward-component sums on holdout (no reward / PPO change).
-    highway_training_dynamics: bool = False
-    highway_reward_components: bool = False
+    record_training_dynamics: bool = False
+    record_reward_components: bool = False
 
 
 @dataclass
 class ProxyMetrics:
-    """Evaluation metrics M(r) (highway: PL=progress, ITR=speed, SD=gap)."""
+    """Evaluation metrics M(r) (CrowdNav: NT=nav time, PL=path length, ITR=danger freq, SD=min dist in danger)."""
 
     sr: float = 0.0
     cr: float = 0.0

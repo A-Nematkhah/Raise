@@ -1,4 +1,4 @@
-"""Helpers to speed highway Stage II without changing K2/K3 budgets."""
+"""Helpers to speed Stage II without changing K2/K3 budgets."""
 
 from __future__ import annotations
 
@@ -50,7 +50,7 @@ def label_candidates_parallel(
     """
     Run Stage II labels with a thread pool.
 
-    Note: highway-env stepping is mostly Python/NumPy on small arrays and may
+    Note: CrowdNav stepping (ORCA via rvo2 + NumPy) is mostly Python/NumPy on small arrays and may
     hold the GIL; PyTorch also shares an intra-op pool. ``workers>1`` can help
     when PPO/BLAS release the GIL, but can also contend with ``n_envs>1`` —
     benchmark wall-clock before assuming speedup.

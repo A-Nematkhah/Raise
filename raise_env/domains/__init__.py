@@ -1,1 +1,1 @@
-"""Environment domain packs (HighwayEnv)."""
+"""Environment domain packs (CrowdNav)."""

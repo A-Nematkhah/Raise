@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from types import ModuleType
-from typing import Any, Callable, Dict, Optional, Protocol, Sequence, runtime_checkable
+from typing import Any, Callable, Dict, Mapping, Optional, Protocol, Sequence, runtime_checkable
 
 
 @runtime_checkable
@@ -52,6 +52,16 @@ class DomainPack:
     smoke_states_fn: Optional[Callable[[], Sequence[Any]]] = None
     # SandboxConfig (attribute allowlist) for the reward validator.
     sandbox_config: Optional[Any] = None
+    # (config=, smoke_states=) -> RewardValidator; None -> generic validator.
+    make_validator: Optional[Callable[..., Any]] = None
+    # Applies a run / stage config's domain knobs process-wide (prompts,
+    # smoke states and Score1 must match the trained env); None -> no-op.
+    configure: Optional[Callable[[Any], Any]] = None
+    # Holdout metrics -> one-line evidence for D.2 prompts; None -> SR/CR/TR.
+    evidence_line: Optional[Callable[[Mapping[str, Any]], str]] = None
+    # (run_dir, *, episodes, seed) -> artifacts dict, and its manifest row.
+    post_run: Optional[Callable[..., Dict[str, Any]]] = None
+    post_run_summary: Optional[Callable[[Dict[str, Any]], Dict[str, Any]]] = None
     # Pack-local Stage II/III trainer factories.
     make_stage2_trainer: Optional[Callable[..., Any]] = None
     make_stage3_trainer: Optional[Callable[..., Any]] = None
@@ -59,6 +69,11 @@ class DomainPack:
     metadata: Dict[str, Any] = field(default_factory=dict)
     # Diagnostic feedback card module (``FeedbackCard`` + ``truncation_ladder``).
     feedback_card: Optional[ModuleType] = None
+
+    def apply_config(self, config: Any) -> None:
+        """Run the pack's ``configure`` hook (no-op without one)."""
+        if self.configure is not None:
+            self.configure(config)
 
     def format_d1_initial(self, **kwargs: Any) -> str:
         return self.prompts.format_d1_initial(**kwargs)

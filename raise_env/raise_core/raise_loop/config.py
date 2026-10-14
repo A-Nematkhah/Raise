@@ -16,7 +16,7 @@ class ClosedLoopConfig:
     generations: int = 4
     # Stage II PPO budget per candidate (environment steps).
     stage2_train_steps: int = 12_000
-    stage1_dataset_path: str = "domains/highway/data/stage1_dataset"
+    stage1_dataset_path: str = "domains/crowdnav/data/stage1_dataset"
     seed: int = 425
     device: str = "cpu"
     use_stub: bool = False
@@ -32,19 +32,20 @@ class ClosedLoopConfig:
     mutation_parents: str = "lower"
     # Crash-safe resume from ``checkpoint.json`` written under the run dir.
     resume: bool = True
-    domain: str = "highway"
+    domain: str = "crowdnav"
     # Stage II eval episodes (None → 20; 8 with stub trainers).
     eval_episodes: Optional[int] = None
-    # Highway speed knobs (same budget; higher wall throughput).
-    highway_n_envs: int = 1
-    highway_label_workers: int = 1
-    highway_warm_start: bool = False
-    highway_eval_mode: str = "holdout_only"  # both | holdout_only
-    highway_action_mode: str = "meta_default"
-    highway_action_continuous_lateral: bool = True
-    highway_meta_fine_low: float = 15.0
-    highway_meta_fine_high: float = 35.0
-    highway_meta_fine_n: int = 21
+    # Speed knobs (same budget; higher wall throughput).
+    n_envs: int = 1
+    label_workers: int = 1
+    warm_start: bool = False
+    eval_mode: str = "holdout_only"  # both | holdout_only
+    # Robot / action space (domains.crowdnav.settings).
+    action_mode: str = "discrete"
+    robot_kinematics: str = "holonomic"
+    action_speed_samples: int = 5
+    action_rotation_samples: int = 16
+    env_config_path: Optional[str] = None
     # Diagnostic feedback card + LLM input-token budget.
     feedback: FeedbackCardConfig = field(default_factory=FeedbackCardConfig)
 
@@ -55,6 +56,6 @@ class ClosedLoopConfig:
         self.stage2_train_steps = min(self.stage2_train_steps, 64)
         self.llm_provider = "seed"
         self.device = "cpu"
-        self.highway_n_envs = 1
-        self.highway_label_workers = 1
+        self.n_envs = 1
+        self.label_workers = 1
         self.n_crossover = self.n_mutation = self.n_random = None

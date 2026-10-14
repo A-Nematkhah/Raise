@@ -10,7 +10,8 @@ Every candidate trains with the same seed and is evaluated on scenarios
 (``seed + STAGE3_EVAL_SEED_OFFSET``) that no closed-loop generation saw. The
 winner's fitness is a max over noisy estimates, so it is biased upward; the
 pipeline re-evaluates the winner alone on a further unseen seed family
-(``seed + FINAL_EVAL_SEED_OFFSET``) for the number to report.
+(``seed + FINAL_EVAL_SEED_OFFSET``) of the domain's ``test`` split (selection
+evals use ``val``) for the number to report.
 """
 
 from __future__ import annotations
@@ -47,6 +48,8 @@ STAGE3_STEPS: int = 70_000
 # ``seed + g * 1000``, so these stay clear of any realistic G.
 STAGE3_EVAL_SEED_OFFSET: int = 10_000_000
 FINAL_EVAL_SEED_OFFSET: int = 20_000_000
+# Scenario split of the final blind evaluation (never used for selection).
+FINAL_EVAL_SPLIT: str = "test"
 
 # Stage II results that must not leak into Stage III selection.
 _STAGE2_RESULT_KEYS = (
@@ -60,7 +63,7 @@ _STAGE2_RESULT_KEYS = (
 
 @dataclass
 class Stage3Config:
-    """Stage III budget + highway trainer knobs."""
+    """Stage III budget + domain trainer knobs."""
 
     train_env_steps: int = STAGE3_STEPS
     eval_episodes: int = 30
@@ -69,19 +72,21 @@ class Stage3Config:
     device: str = "cpu"
     # Crash-safe resume (``{run}/stage3/checkpoint.json``).
     resume: bool = True
-    highway_action_mode: str = "meta_default"
-    highway_action_continuous_lateral: bool = True
-    highway_meta_fine_low: float = 15.0
-    highway_meta_fine_high: float = 35.0
-    highway_meta_fine_n: int = 21
-    highway_eval_mode: str = "both"
-    highway_warm_start: bool = False
-    highway_n_envs: int = 1
+    action_mode: str = "discrete"
+    robot_kinematics: str = "holonomic"
+    action_speed_samples: int = 5
+    action_rotation_samples: int = 16
+    env_config_path: Optional[str] = None
+    eval_mode: str = "both"
+    # Selection split; ``final_eval`` switches to ``FINAL_EVAL_SPLIT``.
+    eval_split: str = "val"
+    warm_start: bool = False
+    n_envs: int = 1
     # Same PPO rollout / eval policy mode as Stage II so both stages are comparable.
-    highway_n_steps: int = 64
-    highway_eval_deterministic: bool = False
+    ppo_n_steps: int = 256
+    eval_deterministic: bool = False
     # None -> ``seed + round_index`` (the closed loop's generation-0 scenarios).
-    highway_eval_seed_base: Optional[int] = None
+    eval_seed_base: Optional[int] = None
 
 
 @dataclass
@@ -177,7 +182,7 @@ def _stage3_input(candidate: RewardCandidate) -> RewardCandidate:
 def _trained_metrics(candidate: RewardCandidate, bundle: TrainEvalBundle) -> Dict[str, Any]:
     md = candidate.metadata or {}
     if md.get("fitness") is not None and isinstance(md.get("last_metrics"), dict):
-        # Highway trainer already stamped the full metrics dict + fitness.
+        # Domain trainer already stamped the full metrics dict + fitness.
         return dict(md["last_metrics"])
     metrics: Dict[str, Any] = bundle.metrics.as_dict()
     metrics["fitness"] = metrics_fitness(metrics)
@@ -212,17 +217,18 @@ class Stage3Runner:
             "seed": int(cfg.seed),
             "device": str(cfg.device),
             "output_root": str(cfg.output_root),
-            "highway_action_mode": str(cfg.highway_action_mode),
-            "highway_action_continuous_lateral": bool(cfg.highway_action_continuous_lateral),
-            "highway_meta_fine_low": float(cfg.highway_meta_fine_low),
-            "highway_meta_fine_high": float(cfg.highway_meta_fine_high),
-            "highway_meta_fine_n": int(cfg.highway_meta_fine_n),
-            "highway_eval_mode": str(cfg.highway_eval_mode),
-            "highway_warm_start": bool(cfg.highway_warm_start),
-            "highway_n_envs": int(cfg.highway_n_envs),
-            "highway_n_steps": int(cfg.highway_n_steps),
-            "highway_eval_deterministic": bool(cfg.highway_eval_deterministic),
-            "highway_eval_seed_base": cfg.highway_eval_seed_base,
+            "action_mode": str(cfg.action_mode),
+            "robot_kinematics": str(cfg.robot_kinematics),
+            "action_speed_samples": int(cfg.action_speed_samples),
+            "action_rotation_samples": int(cfg.action_rotation_samples),
+            "env_config_path": cfg.env_config_path,
+            "eval_mode": str(cfg.eval_mode),
+            "eval_split": str(cfg.eval_split),
+            "warm_start": bool(cfg.warm_start),
+            "n_envs": int(cfg.n_envs),
+            "ppo_n_steps": int(cfg.ppo_n_steps),
+            "eval_deterministic": bool(cfg.eval_deterministic),
+            "eval_seed_base": cfg.eval_seed_base,
         }
 
     def _warn_config_drift(self, saved: Dict[str, Any]) -> None:
@@ -403,7 +409,8 @@ class Stage3Runner:
             "n_trained": len(self.trained),
             "n_failed": n_failed,
             "eval_episodes": int(self.config.eval_episodes),
-            "eval_seed_base": self.config.highway_eval_seed_base,
+            "eval_split": str(self.config.eval_split),
+            "eval_seed_base": self.config.eval_seed_base,
         }
 
     def final_eval(
@@ -426,7 +433,8 @@ class Stage3Runner:
         cfg = replace(
             self.config,
             eval_episodes=int(episodes),
-            highway_eval_seed_base=int(seed_base),
+            eval_seed_base=int(seed_base),
+            eval_split=FINAL_EVAL_SPLIT,
         )
         console.banner(
             f"Final blind eval - {candidate.candidate_id} ({int(episodes)} episodes)"
@@ -435,6 +443,7 @@ class Stage3Runner:
             "candidate_id": str(candidate.candidate_id),
             "episodes": int(episodes),
             "seed_base": int(seed_base),
+            "split": FINAL_EVAL_SPLIT,
         }
         try:
             result = reevaluate(probe, round_index=0, config=cfg)
@@ -460,6 +469,7 @@ class Stage3Runner:
 
 __all__ = [
     "FINAL_EVAL_SEED_OFFSET",
+    "FINAL_EVAL_SPLIT",
     "STAGE3_EVAL_SEED_OFFSET",
     "STAGE3_STEPS",
     "PolicyTrainer",

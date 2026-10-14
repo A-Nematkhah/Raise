@@ -14,7 +14,6 @@ from collections import Counter
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional
 
-from domains.highway.action_config import configure_action_mode_from_config
 from raise_core import console
 from raise_core.domains import (
     load_domain,
@@ -113,7 +112,7 @@ def _resume_known_ids(ckpt: Dict[str, Any], stage2_root: str) -> List[str]:
 
 
 def _store_stage2_metrics(candidate: RewardCandidate, metrics: ProxyMetrics) -> None:
-    """Keep Stage II metrics on the candidate (highway trainer already wrote them)."""
+    """Keep Stage II metrics on the candidate (domain trainer already wrote them)."""
     md = dict(candidate.metadata or {})
     if md.get("fitness") is None or not isinstance(md.get("last_metrics"), dict):
         md["last_metrics"] = metrics.as_dict()
@@ -125,9 +124,9 @@ _COMPACT_METRIC_KEYS = (
     "SR",
     "CR",
     "TR",
-    "mean_speed",
-    "mean_progress",
-    "soft_success",
+    "NT",
+    "PL",
+    "task_return",
     "fitness",
     "fitness_se",
 )
@@ -170,8 +169,12 @@ _RESUME_CONFIG_KEYS = (
     "n_mutation",
     "n_random",
     "mutation_parents",
-    "highway_action_mode",
-    "highway_eval_mode",
+    "action_mode",
+    "robot_kinematics",
+    "action_speed_samples",
+    "action_rotation_samples",
+    "env_config_path",
+    "eval_mode",
 )
 
 
@@ -267,7 +270,7 @@ class ClosedLoopRunner:
         resumed = ckpt is not None
 
         pack = load_domain(cfg.domain)
-        configure_action_mode_from_config(cfg)
+        pack.apply_config(cfg)
 
         score1_mode = "smoke" if cfg.use_stub else "dataset"
         if self.score_fn is None:
@@ -283,6 +286,7 @@ class ClosedLoopRunner:
             self.llm = make_llm_client(
                 cfg.llm_provider,
                 base_code=getattr(pack, "seed_reward_source", None),
+                variant_fn=getattr(pack.prompts, "seed_variant", None),
             )
 
         s1_cfg = StageIConfig(
@@ -322,16 +326,16 @@ class ClosedLoopRunner:
             seed=int(cfg.seed),
             device=str(cfg.device),
             output_root=os.path.join(cfg.output_dir, "closed_loop", "stage2_train"),
-            highway_n_envs=max(1, int(cfg.highway_n_envs or 1)),
-            highway_warm_start=bool(cfg.highway_warm_start),
-            highway_eval_mode=str(cfg.highway_eval_mode or "both"),
-            highway_action_mode=str(cfg.highway_action_mode or "meta_default"),
-            highway_action_continuous_lateral=bool(cfg.highway_action_continuous_lateral),
-            highway_meta_fine_low=float(cfg.highway_meta_fine_low),
-            highway_meta_fine_high=float(cfg.highway_meta_fine_high),
-            highway_meta_fine_n=int(cfg.highway_meta_fine_n),
-            highway_training_dynamics=card_on and bool(cfg.feedback.training_dynamics),
-            highway_reward_components=card_on and bool(cfg.feedback.component_instrumentation),
+            n_envs=max(1, int(cfg.n_envs or 1)),
+            warm_start=bool(cfg.warm_start),
+            eval_mode=str(cfg.eval_mode or "both"),
+            action_mode=str(cfg.action_mode or "discrete"),
+            robot_kinematics=str(cfg.robot_kinematics or "holonomic"),
+            action_speed_samples=int(cfg.action_speed_samples),
+            action_rotation_samples=int(cfg.action_rotation_samples),
+            env_config_path=cfg.env_config_path,
+            record_training_dynamics=card_on and bool(cfg.feedback.training_dynamics),
+            record_reward_components=card_on and bool(cfg.feedback.component_instrumentation),
         )
 
         can_reevaluate = callable(getattr(self.trainer, "reevaluate", None))
@@ -496,7 +500,11 @@ class ClosedLoopRunner:
                     if result.get("kind") != "reevaluated":
                         n_ok += 1
                         n_labeled += 1
-                    attach_proxy_feedback(cand, (cand.metadata or {}).get("last_metrics") or {})
+                    attach_proxy_feedback(
+                        cand,
+                        (cand.metadata or {}).get("last_metrics") or {},
+                        evidence_line=pack.evidence_line,
+                    )
                     labeled_this_epoch.add(str(cand.candidate_id))
                 else:
                     # Not marked done: a resumed run tries it again.
@@ -517,14 +525,14 @@ class ClosedLoopRunner:
                     labeled_ids=sorted(labeled_this_epoch),
                 )
 
-            stage2_cfg.highway_eval_seed_base = int(cfg.seed) + int(g) * 1000
+            stage2_cfg.eval_seed_base = int(cfg.seed) + int(g) * 1000
             to_train = [c for c in to_label if not _needs_reevaluation(c, g)]
             copies = _same_genome_copies(to_train)
             attach_warm_start_checkpoints(to_train, list(population))
             label_candidates_parallel(
                 to_label,
                 already_done=labeled_this_epoch | set(copies),
-                workers=max(1, int(cfg.highway_label_workers or 1)),
+                workers=max(1, int(cfg.label_workers or 1)),
                 label_one=_label_one,
                 on_done=_on_done,
                 round_index_fn=lambda i: g * 1000 + i,

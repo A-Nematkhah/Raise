@@ -40,7 +40,7 @@ class RewardFunction(ABC):
         """Compute the scalar reward for one step, given state."""
         raise NotImplementedError
 
-# Cap on reward-component dict size (highway EUREKA-style returns).
+# Cap on reward-component dict size (EUREKA-style component returns).
 MAX_REWARD_COMPONENT_KEYS = 12
 
 _SAFE_BUILTINS = {
@@ -137,7 +137,7 @@ def unpack_reward_return(
     Normalize a ``compute_reward`` return value to ``(total, components)``.
 
     When ``allow_components`` is False, only a bare
-    finite float is accepted. When True (highway), also accepts
+    finite float is accepted. When True (domain validators), also accepts
     ``(float, dict[str, float])`` and shims a bare float to ``(float, {})``.
     """
     if isinstance(value, bool):
@@ -296,7 +296,7 @@ def smoke_test_compute(
     """
     Compile ``source_code`` in a killable spawned child and run every smoke state.
 
-    ``allow_components`` (highway only): accept ``(float, dict[str, float])``
+    ``allow_components`` (domain validators only): accept ``(float, dict[str, float])``
     returns in addition to bare floats (compatibility shim).
     """
     if not states:
@@ -334,7 +334,7 @@ class SandboxedReward(RewardFunction):
     second argument on every ``compute(state)`` call. Source code is retained
     so the object can be cloudpickled into ShmemVecEnv workers (Windows spawn).
 
-    ``allow_components`` must only be True for highway validators (domain pack
+    ``allow_components`` must only be True for domain validators (domain pack
     wiring); otherwise tuple returns are rejected.
     """
 

@@ -1,6 +1,6 @@
 """Order genomes for closed-loop ``_next_generation``.
 
-Trained candidates by ``highway_fitness`` of their Stage II evaluation (Score1
+Trained candidates by domain fitness of their Stage II evaluation (Score1
 breaks ties); candidates without Stage II evidence follow, ordered by Score1.
 """
 

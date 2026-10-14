@@ -46,13 +46,6 @@ def _scalar(m: Dict[str, Any]) -> float:
                 return float(m[key])
             except (TypeError, ValueError):
                 pass
-    if str(m.get("domain", "")).lower() == "highway" or "mean_speed" in m:
-        try:
-            from domains.highway.metrics import highway_fitness
-
-            return float(highway_fitness(m))
-        except Exception:  # noqa: BLE001
-            pass
     sr = float(m.get("SR", 0.0))
     cr = float(m.get("CR", 0.0))
     tr = float(m.get("TR", 0.0))
@@ -153,7 +146,7 @@ def plot_stage_metrics(
     axes[1].plot(xs, scalars, marker="o", color="#1f4e79", linewidth=1.8)
     axes[1].axhline(0.0, color="gray", linewidth=0.8, linestyle="--")
     axes[1].set_ylabel("selection scalar")
-    axes[1].set_title(f"{stage_label} — scalar score (highway-aware when available)")
+    axes[1].set_title(f"{stage_label} — scalar score (cached domain fitness when available)")
     axes[1].grid(True, alpha=0.3)
     axes[1].set_xticks(xs)
     axes[1].set_xticklabels(names, rotation=45, ha="right", fontsize=8)
@@ -347,8 +340,8 @@ def plot_closed_loop_epochs(run_dir: str, out_path: str) -> bool:
     return True
 
 
-def plot_best_highway_detail(run_dir: str, out_path: str) -> bool:
-    """SR/CR/TR + speed/progress/soft for best Stage II/III when highway fields exist."""
+def plot_best_crowdnav_detail(run_dir: str, out_path: str) -> bool:
+    """SR/CR/TR + nav time / path length / danger for best Stage II/III (CrowdNav fields)."""
     import matplotlib.pyplot as plt
     import numpy as np
 
@@ -368,17 +361,18 @@ def plot_best_highway_detail(run_dir: str, out_path: str) -> bool:
                     "SR": float(m.get("SR", 0.0)),
                     "CR": float(m.get("CR", 0.0)),
                     "TR": float(m.get("TR", 0.0)),
-                    "speed": float(m.get("mean_speed", m.get("ITR", 0.0)) or 0.0),
-                    "progress": float(m.get("mean_progress", m.get("PL", 0.0)) or 0.0),
-                    "soft": float(m.get("soft_success", 0.0) or 0.0),
+                    "nav_time": float(m.get("NT", 0.0) or 0.0),
+                    "path_length": float(m.get("PL", 0.0) or 0.0),
+                    "danger_freq": float(m.get("ITR", 0.0) or 0.0),
+                    "min_dist_danger": float(m.get("SD", 0.0) or 0.0),
                     "scalar": _scalar(m),
                 },
             )
         )
     if not rows:
         return False
-    # Only emit this panel when continuous highway fields are present.
-    if not any(r[1]["speed"] > 0 or r[1]["progress"] > 0 or r[1]["soft"] > 0 for r in rows):
+    # Only emit this panel when CrowdNav navigation fields are present.
+    if not any(r[1]["nav_time"] > 0 or r[1]["path_length"] > 0 for r in rows):
         return False
 
     fig, axes = plt.subplots(1, 2, figsize=(10.0, 4.2))
@@ -397,21 +391,15 @@ def plot_best_highway_detail(run_dir: str, out_path: str) -> bool:
     axes[0].legend(fontsize=8)
     axes[0].grid(True, axis="y", alpha=0.3)
 
-    # Normalize progress for twin bar readability (÷1000).
-    metrics_r = ("speed", "progress", "soft", "scalar")
-    colors_r = ("#1f77b4", "#8c564b", "#17becf", "#9467bd")
-    width_r = 0.18
+    metrics_r = ("nav_time", "path_length", "danger_freq", "min_dist_danger", "scalar")
+    colors_r = ("#1f77b4", "#8c564b", "#17becf", "#bcbd22", "#9467bd")
+    width_r = 0.15
     for i, (k, color) in enumerate(zip(metrics_r, colors_r)):
-        vals = []
-        for _, m in rows:
-            v = m[k]
-            if k == "progress":
-                v = v / 1000.0
-            vals.append(v)
-        axes[1].bar(x + (i - 1.5) * width_r, vals, width_r, label=k, color=color)
+        vals = [m[k] for _, m in rows]
+        axes[1].bar(x + (i - 2) * width_r, vals, width_r, label=k, color=color)
     axes[1].set_xticks(x)
     axes[1].set_xticklabels(labels)
-    axes[1].set_title("Best — speed / progress÷1k / soft / scalar")
+    axes[1].set_title("Best — nav time (s) / path (m) / danger / fitness")
     axes[1].legend(fontsize=7)
     axes[1].grid(True, axis="y", alpha=0.3)
 
@@ -510,8 +498,8 @@ def run_plots(run_dir: str, output_dir: str, *, show: bool = False) -> List[str]
     if plot_closed_loop_epochs(run_dir, path):
         written.append(path)
 
-    path = os.path.join(output_dir, "best_highway_detail.png")
-    if plot_best_highway_detail(run_dir, path):
+    path = os.path.join(output_dir, "best_crowdnav_detail.png")
+    if plot_best_crowdnav_detail(run_dir, path):
         written.append(path)
 
     if show and written:

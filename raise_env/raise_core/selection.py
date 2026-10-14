@@ -1,10 +1,10 @@
 """
 Fitness helpers for Stage II / III selection.
 
-Highway trainers cache ``fitness`` (``highway_fitness`` of the holdout eval,
+Domain trainers cache ``fitness`` (the pack's official holdout objective,
 alias ``selection_scalar``) on candidate metadata; that scalar ranks parents
-and picks the final best. Metrics without a highway ``domain`` tag (stub
-trainers) fall back to ``SR - CR - 0.5 * TR``.
+and picks the final best. Metrics without a cached fitness (stub trainers)
+fall back to ``SR - CR - 0.5 * TR``.
 """
 
 from __future__ import annotations
@@ -12,15 +12,9 @@ from __future__ import annotations
 import math
 from typing import Any, List, Mapping, Optional, Sequence
 
-from domains.highway.metrics import highway_fitness
 from raise_core.candidate import RewardCandidate
 
 _FITNESS_KEYS = ("fitness", "selection_scalar")
-
-
-def is_highway_metrics(metrics: Mapping[str, Any]) -> bool:
-    """Canonical check: Stage-II metrics dict is from the highway domain pack."""
-    return str(metrics.get("domain", "")).strip().lower() == "highway"
 
 
 def _cached(source: Mapping[str, Any]) -> Optional[float]:
@@ -40,8 +34,6 @@ def metrics_fitness(metrics: Optional[Mapping[str, Any]]) -> float:
     cached = _cached(metrics)
     if cached is not None:
         return cached
-    if is_highway_metrics(metrics):
-        return float(highway_fitness(metrics))
     sr = float(metrics.get("SR", metrics.get("sr", 0.0)))
     cr = float(metrics.get("CR", metrics.get("cr", 0.0)))
     tr = float(metrics.get("TR", metrics.get("tr", 0.0)))
@@ -49,7 +41,7 @@ def metrics_fitness(metrics: Optional[Mapping[str, Any]]) -> float:
 
 
 def candidate_fitness(candidate: RewardCandidate) -> float:
-    """Fitness used for ranking (cached highway holdout fitness when present)."""
+    """Fitness used for ranking (cached domain holdout fitness when present)."""
     md = candidate.metadata or {}
     cached = _cached(md)
     return cached if cached is not None else metrics_fitness(md.get("last_metrics"))

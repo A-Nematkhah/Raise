@@ -38,7 +38,7 @@ class RewardValidator:
         self.smoke_states = tuple(smoke_states)
         if not self.smoke_states:
             raise ValueError("RewardValidator needs domain smoke_states")
-        # Highway sets True via HighwayRewardValidator (tuple returns allowed).
+        # The domain validator sets True (tuple returns allowed).
         self.allow_components = bool(allow_components)
 
     def validate_code(self, code: str) -> SandboxedReward:

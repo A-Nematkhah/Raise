@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-Single entry point for RAISE on highway-fast-v0.
+Single entry point for RAISE on CrowdNav (vita-epfl/CrowdNav crowd_sim).
 
   closed loop (G generations): Score1 → Stage II PPO train+eval → fitness
   rank → LLM crossover/mutation with evaluation feedback
@@ -12,13 +12,13 @@ Examples (from ``raise_env/`` with system Python)::
     python scripts/run_raise.py --fast --output-dir results/raise_fast
 
     # Real PPO run with a real LLM
-    python scripts/run_raise.py --llm groq --output-dir results/highway_run
+    python scripts/run_raise.py --llm groq --output-dir results/crowdnav_run
 
     # Real PPO run without LLM cost (seed-variant rewards)
     python scripts/run_raise.py --llm seed --allow-seed-llm
 
     # Resume: rerun with the same --output-dir (resume is on by default)
-    python scripts/run_raise.py --llm groq --output-dir results/highway_run
+    python scripts/run_raise.py --llm groq --output-dir results/crowdnav_run
 """
 
 from __future__ import annotations
@@ -47,7 +47,7 @@ _FEEDBACK = FeedbackCardConfig()
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="RAISE end-to-end (highway)")
+    parser = argparse.ArgumentParser(description="RAISE end-to-end (CrowdNav)")
     parser.add_argument(
         "--print-config",
         action="store_true",
@@ -57,7 +57,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--output-dir",
         type=str,
         default=None,
-        help="Run directory (default: results/highway_<timestamp>)",
+        help="Run directory (default: results/crowdnav_<timestamp>)",
     )
     parser.add_argument("--seed", type=int, default=_DEFAULTS.seed)
     parser.add_argument(
@@ -102,7 +102,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--stage1-dataset",
         type=str,
         default=_DEFAULTS.stage1_dataset_path,
-        help="Path from scripts/collect_highway_stage1_dataset.py",
+        help="Path from scripts/collect_crowdnav_stage1_dataset.py",
     )
     parser.add_argument("--fast", action="store_true", help="Stub trainers + smoke Score1")
     parser.add_argument(
@@ -174,64 +174,64 @@ def build_parser() -> argparse.ArgumentParser:
         "drawn by linear rank, tournament = better of two random genomes",
     )
     parser.add_argument(
-        "--highway-n-envs",
+        "--n-envs",
         type=int,
-        default=_DEFAULTS.highway_n_envs,
+        default=_DEFAULTS.n_envs,
         help="DummyVecEnv count for PPO (same budget)",
     )
     parser.add_argument(
-        "--highway-label-workers",
+        "--label-workers",
         type=int,
-        default=_DEFAULTS.highway_label_workers,
+        default=_DEFAULTS.label_workers,
         help="Parallel Stage II training threads",
     )
     parser.add_argument(
-        "--highway-eval-mode",
+        "--eval-mode",
         choices=("both", "holdout_only"),
-        default=_DEFAULTS.highway_eval_mode,
-        help="Evaluate train+holdout traffic, or holdout only",
+        default=_DEFAULTS.eval_mode,
+        help="Evaluate upstream train + holdout (val) scenarios, or holdout only",
     )
     parser.add_argument(
-        "--highway-warm-start",
+        "--warm-start",
         action=argparse.BooleanOptionalAction,
-        default=_DEFAULTS.highway_warm_start,
+        default=_DEFAULTS.warm_start,
         help=(
             "Stage II: warm-start PPO from the parent's checkpoint when available "
             "(off by default: warm-started children get a larger effective budget)"
         ),
     )
     parser.add_argument(
-        "--highway-action-mode",
-        choices=("meta_default", "meta_fine", "continuous"),
-        default=_DEFAULTS.highway_action_mode,
+        "--action-mode",
+        choices=("discrete", "continuous"),
+        default=_DEFAULTS.action_mode,
         help=(
-            "Action space: meta_default=DiscreteMetaAction (default), "
-            "meta_fine=linspace target speeds, continuous=ContinuousAction Box"
+            "Action space: discrete = upstream CADRL velocity set (stop + "
+            "speeds x rotations, default), continuous = Box([-1, 1]^2)"
         ),
     )
     parser.add_argument(
-        "--highway-action-continuous-lateral",
-        action=argparse.BooleanOptionalAction,
-        default=_DEFAULTS.highway_action_continuous_lateral,
-        help="ContinuousAction: include steering (Box(2,)); False → accel-only Box(1,)",
+        "--robot-kinematics",
+        choices=("holonomic", "unicycle"),
+        default=_DEFAULTS.robot_kinematics,
+        help="Robot kinematics (upstream env.config robot.kinematics)",
     )
     parser.add_argument(
-        "--highway-meta-fine-low",
-        type=float,
-        default=_DEFAULTS.highway_meta_fine_low,
-        help="meta_fine: lowest target speed (m/s)",
-    )
-    parser.add_argument(
-        "--highway-meta-fine-high",
-        type=float,
-        default=_DEFAULTS.highway_meta_fine_high,
-        help="meta_fine: highest target speed (m/s)",
-    )
-    parser.add_argument(
-        "--highway-meta-fine-n",
+        "--action-speed-samples",
         type=int,
-        default=_DEFAULTS.highway_meta_fine_n,
-        help="meta_fine: number of target_speeds in linspace(low, high)",
+        default=_DEFAULTS.action_speed_samples,
+        help="Discrete: exponentially spaced speeds (upstream CADRL: 5)",
+    )
+    parser.add_argument(
+        "--action-rotation-samples",
+        type=int,
+        default=_DEFAULTS.action_rotation_samples,
+        help="Discrete: headings / rotations (upstream CADRL: 16)",
+    )
+    parser.add_argument(
+        "--env-config",
+        type=str,
+        default=_DEFAULTS.env_config_path,
+        help="CrowdNav env.config (default: vendored upstream config)",
     )
     parser.add_argument(
         "--feedback-card",
@@ -322,7 +322,7 @@ def main() -> int:
         return 2
 
     output_dir = args.output_dir or (
-        "results/highway_" + datetime.now().strftime("%Y%m%d_%H%M%S")
+        "results/crowdnav_" + datetime.now().strftime("%Y%m%d_%H%M%S")
     )
     console.configure_run_logging(verbose=bool(args.verbose))
 
@@ -351,15 +351,15 @@ def main() -> int:
         n_random=args.n_random,
         mutation_parents=args.mutation_parents,
         resume=bool(args.resume),
-        highway_n_envs=max(1, int(args.highway_n_envs)),
-        highway_label_workers=max(1, int(args.highway_label_workers)),
-        highway_warm_start=bool(args.highway_warm_start),
-        highway_eval_mode=str(args.highway_eval_mode),
-        highway_action_mode=str(args.highway_action_mode),
-        highway_action_continuous_lateral=bool(args.highway_action_continuous_lateral),
-        highway_meta_fine_low=float(args.highway_meta_fine_low),
-        highway_meta_fine_high=float(args.highway_meta_fine_high),
-        highway_meta_fine_n=int(args.highway_meta_fine_n),
+        n_envs=max(1, int(args.n_envs)),
+        label_workers=max(1, int(args.label_workers)),
+        warm_start=bool(args.warm_start),
+        eval_mode=str(args.eval_mode),
+        action_mode=str(args.action_mode),
+        robot_kinematics=str(args.robot_kinematics),
+        action_speed_samples=int(args.action_speed_samples),
+        action_rotation_samples=int(args.action_rotation_samples),
+        env_config_path=args.env_config,
         feedback=FeedbackCardConfig(
             enabled=bool(args.feedback_card),
             max_input_tokens=int(args.max_input_tokens),

@@ -2,7 +2,7 @@
 Domain pack registry for reward search.
 
 Each environment family registers a module (``domains/<name>/pack.py``)
-exposing ``get_pack() -> DomainPack``. The only registered domain is ``highway``.
+exposing ``get_pack() -> DomainPack``. The only registered domain is ``crowdnav``.
 """
 
 from __future__ import annotations
@@ -10,13 +10,13 @@ from __future__ import annotations
 import importlib
 from typing import Any, List, Optional
 
-from domains.highway.reward_checks import make_highway_validator
 from raise_core.domains.base import DomainPack, EnvAdapter
+from raise_core.sandbox.validator import RewardValidator
 
-DEFAULT_DOMAIN = "highway"
+DEFAULT_DOMAIN = "crowdnav"
 
 _REGISTRY = {
-    "highway": "domains.highway.pack",
+    "crowdnav": "domains.crowdnav.pack",
 }
 
 
@@ -88,8 +88,10 @@ def make_stage3_trainer_for_domain(
 
 def make_validator_for_domain(pack: DomainPack) -> Any:
     """Build the reward validator with the pack's smoke states / sandbox config."""
-    smoke = pack.smoke_states_fn() if pack.smoke_states_fn is not None else None
-    return make_highway_validator(config=pack.sandbox_config, smoke_states=smoke)
+    smoke = pack.smoke_states_fn() if pack.smoke_states_fn is not None else ()
+    if pack.make_validator is not None:
+        return pack.make_validator(config=pack.sandbox_config, smoke_states=smoke)
+    return RewardValidator(config=pack.sandbox_config, smoke_states=smoke)
 
 
 def register_domain(name: str, module_path: str) -> None:

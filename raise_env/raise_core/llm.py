@@ -16,7 +16,7 @@ import os
 import re
 import time
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from raise_core.key_manager import (
     GroqKeyManager,
@@ -387,7 +387,10 @@ class OllamaLLMClient(VLLMLLMClient):
 
 class SeedVariantLLMClient(LLMClient):
     """
-    Always emits a valid highway ``compute_reward`` variant (no API key).
+    Emits valid domain ``compute_reward`` variants (no API key).
+
+    ``variant_fn(n)`` comes from the domain prompts module (``seed_variant``);
+    without one the client returns the domain seed itself.
 
     Used for dry-runs / ``--llm seed`` (guarded by ``--allow-seed-llm`` for
     real runs) so the pipeline executes without an LLM.
@@ -395,101 +398,21 @@ class SeedVariantLLMClient(LLMClient):
 
     provider = "seed"
 
-    def __init__(self, base_code: Optional[str] = None) -> None:
+    def __init__(
+        self,
+        base_code: Optional[str] = None,
+        *,
+        variant_fn: Optional[Callable[[int], str]] = None,
+    ) -> None:
         self._base = (base_code or "").strip()
+        self._variant_fn = variant_fn
         self._n = 0
 
     def complete(self, prompt: str, *, max_tokens: Optional[int] = None) -> str:
         self._n += 1
-        return self._highway_variant(self._n)
-
-    def _highway_variant(self, n: int) -> str:
-        """Structural diversity: clearance / lane / speed-band / crawl / coef."""
-        kind = int(n) % 5
-        if kind == 0:
-            speed_coef = 0.05 + 0.002 * ((n % 20) - 10)
-            progress_coef = 1.0 + 0.05 * ((n % 10) - 5)
-            body = (
-                f"    speed_coef = {speed_coef:.4f}\n"
-                f"    progress_coef = {progress_coef:.4f}\n"
-                "    if state.collision:\n"
-                "        return float(-20.0)\n"
-                "    if state.off_road:\n"
-                "        return float(-10.0)\n"
-                "    return float(progress_coef * state.progress + "
-                "speed_coef * state.speed)\n"
-            )
-        elif kind == 1:
-            # Clearance to nearest other vehicle.
-            w = 0.4 + 0.05 * ((n % 8) - 4)
-            body = (
-                f"    clear_w = {w:.4f}\n"
-                "    if state.collision:\n"
-                "        return float(-20.0)\n"
-                "    if state.off_road:\n"
-                "        return float(-10.0)\n"
-                "    nearest = 50.0\n"
-                "    for v in state.others:\n"
-                "        d = (float(v.x) ** 2 + float(v.y) ** 2) ** 0.5\n"
-                "        if d < nearest:\n"
-                "            nearest = d\n"
-                "    clear = nearest / (nearest + 10.0)\n"
-                "    return float(state.progress + 0.05 * state.speed + "
-                "clear_w * clear)\n"
-            )
-        elif kind == 2:
-            # Prefer center-ish lane_index == 1.
-            lane_w = 0.3 + 0.05 * ((n % 6) - 3)
-            body = (
-                f"    lane_w = {lane_w:.4f}\n"
-                "    if state.collision:\n"
-                "        return float(-20.0)\n"
-                "    if state.off_road:\n"
-                "        return float(-10.0)\n"
-                "    lane_term = 1.0 - abs(float(state.ego.lane_index) - 1.0)\n"
-                "    return float(state.progress + 0.06 * state.speed + "
-                "lane_w * lane_term)\n"
-            )
-        elif kind == 3:
-            # Speed band 15–30 m/s.
-            band = 0.2 + 0.03 * ((n % 7) - 3)
-            body = (
-                f"    band_w = {band:.4f}\n"
-                "    if state.collision:\n"
-                "        return float(-20.0)\n"
-                "    if state.off_road:\n"
-                "        return float(-10.0)\n"
-                "    spd = float(state.speed)\n"
-                "    if spd < 15.0:\n"
-                "        band = (spd - 15.0) / 15.0\n"
-                "    elif spd > 30.0:\n"
-                "        band = (30.0 - spd) / 30.0\n"
-                "    else:\n"
-                "        band = 1.0\n"
-                "    return float(state.progress + band_w * band + "
-                "0.04 * spd)\n"
-            )
-        else:
-            # Explicit crawl penalty + progress.
-            crawl = 0.1 + 0.02 * ((n % 5) - 2)
-            body = (
-                f"    crawl_pen = {crawl:.4f}\n"
-                "    if state.collision:\n"
-                "        return float(-20.0)\n"
-                "    if state.off_road:\n"
-                "        return float(-10.0)\n"
-                "    reward = float(state.progress) + 0.08 * float(state.speed)\n"
-                "    if state.ego.on_road and state.speed < 8.0 and "
-                "(not state.timeout):\n"
-                "        reward = reward - crawl_pen * (8.0 - state.speed)\n"
-                "    return float(reward)\n"
-            )
-        return (
-            "```python\n"
-            "def compute_reward(state, memory):\n"
-            f"{body}"
-            "```\n"
-        )
+        if self._variant_fn is not None:
+            return self._variant_fn(self._n)
+        return f"```python\n{self._base}\n```\n"
 
 
 def make_llm_client(
@@ -498,6 +421,7 @@ def make_llm_client(
     completions: Optional[Sequence[str]] = None,
     model: Optional[str] = None,
     base_code: Optional[str] = None,
+    variant_fn: Optional[Callable[[int], str]] = None,
     **kwargs,
 ) -> LLMClient:
     """
@@ -505,11 +429,12 @@ def make_llm_client(
 
     For ``scripted``, pass ``completions=...``.
     For ``seed``, returns ``SeedVariantLLMClient`` (no API key).
-    Optional ``base_code`` seeds the seed-variant client (domain D.5).
+    Optional ``base_code`` / ``variant_fn`` (domain D.5 seed and its
+    ``seed_variant``) drive the seed-variant client.
     """
     name = str(provider).strip().lower()
     if name in ("seed", "seed-variant", "d5"):
-        return SeedVariantLLMClient(base_code=base_code)
+        return SeedVariantLLMClient(base_code=base_code, variant_fn=variant_fn)
     if name == "scripted":
         if not completions:
             raise ValueError("make_llm_client(scripted) requires completions=...")
@@ -628,7 +553,7 @@ def normalize_to_compute_reward(code: str, target_name: str = "compute_reward") 
     upgrades a single-arg ``(state)`` signature to ``(state, memory)`` so
     older completions still validate under the episode-memory contract.
     Also strips redundant ``[0]``/``[1]``/``[-1]`` on known scalar state
-    fields (LLMs often treat ``state.ego.speed`` like a batched tensor).
+    fields (LLMs often treat ``state.robot.px`` like a batched tensor).
     """
     text = code.strip()
     match = re.search(r"^def\s+(\w+)\s*\(", text, re.MULTILINE)
@@ -663,22 +588,26 @@ def normalize_to_compute_reward(code: str, target_name: str = "compute_reward") 
     return strip_redundant_scalar_subscripts(text)
 
 
-# Scalar HighwayRewardState / EgoVehicle / NearbyVehicle fields — never arrays.
+# Scalar CrowdNavRewardState / RobotState / HumanState fields — never arrays.
 # ``action`` is deliberately absent (a tuple in continuous mode).
 _SCALAR_FIELD_ATTRS = frozenset(
     {
-        "x",
-        "y",
+        "px",
+        "py",
         "vx",
         "vy",
-        "heading",
-        "speed",
-        "lane_index",
-        "on_road",
-        "progress",
+        "gx",
+        "gy",
+        "theta",
+        "radius",
+        "v_pref",
         "collision",
-        "off_road",
+        "reached_goal",
         "timeout",
+        "min_separation",
+        "discomfort_dist",
+        "goal_distance",
+        "progress",
         "time_step",
         "global_time",
         "time_limit",
@@ -702,7 +631,7 @@ def _is_trivial_int_index(slice_node: ast.AST) -> bool:
 
 
 class _StripScalarSubscripts(ast.NodeTransformer):
-    """Rewrite ``state.ego.speed[0]`` → ``state.ego.speed`` (and nested repeats)."""
+    """Rewrite ``state.robot.px[0]`` → ``state.robot.px`` (and nested repeats)."""
 
     def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
         node = self.generic_visit(node)

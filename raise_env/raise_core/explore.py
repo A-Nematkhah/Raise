@@ -25,9 +25,8 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
-from domains.highway import feedback_card as highway_feedback_card
-from domains.highway import prompts as highway_prompts
 from raise_core.candidate import RewardCandidate, evaluation_fields, genome_fingerprint
+from raise_core.domains import DEFAULT_DOMAIN, load_domain
 from raise_core.feedback import ArchiveRecord, CandidateArchive, FeedbackCardConfig
 from raise_core.llm import (
     EmptyCompletionError,
@@ -210,13 +209,20 @@ class StageIEvolver:
         self.score_fn = score_fn
         self.validator = validator
         self.config = config or StageIConfig()
-        self._prompts = prompts if prompts is not None else highway_prompts
+        default_pack = (
+            load_domain(DEFAULT_DOMAIN, with_adapter=False)
+            if prompts is None or feedback_card is None
+            else None
+        )
+        self._prompts = prompts if prompts is not None else default_pack.prompts
         self.system_prompt = str(self._prompts.D1_SYSTEM_PROMPT)
         self.rejection_log_path = rejection_log_path
         self._counter = 0
         self.reflection: str = ""
         self.feedback = feedback if feedback is not None else FeedbackCardConfig()
-        self._card_module = feedback_card if feedback_card is not None else highway_feedback_card
+        self._card_module = (
+            feedback_card if feedback_card is not None else default_pack.feedback_card
+        )
         # Evaluated candidates (the closed-loop runner adds each generation).
         self.archive = CandidateArchive()
         self._token_counter = make_token_counter(str(getattr(llm, "provider", "") or ""))
@@ -1221,7 +1227,7 @@ class StageIEvolver:
                     "id": str(c.candidate_id),
                     "SR": _num(holdout, "SR", "sr"),
                     "CR": _num(holdout, "CR", "cr"),
-                    "mean_speed": _num(holdout, "mean_speed", "ITR"),
+                    "TR": _num(holdout, "TR", "tr"),
                     "fitness": fitness,
                     "diagnosis": md.get("llm_diagnosis"),
                 }
@@ -1237,7 +1243,7 @@ class StageIEvolver:
         )
         table_bits = [
             f"{r['id']}: SR={r['SR']:.2f} CR={r['CR']:.2f} "
-            f"mean_speed={r['mean_speed']:.1f} fitness={r['fitness']:.3f}"
+            f"TR={r['TR']:.2f} fitness={r['fitness']:.3f}"
             for r in rows
         ]
         table = "Population(fitness desc): " + (

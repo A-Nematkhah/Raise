@@ -122,10 +122,10 @@ class SandboxConfig:
     forbidden_names: Tuple[str, ...] = FORBIDDEN_NAME_IDS
     allow_while: bool = False
     allow_imports: bool = False
-    # When set (e.g. highway), only these Attribute names + SAFE_METHOD_ATTRIBUTES
+    # When set (domain packs), only these Attribute names + SAFE_METHOD_ATTRIBUTES
     # are allowed. None = only the underscore ban.
     allowed_attributes: Optional[Tuple[str, ...]] = None
-    # When True (highway), module-level assignments may only bind constant
+    # When True (domain packs), module-level assignments may only bind constant
     # expressions and bare expressions may only be docstrings: no calls,
     # lambdas or comprehensions run at import time.
     restrict_top_level: bool = False

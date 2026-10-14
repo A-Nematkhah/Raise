@@ -1,5 +1,5 @@
 """
-RAISE orchestrator (highway).
+RAISE orchestrator (CrowdNav).
 
 Closed-loop evolution (Score1 → Stage II PPO train+eval → fitness rank → LLM
 breeding) for G generations, then Stage III long PPO on the final population.
@@ -13,8 +13,6 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from domains.highway.action_config import configure_action_mode_from_config
-from domains.highway.post_run import post_run_summary, write_highway_run_artifacts
 from raise_core import console
 from raise_core.domains import (
     DEFAULT_DOMAIN,
@@ -44,7 +42,7 @@ from raise_core.validate import (
 
 @dataclass
 class RaiseRunConfig:
-    """End-to-end run settings (highway defaults)."""
+    """End-to-end run settings (CrowdNav defaults)."""
 
     output_dir: str = "results/raise_run"
     seed: int = 425
@@ -57,7 +55,7 @@ class RaiseRunConfig:
     llm_reasoning_effort: Optional[str] = None
     # Stage I Score1: "dataset" (default) | "smoke" (fast tests only)
     score1_mode: str = "dataset"
-    stage1_dataset_path: str = "domains/highway/data/stage1_dataset"
+    stage1_dataset_path: str = "domains/crowdnav/data/stage1_dataset"
 
     # Closed loop: population N, generations G, Stage II budget per candidate.
     population: int = 6
@@ -88,18 +86,19 @@ class RaiseRunConfig:
     # Crash-safe resume of closed loop + Stage III from output_dir.
     resume: bool = True
 
-    # Highway trainer knobs.
-    highway_n_envs: int = 1
-    highway_label_workers: int = 1
+    # Trainer knobs.
+    n_envs: int = 1
+    label_workers: int = 1
     # Off: a warm-started child carries its parent's PPO steps, so its fitness
     # would be compared against siblings trained on a smaller budget.
-    highway_warm_start: bool = False
-    highway_eval_mode: str = "holdout_only"
-    highway_action_mode: str = "meta_default"
-    highway_action_continuous_lateral: bool = True
-    highway_meta_fine_low: float = 15.0
-    highway_meta_fine_high: float = 35.0
-    highway_meta_fine_n: int = 21
+    warm_start: bool = False
+    eval_mode: str = "holdout_only"
+    # Robot / action space (domains.crowdnav.settings).
+    action_mode: str = "discrete"
+    robot_kinematics: str = "holonomic"
+    action_speed_samples: int = 5
+    action_rotation_samples: int = 16
+    env_config_path: Optional[str] = None
     # Diagnostic feedback card + LLM input-token budget.
     feedback: FeedbackCardConfig = field(default_factory=FeedbackCardConfig)
 
@@ -174,15 +173,18 @@ class RaisePipeline:
         self.config = config or RaiseRunConfig()
         self.llm = llm
         self.domain_pack = domain_pack or load_domain(self.config.domain)
-        # Smoke states read the active action mode (int vs tuple action).
-        configure_action_mode_from_config(self.config)
+        # Smoke states read the active action space (int vs tuple action).
+        self.domain_pack.apply_config(self.config)
         self.validator = make_validator_for_domain(self.domain_pack)
 
     def _build_llm(self) -> LLMClient:
         if self.llm is not None:
             return self.llm
         seed = self.domain_pack.seed_reward_source
-        kwargs: Dict[str, Any] = {"base_code": seed}
+        kwargs: Dict[str, Any] = {
+            "base_code": seed,
+            "variant_fn": getattr(self.domain_pack.prompts, "seed_variant", None),
+        }
         if self.config.llm_model is not None:
             kwargs["model"] = self.config.llm_model
         if self.config.llm_max_tokens is not None:
@@ -211,17 +213,23 @@ class RaisePipeline:
             resume=bool(cfg.resume),
             domain=str(self.domain_pack.name),
             eval_episodes=int(cfg.stage2_eval_episodes),
-            highway_n_envs=max(1, int(cfg.highway_n_envs or 1)),
-            highway_label_workers=max(1, int(cfg.highway_label_workers or 1)),
-            highway_warm_start=bool(cfg.highway_warm_start),
-            highway_eval_mode=str(cfg.highway_eval_mode or "both"),
-            highway_action_mode=str(cfg.highway_action_mode or "meta_default"),
-            highway_action_continuous_lateral=bool(cfg.highway_action_continuous_lateral),
-            highway_meta_fine_low=float(cfg.highway_meta_fine_low),
-            highway_meta_fine_high=float(cfg.highway_meta_fine_high),
-            highway_meta_fine_n=int(cfg.highway_meta_fine_n),
+            n_envs=max(1, int(cfg.n_envs or 1)),
+            label_workers=max(1, int(cfg.label_workers or 1)),
+            warm_start=bool(cfg.warm_start),
+            eval_mode=str(cfg.eval_mode or "both"),
             feedback=cfg.feedback,
+            **self._space_knobs(),
         )
+
+    def _space_knobs(self) -> Dict[str, Any]:
+        cfg = self.config
+        return {
+            "action_mode": str(cfg.action_mode or "discrete"),
+            "robot_kinematics": str(cfg.robot_kinematics or "holonomic"),
+            "action_speed_samples": int(cfg.action_speed_samples),
+            "action_rotation_samples": int(cfg.action_rotation_samples),
+            "env_config_path": cfg.env_config_path,
+        }
 
     def _stage3_config(self) -> Stage3Config:
         cfg = self.config
@@ -232,15 +240,11 @@ class RaisePipeline:
             output_root=os.path.join(cfg.output_dir, "stage3_train"),
             device=str(cfg.device),
             resume=bool(cfg.resume),
-            highway_action_mode=str(cfg.highway_action_mode or "meta_default"),
-            highway_action_continuous_lateral=bool(cfg.highway_action_continuous_lateral),
-            highway_meta_fine_low=float(cfg.highway_meta_fine_low),
-            highway_meta_fine_high=float(cfg.highway_meta_fine_high),
-            highway_meta_fine_n=int(cfg.highway_meta_fine_n),
-            highway_eval_mode=str(cfg.highway_eval_mode or "both"),
-            highway_warm_start=bool(cfg.stage3_warm_start),
-            highway_n_envs=max(1, int(cfg.highway_n_envs or 1)),
-            highway_eval_seed_base=int(cfg.seed) + STAGE3_EVAL_SEED_OFFSET,
+            eval_mode=str(cfg.eval_mode or "both"),
+            warm_start=bool(cfg.stage3_warm_start),
+            n_envs=max(1, int(cfg.n_envs or 1)),
+            eval_seed_base=int(cfg.seed) + STAGE3_EVAL_SEED_OFFSET,
+            **self._space_knobs(),
         )
 
     def run(self) -> RaiseArtifacts:
@@ -385,14 +389,16 @@ class RaisePipeline:
             best_stage3=best_s3,
         )
 
-        if not bool(cfg.fast):
-            console.banner("Highway plots + animation")
-            art = write_highway_run_artifacts(
+        if not bool(cfg.fast) and pack.post_run is not None:
+            console.banner(f"{pack.display_name} plots + animation")
+            art = pack.post_run(
                 cfg.output_dir,
                 episodes=2,
                 seed=int(cfg.seed) + FINAL_EVAL_SEED_OFFSET,
             )
-            manifest["post_run"] = post_run_summary(art)
+            manifest["post_run"] = (
+                pack.post_run_summary(art) if pack.post_run_summary is not None else art
+            )
             write_json(os.path.join(cfg.output_dir, "manifest.json"), manifest)
             n_plots = manifest["post_run"]["n_plots"]
             viz_ok = manifest["post_run"]["viz_ok"]

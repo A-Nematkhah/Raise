@@ -134,7 +134,7 @@ class _PolicyVisitor(ast.NodeVisitor):
         elif self._allowed_attrs is not None and node.attr not in self._allowed_attrs:
             self.reasons.append(
                 f"attribute {node.attr!r} is not on the domain allowlist "
-                f"(hallucinated field?). Use only documented state/ego/others "
+                f"(hallucinated field?). Use only documented reward-state "
                 f"fields and memory dict methods (get/items/...)."
             )
         self.generic_visit(node)
