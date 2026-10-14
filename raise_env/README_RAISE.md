@@ -66,8 +66,11 @@ candidate) and `stage3/checkpoint.json` (per Stage III candidate).
    mutation + 1 random; `--n-crossover`, `--n-mutation`, `--n-random` and
    `--no-elitism` change the split (elite + children must equal
    `--population`; an unset count absorbs the remainder).
-3. Stage III: long PPO on the final population; the final candidate is the
-   best Stage III fitness.
+3. Stage III: long PPO on the final population (on eval seeds no generation
+   saw); the final candidate is the best Stage III fitness.
+4. Final blind eval: the winner alone is re-evaluated on further unseen seeds
+   (`--final-eval-episodes`, default 100). Report `manifest.json` →
+   `final_eval.fitness`, not the selection score, which is biased upward.
 
 Outputs under `--output-dir`: `config.json`, `seed_reward.py`,
 `closed_loop/` (`epochs.jsonl`, `pop_epoch_*.json`, `REPORT.txt`,

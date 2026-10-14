@@ -284,7 +284,18 @@ the disabled prompts are byte-identical to the pre-card ones.
    warning and the resumed run continues with the new ones.
 3. **Stage III**: every candidate of the final population is trained once for
    K3 env steps and evaluated on E3 episodes; the final candidate is the best
-   Stage III fitness. No LLM call.
+   Stage III fitness. No LLM call. All candidates train with the run seed
+   (the same `train_seed` on purpose, so only the reward differs) and are
+   evaluated on `seed + 10_000_000`, a seed family no generation saw. Stage II
+   warm start does not carry over (`--stage3-warm-start` is a separate flag).
+   `manifest.json` → `stage3_selection` lists `tied_ids`: candidates within
+   2·max(SE) of the winner, whose ranking is noise. `status: all_failed` marks
+   a run where no Stage III training succeeded and the Stage II best was kept.
+4. **Final blind eval**: the winner's Stage III fitness is a max over noisy
+   scores and so biased upward. The saved winner policy is evaluated again,
+   with no training, on `--final-eval-episodes` (default 100) episodes from
+   `seed + 20_000_000`. `manifest.json` → `final_eval` (full metrics on
+   `final_candidate.json`) holds the number to report.
 
 Defaults: N=6, G=4, K2=12k, E2=30, K3=70k, E3=30 (`raise_core/pipeline.py`).
 
