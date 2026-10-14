@@ -1,4 +1,4 @@
-# Fast unit tests for raise_env (raise_core + highway domain; no GPU, no Groq network).
+# Fast unit tests for raise_env (raise_core + CrowdNav domain; no GPU, no Groq network).
 name: raise-env-ci
 
 on:
@@ -34,6 +34,12 @@ jobs:
           grep -vE '^(torch==|--extra-index-url)' requirements.txt > "$RUNNER_TEMP/requirements_ci.txt"
           pip install -r "$RUNNER_TEMP/requirements_ci.txt"
 
-      - name: Fast tests (exclude slow env rollout)
+      # Upstream CrowdNav's ORCA humans need Python-RVO2 (C++ library, built from source).
+      - name: Build Python-RVO2
+        run: |
+          pip install Cython==0.29.36 cmake
+          pip install --no-build-isolation "pyrvo2 @ git+https://github.com/sybrenstuvel/Python-RVO2.git@c2c46ba8d59556aa10faf03479293236efea154d"
+
+      - name: Fast tests (exclude slow end-to-end run)
         run: |
           python -m pytest -m "not slow" -q
