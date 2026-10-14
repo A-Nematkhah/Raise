@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 from collections import Counter
 from dataclasses import asdict, dataclass, field
@@ -137,13 +138,57 @@ def _compact_metrics(candidate: RewardCandidate) -> Dict[str, Any]:
     md = candidate.metadata or {}
     metrics = md.get("last_metrics") if isinstance(md.get("last_metrics"), dict) else {}
     out = {k: metrics.get(k) for k in _COMPACT_METRIC_KEYS if metrics.get(k) is not None}
-    out["fitness"] = candidate_fitness(candidate)
+    # None (not -inf) for a candidate without a Stage II evaluation.
+    out["fitness"] = _finite_or_none(candidate_fitness(candidate))
     return out
 
 
 def _needs_training(candidate: RewardCandidate) -> bool:
-    """Untrained executable genomes."""
-    return candidate.reward_fn is not None and (candidate.metadata or {}).get("fitness") is None
+    """Untrained executable genomes that Score1 did not hard-reject."""
+    md = candidate.metadata or {}
+    return (
+        candidate.reward_fn is not None
+        and md.get("fitness") is None
+        and not md.get("score1_rejected")
+    )
+
+
+def _finite_or_none(value: float) -> Optional[float]:
+    return float(value) if math.isfinite(float(value)) else None
+
+
+# Settings whose change mid-run mixes incomparable generations.
+_RESUME_CONFIG_KEYS = (
+    "domain",
+    "population_size",
+    "generations",
+    "stage2_train_steps",
+    "eval_episodes",
+    "seed",
+    "keep_runtime_elite",
+    "n_crossover",
+    "n_mutation",
+    "n_random",
+    "mutation_parents",
+    "highway_action_mode",
+    "highway_eval_mode",
+)
+
+
+def _warn_config_drift(saved: Dict[str, Any], current: Dict[str, Any]) -> None:
+    """Resume keeps going, but say which run settings differ from the checkpoint."""
+    drift = {
+        key: (saved[key], current[key])
+        for key in _RESUME_CONFIG_KEYS
+        if key in saved and key in current and saved[key] != current[key]
+    }
+    if not drift:
+        return
+    detail = ", ".join(f"{k}: {old!r} -> {new!r}" for k, (old, new) in drift.items())
+    console.warn(
+        f"resuming with settings that differ from the checkpoint ({detail})",
+        stage="closed-loop",
+    )
 
 
 def _needs_reevaluation(candidate: RewardCandidate, generation: int) -> bool:
@@ -337,6 +382,7 @@ class ClosedLoopRunner:
             _save_ckpt(cfg.output_dir, payload)
 
         if ckpt is not None:
+            _warn_config_drift(dict(ckpt.get("config") or {}), cfg_dict)
             start_epoch = max(0, int(ckpt.get("next_epoch") or 0))
             history = [r for r in (ckpt.get("history") or []) if isinstance(r, dict)]
             evolver.reflection = str(ckpt.get("reflection") or "")
@@ -451,7 +497,9 @@ class ClosedLoopRunner:
                         n_ok += 1
                         n_labeled += 1
                     attach_proxy_feedback(cand, (cand.metadata or {}).get("last_metrics") or {})
+                    labeled_this_epoch.add(str(cand.candidate_id))
                 else:
+                    # Not marked done: a resumed run tries it again.
                     if not _carried(cand, g):
                         n_fail += 1
                     logger.warning(
@@ -459,7 +507,6 @@ class ClosedLoopRunner:
                         cand.candidate_id,
                         result.get("reason"),
                     )
-                labeled_this_epoch.add(str(cand.candidate_id))
                 _checkpoint(
                     status="running",
                     phase="labeling",
@@ -503,6 +550,7 @@ class ClosedLoopRunner:
                 c for c in to_label
                 if not _carried(c, g) and str(c.candidate_id) not in copies
             ]
+            trained_ok = [c for c in trained if (c.metadata or {}).get("fitness") is not None]
             carried = [c for c in to_label if _carried(c, g)]
             previous_ids = set(history[-1].get("ranking") or []) if history else set()
             epoch_rec = {
@@ -517,7 +565,16 @@ class ClosedLoopRunner:
                 ),
                 "n_carried": sum(1 for c in ranked if c.candidate_id in previous_ids),
                 "n_to_label": len(trained),
-                "labeled_ids": [c.candidate_id for c in trained],
+                # ``labeled_ids`` trained successfully; ``failed_ids`` did not.
+                "labeled_ids": [c.candidate_id for c in trained_ok],
+                "failed_ids": [c.candidate_id for c in trained if c not in trained_ok],
+                # Score1 hard-rejected: never sent to PPO.
+                "skipped_score1_ids": [
+                    c.candidate_id
+                    for c in ranked
+                    if (c.metadata or {}).get("score1_rejected")
+                    and (c.metadata or {}).get("fitness") is None
+                ],
                 # Same genome as a candidate trained this generation: took over
                 # its evaluation instead of a second training run.
                 "duplicate_ids": [c.candidate_id for c in to_train if str(c.candidate_id) in copies],
@@ -542,7 +599,9 @@ class ClosedLoopRunner:
                     ranked_for_evo[0].score if ranked_for_evo else None
                 ),
                 "evolve_best_fitness": (
-                    candidate_fitness(ranked_for_evo[0]) if ranked_for_evo else None
+                    _finite_or_none(candidate_fitness(ranked_for_evo[0]))
+                    if ranked_for_evo
+                    else None
                 ),
                 "n_label_ok": n_ok,
                 "n_label_failed": n_fail,
