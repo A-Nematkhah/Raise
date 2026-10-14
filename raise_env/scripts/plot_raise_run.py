@@ -263,26 +263,77 @@ def _float_or_nan(value: Any) -> float:
         return float("nan")
 
 
+def _evolve_best_se(row: Dict[str, Any]) -> float:
+    se = row.get("evolve_best_fitness_se")
+    if se is None:
+        # Rows written before evolve_best_fitness_se existed.
+        best_id = str(row.get("evolve_best_id") or "")
+        se = ((row.get("label_metrics") or {}).get(best_id) or {}).get("fitness_se")
+    return _float_or_nan(se)
+
+
+def closed_loop_series(rows: Sequence[Dict[str, Any]]) -> Dict[str, List[Any]]:
+    """Per-epoch series of the fitness-best genome (``evolve_best_*``).
+
+    ``score1_best`` is that genome's Score1, so both panels describe the same
+    candidate; ``score1_max`` (the population's top Score1) is kept separately.
+    """
+    score1_best = []
+    for r in rows:
+        value = r.get("evolve_best_score1")
+        score1_best.append(_float_or_nan(r.get("best_score1") if value is None else value))
+    return {
+        "epochs": [int(r.get("epoch", i)) for i, r in enumerate(rows)],
+        "best_id": [str(r.get("evolve_best_id") or "?") for r in rows],
+        "score1_best": score1_best,
+        "score1_max": [_float_or_nan(r.get("best_score1")) for r in rows],
+        "fitness": [_float_or_nan(r.get("evolve_best_fitness")) for r in rows],
+        "fitness_se": [_evolve_best_se(r) for r in rows],
+        "trained": [_float_or_nan(r.get("n_labeled_total") or 0) for r in rows],
+    }
+
+
 def plot_closed_loop_epochs(run_dir: str, out_path: str) -> bool:
-    """Best Score1 / best fitness / trained candidates across closed-loop epochs."""
+    """Score1 / fitness ± 2 SE of the fitness-best genome, trained count, per epoch."""
     rows = _read_epochs_jsonl(run_dir)
     if not rows:
         return False
     import matplotlib.pyplot as plt
 
-    epochs = [int(r.get("epoch", i)) for i, r in enumerate(rows)]
-    score1 = [_float_or_nan(r.get("best_score1")) for r in rows]
-    fitness = [_float_or_nan(r.get("evolve_best_fitness")) for r in rows]
-    trained = [_float_or_nan(r.get("n_labeled_total") or 0) for r in rows]
+    s = closed_loop_series(rows)
+    epochs = s["epochs"]
+    trained = s["trained"]
 
     fig, axes = plt.subplots(3, 1, figsize=(8.0, 8.5), sharex=True)
-    axes[0].plot(epochs, score1, "o-", color="#1f4e79", linewidth=1.8)
-    axes[0].set_ylabel("Best Score1")
-    axes[0].set_title("Closed-loop — best Score1 / best fitness / trained candidates")
+    axes[0].plot(
+        epochs, s["score1_best"], "o-", color="#1f4e79", linewidth=1.8,
+        label="Score1 of fitness-best",
+    )
+    axes[0].plot(
+        epochs, s["score1_max"], "--", color="#1f4e79", alpha=0.45, linewidth=1.2,
+        label="max Score1 (any genome)",
+    )
+    axes[0].set_ylabel("Score1")
+    axes[0].set_title("Closed-loop — fitness-best genome per epoch")
+    axes[0].legend(fontsize=8)
     axes[0].grid(True, alpha=0.3)
 
-    axes[1].plot(epochs, fitness, "^-", color="#9467bd", linewidth=1.6)
+    yerr = [2.0 * se if se == se else 0.0 for se in s["fitness_se"]]
+    axes[1].errorbar(
+        epochs, s["fitness"], yerr=yerr, fmt="^-", color="#9467bd",
+        linewidth=1.6, capsize=4, label="fitness ± 2 SE",
+    )
+    for x, y, cid in zip(epochs, s["fitness"], s["best_id"]):
+        if y == y:
+            axes[1].annotate(
+                cid, (x, y), textcoords="offset points", xytext=(6, 4), fontsize=7
+            )
     axes[1].set_ylabel("Best fitness")
+    axes[1].set_title(
+        "Each epoch is scored on its own seeds; overlapping bars are not an improvement",
+        fontsize=8,
+    )
+    axes[1].legend(fontsize=8)
     axes[1].grid(True, alpha=0.3)
 
     axes[2].step(epochs, trained, where="mid", color="#ff7f0e", linewidth=1.8)

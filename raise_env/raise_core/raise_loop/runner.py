@@ -45,7 +45,7 @@ from raise_core.raise_loop.parallel_label import (
 from raise_core.raise_loop.proxy_feedback import attach_proxy_feedback
 from raise_core.raise_loop.report import format_epoch_summary, write_closed_loop_report
 from raise_core.refine import ProxyMetrics, Stage2Config
-from raise_core.selection import candidate_fitness, metrics_fitness
+from raise_core.selection import candidate_fitness, candidate_fitness_se, metrics_fitness
 
 logger = logging.getLogger(__name__)
 
@@ -602,6 +602,10 @@ class ClosedLoopRunner:
                     _finite_or_none(candidate_fitness(ranked_for_evo[0]))
                     if ranked_for_evo
                     else None
+                ),
+                # Carried elites are not in label_metrics, so the plots read it here.
+                "evolve_best_fitness_se": (
+                    candidate_fitness_se(ranked_for_evo[0]) if ranked_for_evo else None
                 ),
                 "n_label_ok": n_ok,
                 "n_label_failed": n_fail,
