@@ -280,3 +280,29 @@ score_population (Score1)
 **ترتیب پیشنهادی اصلاح:** H1 ← H2 ← M1 ← M2 ← M3 ← Lها.
 
 </div>
+
+---
+
+<div dir="rtl">
+
+## ۶. وضعیت اصلاحات
+
+همه‌ی یافته‌ها روی شاخه‌ی `simplify/highway-core` اصلاح شدند. برای H2 پرچمی اضافه نشد: Score1-reject دیگر آموزش نمی‌بیند. برای M3 فقط هشدار گذاشته شد و اجرا متوقف نمی‌شود، مثل `_warn_config_drift` در Stage III.
+
+| شناسه | وضعیت | commit | چه تغییر کرد |
+|---|---|---|---|
+| H1 | اصلاح شد | `4aa2320` | `append_epoch_record` کل `epochs.jsonl` را اتمی بازنویسی می‌کند. ردیف‌های همان epoch و epochهای بعدی را کنار می‌گذارد و ردیف تازه را اضافه می‌کند. پس اجرای دوباره‌ی یک epoch بعد از crash ردیف تکراری نمی‌سازد. |
+| H2 | اصلاح شد | `2e761e4` | `_needs_training` کاندیدهای `score1_rejected` را رد می‌کند. ردیف epoch فیلد `skipped_score1_ids` را دارد. این شامل `score1_error` (خطای sandbox روی داده‌ی Score1) هم می‌شود. |
+| M1 | اصلاح شد | `2e761e4` | فقط label موفق در `labeled_ids_this_epoch` چک‌پوینت می‌آید. پس resume کاندید fail شده را دوباره آموزش می‌دهد. در ردیف epoch، `labeled_ids` فقط موفق‌هاست و `failed_ids` جدا ثبت می‌شود. `n_to_label` همان تعداد تلاش‌شده است. |
+| M2 | اصلاح شد | `4aa2320` | `write_json` (manifest، `pop_epoch_XXX.json`، `summary.json` و خروجی‌های `pipeline.py`) و `REPORT.txt` با فایل موقت و `os.replace` نوشته می‌شوند (`atomic_write_text` در `json_io`). `read_epochs` خط ناقص را با هشدار رد می‌کند و دیگر `JSONDecodeError` نمی‌دهد. |
+| M3 | اصلاح شد (هشدار) | `2e761e4` | در resume، `domain`، `population_size`، `generations`، `stage2_train_steps`، `eval_episodes`، `seed`، `keep_runtime_elite`، سهم عملگرها، `mutation_parents` و حالت action/eval با config چک‌پوینت مقایسه می‌شوند. اختلاف با `console.warn` گزارش می‌شود. چک‌پوینت بعدی تنظیمات جدید را ذخیره می‌کند، پس هشدار فقط یک بار می‌آید. |
+| L1 | اصلاح شد | `4aa2320` | `REPORT.txt` حالا `closed_loop/manifest.json` را نشان می‌دهد. |
+| L2 | اصلاح شد | `2e761e4` | `fitness` در `label_metrics` و `evolve_best_fitness` برای کاندید بدون ارزیابی `null` است، نه `-inf`. همه‌ی مصرف‌کننده‌ها (reflection، گزارش، `plot_raise_run.py`) `None` را می‌پذیرند. |
+| L3 | مستند شد | `8c326f5` | در `spec.md`: در ردیف `resumed`، `n_label_ok` و `n_label_failed` فقط مال پروسه‌ی ادامه‌دهنده‌اند، ولی `labeled_ids` کل epoch را پوشش می‌دهد. |
+| L4 | مستند شد | `8c326f5` | در `spec.md`: `closed_loop/checkpoint.json` منبع اصلی است و کپی ریشه‌ی اجرا فقط وقتی خوانده می‌شود که اولی خراب باشد. |
+
+**اثر روی اجرای واقعی:** کاندیدی که Score1 رد می‌کند (مثلاً پاداش ثابت) دیگر یک دور کامل K2 مصرف نمی‌کند. در ایپاک‌های قبلی چنین کاندیدی `fitness` می‌گرفت و می‌توانست والد شود. حالا بدون fitness ته رتبه‌بندی می‌ماند. اجرای ادامه‌یافته بعد از خطای گذرا (مثلاً OOM) آن کاندید را دوباره آموزش می‌دهد، پس هزینه‌ی resume ممکن است کمی بیشتر شود.
+
+**تست‌ها:** کل مجموعه پاس شد: ۳۴۲ تست سریع (شامل `test_key_manager.py` که `caplog` دارد و جدا بدون `-p no:logging` اجرا شد) و تست کند `test_wrapper_step`. فایل تست جدید `test_closed_loop_resume_fixes.py` با ۷ تست: جایگزینی ردیف epoch تکراری، رد خط ناقص، نبود ردیف تکراری بعد از crash شبیه‌سازی‌شده، retry کاندید fail شده در resume، جدا بودن `failed_ids` و نبود `Infinity` در `epochs.jsonl`، آموزش‌ندیدن Score1-reject، و هشدار drift.
+
+</div>
