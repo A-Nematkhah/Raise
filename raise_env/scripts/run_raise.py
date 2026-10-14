@@ -69,6 +69,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--llm-model", type=str, default=None)
     parser.add_argument(
+        "--llm-max-tokens",
+        type=int,
+        default=None,
+        help="Max completion tokens per LLM call (default: provider default)",
+    )
+    parser.add_argument(
+        "--llm-reasoning-effort",
+        type=str,
+        default=None,
+        choices=["none", "low", "medium", "high"],
+        help="Groq gpt-oss reasoning_effort (omit to use the provider default)",
+    )
+    parser.add_argument(
         "--allow-seed-llm",
         action="store_true",
         help="Permit --llm seed on a non-fast run (debug / wiring without API cost)",
@@ -284,6 +297,8 @@ def main() -> int:
         seed=args.seed,
         llm_provider=args.llm,
         llm_model=args.llm_model,
+        llm_max_tokens=args.llm_max_tokens,
+        llm_reasoning_effort=args.llm_reasoning_effort,
         score1_mode="smoke" if args.fast else args.score1,
         stage1_dataset_path=args.stage1_dataset,
         population=args.population,

@@ -45,6 +45,10 @@ class RaiseRunConfig:
     domain: str = DEFAULT_DOMAIN
     llm_provider: str = "seed"  # seed | groq | vllm | ollama | scripted
     llm_model: Optional[str] = None
+    # None → provider defaults (Groq/vLLM: 1500; Ollama: 4096).
+    llm_max_tokens: Optional[int] = None
+    # Groq gpt-oss only when set (e.g. low | medium | high); omitted otherwise.
+    llm_reasoning_effort: Optional[str] = None
     # Stage I Score1: "dataset" (default) | "smoke" (fast tests only)
     score1_mode: str = "dataset"
     stage1_dataset_path: str = "domains/highway/data/stage1_dataset"
@@ -166,13 +170,14 @@ class RaisePipeline:
         if self.llm is not None:
             return self.llm
         seed = self.domain_pack.seed_reward_source
-        if self.config.llm_model is None:
-            return make_llm_client(self.config.llm_provider, base_code=seed)
-        return make_llm_client(
-            self.config.llm_provider,
-            model=self.config.llm_model,
-            base_code=seed,
-        )
+        kwargs: Dict[str, Any] = {"base_code": seed}
+        if self.config.llm_model is not None:
+            kwargs["model"] = self.config.llm_model
+        if self.config.llm_max_tokens is not None:
+            kwargs["max_tokens"] = int(self.config.llm_max_tokens)
+        if self.config.llm_reasoning_effort is not None:
+            kwargs["reasoning_effort"] = str(self.config.llm_reasoning_effort)
+        return make_llm_client(self.config.llm_provider, **kwargs)
 
     def _closed_loop_config(self) -> ClosedLoopConfig:
         cfg = self.config
