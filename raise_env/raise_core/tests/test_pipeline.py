@@ -38,7 +38,7 @@ def test_pipeline_fast(tmp_path):
     assert "compute_reward" in final["code"]
     assert final["valid"] is True
     man = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
-    assert man["domain"] == "highway"
+    assert man["domain"] == "crowdnav"
     assert man["best_stage3_id"] == arts.best_stage3.candidate_id
     s2 = json.loads((out / "stage2_population.json").read_text(encoding="utf-8"))
     assert s2["history"], "per-generation Stage II rows feed the plots"
@@ -48,7 +48,7 @@ def test_pipeline_fast(tmp_path):
 
 
 class _MetadataReassigningStage3:
-    """Stub Stage III that reassigns candidate.metadata like HighwayPPOTrainer."""
+    """Stub Stage III that reassigns candidate.metadata like CrowdNavPPOTrainer."""
 
     def __init__(self, inner, seen=None):
         self.inner = inner
@@ -86,7 +86,7 @@ def test_stage3_does_not_mutate_stage2_metadata(tmp_path, monkeypatch):
     assert mem_md.get("last_metrics") == disk_md.get("last_metrics")
 
 
-def test_stage3_receives_highway_config(tmp_path, monkeypatch):
+def test_stage3_receives_trainer_config(tmp_path, monkeypatch):
     seen = []
     monkeypatch.setattr(
         pipeline_mod,
@@ -97,23 +97,27 @@ def test_stage3_receives_highway_config(tmp_path, monkeypatch):
     )
     cfg = RaiseRunConfig(output_dir=str(tmp_path / "run_hw_cfg"))
     cfg.apply_fast_profile()
-    cfg.highway_eval_mode = "holdout_only"
-    cfg.highway_warm_start = True
-    cfg.highway_n_envs = 2
+    cfg.eval_mode = "holdout_only"
+    cfg.warm_start = True
+    cfg.n_envs = 2
+    cfg.robot_kinematics = "unicycle"
+    cfg.action_mode = "continuous"
     RaisePipeline(cfg).run()
     assert seen
     s3 = seen[0]
-    assert s3.highway_eval_mode == "holdout_only"
+    assert s3.eval_mode == "holdout_only"
     # Stage II warm start does not leak into Stage III's K3 comparison.
-    assert s3.highway_warm_start is False
-    assert s3.highway_n_envs == 2
+    assert s3.warm_start is False
+    assert s3.n_envs == 2
     assert s3.train_env_steps == cfg.stage3_train_steps
-    assert s3.highway_n_steps == 64
-    assert s3.highway_eval_deterministic is False
+    assert s3.ppo_n_steps == 256
+    assert s3.eval_deterministic is False
+    assert (s3.robot_kinematics, s3.action_mode) == ("unicycle", "continuous")
+    assert s3.eval_split == "val"
 
 
 def test_warm_start_off_by_default():
-    assert RaiseRunConfig().highway_warm_start is False
+    assert RaiseRunConfig().warm_start is False
     assert RaiseRunConfig().stage3_warm_start is False
-    assert Stage2Config().highway_warm_start is False
-    assert Stage3Config().highway_warm_start is False
+    assert Stage2Config().warm_start is False
+    assert Stage3Config().warm_start is False

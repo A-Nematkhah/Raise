@@ -22,7 +22,7 @@ def _c(
             "TR": 0.0,
             "fitness": float(nav),
             "selection_scalar": float(nav),
-            "domain": "highway",
+            "domain": "crowdnav",
         }
     return RewardCandidate(
         candidate_id=cid,

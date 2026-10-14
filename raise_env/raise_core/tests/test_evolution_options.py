@@ -7,8 +7,8 @@ from collections import Counter
 
 import pytest
 
-from domains.highway import prompts as hwy_prompts
-from domains.highway.reward_checks import make_highway_validator
+from domains.crowdnav import prompts as cn_prompts
+from domains.crowdnav.reward_checks import make_crowdnav_validator
 from raise_core.candidate import RewardCandidate
 from raise_core.explore import StageIConfig, StageIEvolver, select_mutation_parents
 from raise_core.feedback import ArchiveRecord, CandidateArchive, FeedbackCardConfig
@@ -57,9 +57,9 @@ def _evolver(**cfg) -> StageIEvolver:
     return StageIEvolver(
         ScriptedLLMClient([_INVALID] * 20),
         score_fn=lambda *_a, **_k: 0.0,
-        validator=make_highway_validator(),
+        validator=make_crowdnav_validator(),
         config=StageIConfig(population_size=6, **cfg),
-        prompts=hwy_prompts,
+        prompts=cn_prompts,
         feedback=FeedbackCardConfig(enabled=False),
     )
 
@@ -86,8 +86,8 @@ def _card_evolver(random_calls: bool) -> StageIEvolver:
     evo = StageIEvolver(
         ScriptedLLMClient([_INVALID]),
         score_fn=lambda *_a, **_k: 0.0,
-        validator=make_highway_validator(),
-        prompts=hwy_prompts,
+        validator=make_crowdnav_validator(),
+        prompts=cn_prompts,
         feedback=FeedbackCardConfig(random_calls=random_calls),
     )
     archive = CandidateArchive()

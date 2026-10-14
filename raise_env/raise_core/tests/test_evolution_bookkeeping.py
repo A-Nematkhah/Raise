@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from domains.highway import prompts as hwy_prompts
-from domains.highway.reward_checks import make_highway_validator
+from domains.crowdnav import prompts as cn_prompts
+from domains.crowdnav.reward_checks import make_crowdnav_validator
 from raise_core.candidate import RewardCandidate
 from raise_core.explore import StageIConfig, StageIEvolver
 from raise_core.feedback import FeedbackCardConfig, component_diversity
@@ -35,9 +35,9 @@ def test_generation_shares_one_retry_budget():
     evo = StageIEvolver(
         llm,
         score_fn=lambda *_a, **_k: 0.0,
-        validator=make_highway_validator(),
+        validator=make_crowdnav_validator(),
         config=StageIConfig(population_size=4, max_invalid_replacements=3),
-        prompts=hwy_prompts,
+        prompts=cn_prompts,
         feedback=FeedbackCardConfig(enabled=False),
     )
     ranked = [_evaluated(f"ini_000{i}", float(i), 1.0 - 0.1 * i) for i in range(4)]
@@ -52,8 +52,8 @@ def test_reflection_trend_comes_from_the_given_history():
     evo = StageIEvolver(
         _InvalidLLM(),
         score_fn=lambda *_a, **_k: 0.0,
-        validator=make_highway_validator(),
-        prompts=hwy_prompts,
+        validator=make_crowdnav_validator(),
+        prompts=cn_prompts,
     )
     note = evo._build_reflection([_evaluated("a", 1.0, 0.5)], generation=3,
                                  fitness_trend=[0.1, None, float("-inf"), 0.2])
@@ -82,10 +82,10 @@ def _with_components(*keys: str) -> str:
 
 
 def test_component_diversity_is_mean_pairwise_jaccard_distance():
-    a = _with_components("speed", "collision")
-    b = _with_components("speed", "lane")
+    a = _with_components("progress", "collision")
+    b = _with_components("progress", "clearance")
     assert component_diversity([a, a]) == 0.0
-    # |{speed}| / |{speed, collision, lane}| = 1/3 shared.
+    # |{progress}| / |{progress, collision, clearance}| = 1/3 shared.
     assert abs(component_diversity([a, b]) - (1 - 1 / 3)) < 1e-12
     assert component_diversity([a]) is None
     no_dict = "def compute_reward(state, memory):\n    return 0.0\n"

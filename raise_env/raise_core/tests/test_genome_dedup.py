@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import json
 
-from domains.highway import prompts as hwy_prompts
-from domains.highway.reward_checks import make_highway_validator
+from domains.crowdnav import prompts as cn_prompts
+from domains.crowdnav.reward_checks import make_crowdnav_validator
 from raise_core.candidate import RewardCandidate, genome_fingerprint
 from raise_core.explore import StageIConfig, StageIEvolver
 from raise_core.feedback import ArchiveRecord, CandidateArchive, FeedbackCardConfig
@@ -45,9 +45,9 @@ def _evolver(completions, *, archive=None, log_path=None, **cfg) -> StageIEvolve
     evo = StageIEvolver(
         ScriptedLLMClient(completions),
         score_fn=lambda *_a, **_k: 0.0,
-        validator=make_highway_validator(),
+        validator=make_crowdnav_validator(),
         config=StageIConfig(**base),
-        prompts=hwy_prompts,
+        prompts=cn_prompts,
         feedback=FeedbackCardConfig(enabled=False),
         rejection_log_path=log_path,
     )

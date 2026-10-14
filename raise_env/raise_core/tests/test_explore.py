@@ -9,7 +9,7 @@ import os
 
 import pytest
 
-from domains.highway.prompts import (
+from domains.crowdnav.prompts import (
     D1_SYSTEM_PROMPT,
     D4_EXTERNAL_KNOWLEDGE,
     D5_SEED_FUNCTION,
@@ -17,8 +17,8 @@ from domains.highway.prompts import (
     format_d2_crossover,
     format_d2_mutation,
 )
-from domains.highway.reward_checks import make_highway_validator
-from domains.highway.state import default_smoke_states
+from domains.crowdnav.reward_checks import make_crowdnav_validator
+from domains.crowdnav.state import default_smoke_states
 from raise_core.explore import StageIConfig, StageIEvolver
 from raise_core.llm import (
     CompletionTruncatedError,
@@ -60,7 +60,7 @@ def _evolver(client, **cfg) -> StageIEvolver:
     return StageIEvolver(
         client,
         score_fn=_score_by_smoke,
-        validator=make_highway_validator(),
+        validator=make_crowdnav_validator(),
         config=StageIConfig(**cfg),
     )
 
@@ -78,10 +78,10 @@ def test_prompt_templates_contain_appendix_anchors():
     assert "expert in reinforcement learning" in D1_SYSTEM_PROMPT
     user = format_d1_initial(reflection="keep exploring")
     assert "compute_reward" in user
-    assert "HighwayRewardState" in user
+    assert "CrowdNavRewardState" in user
     assert "keep exploring" in user
     assert "memory" in user
-    assert "highway-fast-v0" in D4_EXTERNAL_KNOWLEDGE
+    assert "CrowdNav" in D4_EXTERNAL_KNOWLEDGE
     assert "def compute_reward(state, memory)" in D5_SEED_FUNCTION
     cross = format_d2_crossover("codeA", "codeB", "note")
     assert "codeA" in cross and "codeB" in cross
@@ -149,7 +149,7 @@ def test_gen0_replaces_invalid_with_extra_draws(tmp_path):
     evolver = StageIEvolver(
         ScriptedLLMClient(completions),
         score_fn=_score_by_smoke,
-        validator=make_highway_validator(),
+        validator=make_crowdnav_validator(),
         config=StageIConfig(population_size=8, max_invalid_replacements=8),
         rejection_log_path=log_path,
     )

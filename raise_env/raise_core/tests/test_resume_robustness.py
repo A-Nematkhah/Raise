@@ -9,9 +9,9 @@ import time
 
 import pytest
 
-from domains.highway.prompts import D5_SEED_FUNCTION
-from domains.highway.reward_checks import make_highway_validator
-from domains.highway.stage1 import make_score_fn
+from domains.crowdnav.prompts import D5_SEED_FUNCTION
+from domains.crowdnav.reward_checks import make_crowdnav_validator
+from domains.crowdnav.stage1 import make_score_fn
 from raise_core.explore import RewardCandidate, StageIEvolver
 from raise_core.json_io import atomic_write_json
 from raise_core.raise_loop.checkpoint import (
@@ -29,7 +29,7 @@ from raise_core.raise_loop.runner import (
 
 
 def _cand(cid: str, **md) -> RewardCandidate:
-    fn = make_highway_validator().validate_code(D5_SEED_FUNCTION)
+    fn = make_crowdnav_validator().validate_code(D5_SEED_FUNCTION)
     return RewardCandidate(
         candidate_id=cid,
         code=D5_SEED_FUNCTION,
@@ -78,7 +78,7 @@ def test_load_ckpt_refuses_when_every_copy_is_corrupt(tmp_path):
 
 def test_restore_id_counter_skips_issued_ids():
     score_fn, _ds = make_score_fn(mode="smoke")
-    evolver = StageIEvolver(None, score_fn=score_fn, validator=make_highway_validator())
+    evolver = StageIEvolver(None, score_fn=score_fn, validator=make_crowdnav_validator())
     assert evolver.restore_id_counter(None, existing_ids=["ini_0003", "mut_0011_v2", "x"]) == 12
     assert evolver.restore_id_counter(20) == 20
     assert evolver._next_id("cro") == "cro_0020"

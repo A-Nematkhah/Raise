@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from domains.highway import prompts as hwy_prompts
-from domains.highway.reward_checks import make_highway_validator
+from domains.crowdnav import prompts as cn_prompts
+from domains.crowdnav.reward_checks import make_crowdnav_validator
 from raise_core.explore import StageIConfig, StageIEvolver, operator_counts
 from raise_core.feedback import FeedbackCardConfig
 from raise_core.llm import ScriptedLLMClient
@@ -77,9 +77,9 @@ def test_default_generation_at_n6_has_every_operator():
     evo = StageIEvolver(
         ScriptedLLMClient(completions),
         score_fn=lambda *_a, **_k: 0.0,
-        validator=make_highway_validator(),
+        validator=make_crowdnav_validator(),
         config=StageIConfig(population_size=6, keep_runtime_elite=True),
-        prompts=hwy_prompts,
+        prompts=cn_prompts,
         feedback=FeedbackCardConfig(enabled=False),
     )
     ranked = evo.score_population(evo.initialize_population())

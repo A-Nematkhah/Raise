@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 
-from domains.highway.reward_checks import make_highway_validator
+from domains.crowdnav.reward_checks import make_crowdnav_validator
 from raise_core.explore import RewardCandidate
 from raise_core.raise_loop.checkpoint import (
     build_checkpoint,
@@ -19,7 +19,7 @@ from raise_core.refine import StubPolicyTrainer
 
 def _cand(cid: str, k: float, **md) -> RewardCandidate:
     code = f"def compute_reward(state, memory):\n    return float(state.progress) * {k}\n"
-    fn = make_highway_validator().validate_code(code)
+    fn = make_crowdnav_validator().validate_code(code)
     return RewardCandidate(
         candidate_id=cid,
         code=code,
@@ -77,7 +77,7 @@ def test_checkpoint_roundtrip(tmp_path):
     assert loaded is not None
     assert loaded["phase"] == "labeling"
     assert loaded["labeled_ids_this_epoch"] == ["a"]
-    restored = deserialize_population(loaded["population"], validator=make_highway_validator())
+    restored = deserialize_population(loaded["population"], validator=make_crowdnav_validator())
     assert len(restored) == 2
     assert restored[0].candidate_id == "a"
     assert restored[0].reward_fn is not None

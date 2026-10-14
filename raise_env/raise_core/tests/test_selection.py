@@ -6,7 +6,7 @@ from raise_core.candidate import RewardCandidate
 from raise_core.selection import candidate_fitness, metrics_fitness, pick_best_trained
 
 
-def test_metrics_without_highway_tag_use_the_stub_formula():
+def test_metrics_without_fitness_use_the_stub_formula():
     assert metrics_fitness({"SR": 0.68, "CR": 0.267, "TR": 0.053}) == 0.68 - 0.267 - 0.5 * 0.053
     assert metrics_fitness({"fitness": 0.3, "SR": 1.0}) == 0.3
     assert metrics_fitness(None) == float("-inf")

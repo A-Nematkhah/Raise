@@ -1,4 +1,4 @@
-"""Tests for highway parallel labeling helpers and warm-start stamp."""
+"""Tests for parallel Stage II labeling helpers and warm-start stamp."""
 
 from __future__ import annotations
 

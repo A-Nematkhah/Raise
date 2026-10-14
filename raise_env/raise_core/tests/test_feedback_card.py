@@ -8,17 +8,18 @@ from __future__ import annotations
 import json
 import math
 import os
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
-import domains.highway.prompts as hwy_prompts
-from domains.highway import feedback_card as fc
-from domains.highway.adapter import _eval_metrics
-from domains.highway.metrics import attach_fitness
-from domains.highway.objective_constants import PPO_GAMMA
-from domains.highway.reward_checks import make_highway_validator
-from domains.highway.training_dynamics import TrainingDynamicsRecorder
+import domains.crowdnav.prompts as cn_prompts
+from domains.crowdnav import feedback_card as fc
+from domains.crowdnav.adapter import _eval_metrics
+from domains.crowdnav.metrics import attach_fitness
+from domains.crowdnav.objective_constants import CROWDNAV_EVAL_GAMMA, PPO_GAMMA
+from domains.crowdnav.reward_checks import make_crowdnav_validator
+from domains.crowdnav.training_dynamics import TrainingDynamicsRecorder
 from raise_core.explore import RewardCandidate, StageIConfig, StageIEvolver
 from raise_core.feedback import (
     ArchiveRecord,
@@ -46,22 +47,22 @@ CLIENT_SYSTEM = DEFAULT_CLIENT_SYSTEM
 # ------------------------------------------------------------------ fixtures
 
 
-def _code(collision: float = -20.0, speed: float = 0.08, lane_bonus: bool = False) -> str:
-    extra_const = "    lane_bonus = 0.2\n" if lane_bonus else ""
-    extra_term = ' "lane_bonus": lane_bonus,' if lane_bonus else ""
+def _code(collision: float = -20.0, coef: float = 0.08, clearance_bonus: bool = False) -> str:
+    extra_const = "    clearance_bonus = 0.2\n" if clearance_bonus else ""
+    extra_term = ' "clearance_bonus": clearance_bonus,' if clearance_bonus else ""
     return (
         "def compute_reward(state, memory):\n"
         f"    collision_penalty = {collision}\n"
-        f"    speed_coef = {speed}\n"
+        f"    progress_coef = {coef}\n"
         f"{extra_const}"
         "    if state.collision:\n"
         "        total = float(collision_penalty)\n"
         '        return total, {"collision_penalty": total, "progress_term": 0.0}\n'
-        "    progress_term = float(state.progress)\n"
-        "    speed_term = float(speed_coef * state.speed)\n"
-        "    total = progress_term + speed_term\n"
+        "    progress_term = float(progress_coef * state.progress)\n"
+        "    reach_term = float(state.reached_goal)\n"
+        "    total = progress_term + reach_term\n"
         f'    return total, {{"collision_penalty": 0.0, "progress_term": progress_term,'
-        f' "speed_term": speed_term,{extra_term}}}\n'
+        f' "reach_term": reach_term,{extra_term}}}\n'
     )
 
 
@@ -69,37 +70,36 @@ def _episodes(n_success: int, n_collision: int, *, components: bool = True) -> l
     eps = []
     for i in range(n_success):
         e = {
-            "outcome": "success", "steps": 200, "mean_speed": 21.0 + 0.1 * i,
-            "progress": 850.0 + i, "lane_changes": 3, "overtakes": 2,
-            "return": 300.0 + i, "disc_return": 80.0 + i,
+            "outcome": "success", "steps": 40 + i, "time": 10.0 + 0.25 * i,
+            "path_length": 8.5, "min_separation": 0.15, "danger_steps": 1,
+            "return": 1.6 + 0.01 * i, "disc_return": 1.2 + 0.01 * i, "task_return": 0.4,
         }
         if components:
-            e["components"] = {"progress_term": 285.0 + i, "speed_term": 15.0, "collision_penalty": 0.0}
+            e["components"] = {"progress_term": 0.6 + 0.01 * i, "reach_term": 1.0, "collision_penalty": 0.0}
         eps.append(e)
     for i in range(n_collision):
         e = {
-            "outcome": "collision", "steps": 40 + i, "mean_speed": 26.0,
-            "progress": 210.0, "lane_changes": 1, "overtakes": 0,
-            "return": 5.0 + i, "disc_return": 2.0 + i,
+            "outcome": "collision", "steps": 12 + i, "time": 3.0 + 0.25 * i,
+            "path_length": 3.0, "min_separation": -0.05, "danger_steps": 4,
+            "return": -19.8 + 0.01 * i, "disc_return": -17.0 + 0.01 * i, "task_return": -0.25,
         }
         if components:
-            e["components"] = {"progress_term": 22.0 + i, "speed_term": 3.0, "collision_penalty": -20.0}
+            e["components"] = {"progress_term": 0.2 + 0.01 * i, "reach_term": 0.0, "collision_penalty": -20.0}
         eps.append(e)
     return eps
 
 
-def _metrics(sr, cr, *, tr=0.0, speed=22.0, p10=19.0, progress=800.0, lc=0.05, n=30,
+def _metrics(sr, cr, *, tr=0.0, nt=10.0, pl=8.5, itr=0.05, sd=0.12, n=30,
              episodes=None, se=0.05):
     hold = {
-        "SR": sr, "CR": cr, "TR": tr, "mean_speed": speed, "speed_p10": p10,
-        "speed_p90": speed + 3.0, "mean_progress": progress, "PL": progress,
-        "lane_change_rate": lc, "overtakes_per_km": 1.2, "overtake_episode_frac": 0.3,
-        "n_eval_episodes": n, "fitness_se": se, "outcome_unique": 2.0, "progress_std": 60.0,
+        "SR": sr, "CR": cr, "TR": tr, "NT": nt, "PL": pl, "ITR": itr, "SD": sd,
+        "n_eval_episodes": n, "fitness_se": se, "task_return": 0.4 * sr - 0.25 * cr,
     }
     m = {**hold, "holdout": dict(hold), "eval_profile": "holdout"}
     m["eval_context"] = {
-        "traffic": "holdout", "vehicles_count": 20, "vehicles_density": 1.5,
-        "duration_s": 40, "policy_frequency": 5, "deterministic": False,
+        "split": "val", "case_set_size": 100, "human_num": 5, "scenario": "circle_crossing",
+        "time_limit_s": 25.0, "time_step_s": 0.25, "ideal_nav_time_s": 8.0,
+        "deterministic": False,
     }
     if episodes is not None:
         m["holdout_episodes"] = episodes
@@ -111,7 +111,7 @@ def _dynamics(srs=(0.1, 0.3, 0.5, 0.6)) -> dict:
         "source": "training_rollouts", "total_timesteps": 12000, "n_episodes": 40,
         "windows": [
             {"steps": [3000 * i, 3000 * (i + 1)], "n_episodes": 10, "SR": s, "CR": 1 - s,
-             "TR": 0.0, "mean_return": 50.0 + 10 * i, "mean_length": 120.0, "mean_speed": 23.0}
+             "TR": 0.0, "mean_return": 0.5 + 0.1 * i, "mean_length": 40.0, "nav_time": 11.0}
             for i, s in enumerate(srs)
         ],
     }
@@ -136,27 +136,27 @@ def _lineage_archive() -> CandidateArchive:
     archive.add_population(
         [
             _cand("ini_0000", origin="initial", code=_code(-10.0, 0.05),
-                  metrics=_metrics(0.2, 0.8, speed=27.0, p10=24.0, progress=300.0,
+                  metrics=_metrics(0.2, 0.8, nt=13.0, pl=10.0, itr=0.15,
                                    episodes=_episodes(6, 24))),
             _cand("ran_0002", origin="random", code=_code(-5.0, 0.2),
-                  metrics=_metrics(0.9, 0.1, speed=24.0, p10=22.0, progress=900.0)),
+                  metrics=_metrics(0.9, 0.1, nt=9.0, pl=8.2)),
         ],
         generation=0,
     )
     archive.add_population(
         [
             _cand("mut_0004", parents=("ini_0000",), code=_code(-20.0, 0.05),
-                  metrics=_metrics(0.4, 0.6, speed=25.0, p10=21.0, progress=500.0,
+                  metrics=_metrics(0.4, 0.6, nt=11.0, pl=9.0,
                                    episodes=_episodes(12, 18))),
         ],
         generation=1,
     )
     archive.add_population(
         [
-            _cand("mut_0009", parents=("mut_0004",), code=_code(-60.0, 0.08, lane_bonus=True),
+            _cand("mut_0009", parents=("mut_0004",), code=_code(-60.0, 0.08, clearance_bonus=True),
                   metrics=_metrics(0.63, 0.37, episodes=_episodes(19, 11)), dynamics=_dynamics()),
             _cand("mut_0010", parents=("mut_0004",), code=_code(-20.0, 0.12),
-                  metrics=_metrics(0.5, 0.5, speed=26.0)),
+                  metrics=_metrics(0.5, 0.5, nt=10.5)),
         ],
         generation=2,
     )
@@ -206,9 +206,9 @@ def _evolver(tmp_path, *, reply=_REPLY, archive=None, **cfg) -> StageIEvolver:
     evo = StageIEvolver(
         _RecordingLLM(reply),
         score_fn=lambda *_a, **_k: 0.0,
-        validator=make_highway_validator(),
+        validator=make_crowdnav_validator(),
         config=StageIConfig(population_size=4),
-        prompts=hwy_prompts,
+        prompts=cn_prompts,
         feedback=FeedbackCardConfig(**cfg),
         llm_log_dir=str(tmp_path / "closed_loop"),
     )
@@ -235,16 +235,21 @@ def test_full_card_renders_every_section_from_recorded_data():
     assert rendered.sections == ["A", "B", "C", "D", "E", "F", "G", "H", "P"]
     assert rendered.unavailable == {}
     # A: metrics with units + evaluation context.
-    assert "holdout traffic (20 vehicles, density 1.5); 30 episodes; stochastic policy" in text
-    assert "mean_speed 22.0 m/s" in text and "progress 800 m" in text
+    assert (
+        "Eval: Stage II PPO 12,000 steps; val scenarios (circle_crossing, 5 humans); "
+        "30 episodes; stochastic policy." in text
+    )
+    assert "nav_time 10.00 s" in text and "path_length 8.50 m" in text
+    assert "min_dist_in_danger 0.120 m" in text
     # B: training windows; C: per-outcome component sums with coverage.
-    assert "steps 0-3000: 10 ep SR 0.10" in text
-    assert "collision_penalty -7.3 | +0.0 | -20.0" in text
+    assert "steps 0-3000: 10 ep SR 0.10" in text and "nav_time 11.0 s" in text
+    # 11 of 30 episodes collide at -20: mean -7.33, successes 0, failures -20.
+    assert "collision_penalty -7.33 | +0.00 | -20.00" in text
     assert "Components sum to" in text
     # D: parent comparison incl. code change.
     assert "mut_0009 vs parent mut_0004" in text
-    assert "collision_penalty -20->-60" in text and "+component lane_bonus" in text
-    # F: representative trajectories; H: preference check.
+    assert "collision_penalty -20->-60" in text and "+component clearance_bonus" in text
+    # F: representative episodes; H: preference check.
     assert "typical success" in text and "typical collision" in text
     assert "Mann-Whitney AUC over 19x11 holdout episode pairs, discounted, gamma 0.99" in text
     assert "outcome-ordering AUC 0.90" in text
@@ -258,7 +263,7 @@ def test_missing_data_is_marked_unavailable_never_fabricated():
     archive = CandidateArchive()
     bare = RewardCandidate(
         candidate_id="ini_0001", code=_code(), valid=True, origin="initial",
-        metadata={"last_metrics": {"SR": 0.5, "CR": 0.5, "TR": 0.0, "ITR": 12.0, "PL": 300.0},
+        metadata={"last_metrics": {"SR": 0.5, "CR": 0.5, "TR": 0.0, "NT": 12.0, "PL": 10.0},
                   "fitness": -0.2},
     )
     archive.add_population([bare], generation=0)
@@ -269,7 +274,7 @@ def test_missing_data_is_marked_unavailable_never_fabricated():
     assert "[C] Reward components - ini_0001: unavailable (no per-episode holdout records" in text
     assert "[D] Parent comparison: unavailable (ini_0001 is a fresh initial proposal" in text
     assert "[F] Representative episodes: unavailable" in text
-    assert "speed_p10 n/a" in text
+    assert "danger_freq n/a" in text and "min_dist_in_danger n/a" in text
     assert "steps 0-" not in text and "typical success" not in text
 
 
@@ -344,23 +349,26 @@ def test_parent_deltas_respect_metric_direction_and_noise():
     # 30 episodes each: SE(rate) ~ 0.09, so a 0.23 change stays inside 2 SE.
     assert "SR 0.40->0.63 (+0.23 better, within noise)" in d
     assert "CR 0.60->0.37 (-0.23 better, within noise)" in d
-    assert "mean_speed 25.0->22.0 (-3.0 worse)" in d
-    assert "progress 500->800 (+300 better)" in d
+    assert "nav_time 11.00->10.00 (-1.00 better)" in d
+    assert "path_length 9.00->8.50 (-0.50 better)" in d
     assert "TR 0.00 (same)" in d
-    assert "lane_changes 0.050 (same)" in d
-    assert "Behaviour: near free-flow speed, crash-prone -> slow, some collisions" in d
+    assert "danger_freq 0.050 (same)" in d
+    assert (
+        "Behaviour: rarely reaches the goal, crash-prone -> "
+        "reaches the goal in most episodes, some collisions" in d
+    )
 
 
 def test_large_change_with_many_episodes_is_not_noise():
     archive = CandidateArchive()
-    archive.add(ArchiveRecord.from_candidate(_cand("a", metrics=_metrics(0.40, 0.60, n=200, lc=0.08)), generation=0))
+    archive.add(ArchiveRecord.from_candidate(_cand("a", metrics=_metrics(0.40, 0.60, n=200, itr=0.08)), generation=0))
     archive.add(ArchiveRecord.from_candidate(
-        _cand("b", parents=("a",), metrics=_metrics(0.63, 0.37, n=200, lc=0.03)), generation=1))
+        _cand("b", parents=("a",), metrics=_metrics(0.63, 0.37, n=200, itr=0.03)), generation=1))
     text = _full(_card(archive, subjects=("b",))).text
     assert "SR 0.40->0.63 (+0.23 better)" in text
     assert "CR 0.60->0.37 (-0.23 better)" in text
-    # Lane changes have no preferred direction: delta without a verdict.
-    assert "lane_changes 0.080->0.030 (-0.050)" in text
+    # Danger frequency is not a rate with a binomial SE: no noise verdict.
+    assert "danger_freq 0.080->0.030 (-0.050 better)" in text
 
 
 def test_small_rate_change_is_within_noise():
@@ -397,22 +405,28 @@ def test_preference_check_auc_and_single_class():
     assert pref3 is None and "3 successful and 0 failed" in reason
 
 
-def test_diagnostics_flag_crawling_and_speed_with_collisions():
+def test_diagnostics_flag_slow_freezing_and_collisions():
     archive = CandidateArchive()
     archive.add_population(
         [
-            _cand("slow", metrics=_metrics(0.95, 0.05, speed=9.0, p10=6.0, progress=350.0, lc=0.0)),
-            _cand("fast", metrics=_metrics(0.4, 0.6, speed=28.0, p10=25.0)),
+            _cand("slow", metrics=_metrics(0.95, 0.05, nt=20.0, itr=0.02)),
+            _cand("freeze", metrics=_metrics(0.1, 0.0, tr=0.9, itr=0.0)),
+            _cand("crash", metrics=_metrics(0.4, 0.6, itr=0.2)),
         ],
         generation=0,
     )
     slow = _full(_card(archive, subjects=("slow",))).text
-    assert "Flags: crawling / too slow, insufficient progress, possible reward hacking" in slow
-    assert "Observation: slow: speed gate" in slow
-    assert "Hypothesis: slow: slow driving costs too little" in slow
-    fast = _full(_card(archive, subjects=("fast",))).text
-    assert "speed with collisions" in fast
-    assert "Observation: fast: CR 0.60 at speed gate" in fast
+    assert "Flags: slow navigation" in slow
+    assert "Observation: slow: nav_time 20.00 s vs 8.00 s for a straight line at v_pref" in slow
+    assert "Hypothesis: slow: the reward does not pay for arriving sooner" in slow
+    assert "slow arrivals" in slow
+    freeze = _full(_card(archive, subjects=("freeze",))).text
+    assert "Flags: freezing robot (timeouts)" in freeze
+    assert "freezes until the time limit" in freeze
+    crash = _full(_card(archive, subjects=("crash",))).text
+    assert "Flags: collisions, discomfort-zone intrusions" in crash
+    assert "Observation: crash: CR 0.60 (SR 0.40, TR 0.00)" in crash
+    assert "often inside the discomfort zone" in crash
 
 
 def test_unstable_training_and_reward_hacking_flags():
@@ -432,10 +446,10 @@ def test_unstable_training_and_reward_hacking_flags():
 
 
 def test_code_summary_and_diff():
-    assert "components [collision_penalty, progress_term, speed_term]" in summarize_code(_code())
+    assert "components [collision_penalty, progress_term, reach_term]" in summarize_code(_code())
     assert diff_code(_code(), _code()) == "identical code"
-    assert diff_code(_code(-20.0), _code(-60.0, lane_bonus=True)) == (
-        "+component lane_bonus; collision_penalty -20->-60; +lane_bonus=0.2"
+    assert diff_code(_code(-20.0), _code(-60.0, clearance_bonus=True)) == (
+        "+component clearance_bonus; collision_penalty -20->-60; +clearance_bonus=0.2"
     )
     assert diff_code(_code(), _code() + "\n").startswith("identical")
     assert summarize_code("def f(:\n").endswith("(unparseable)")
@@ -457,7 +471,7 @@ def test_counter_falls_back_to_heuristic_without_tokenizer(monkeypatch):
     monkeypatch.setattr(token_budget, "_o200k_encoding", lambda: None)
     counter = make_token_counter("groq")
     assert counter.method.startswith("heuristic")
-    text = hwy_prompts.D1_SYSTEM_PROMPT
+    text = cn_prompts.D1_SYSTEM_PROMPT
     assert counter.count(text) == math.ceil(heuristic_token_count(text) * token_budget.HEURISTIC_MARGIN)
 
 
@@ -466,9 +480,9 @@ def test_heuristic_fallback_is_conservative_on_real_prompts():
     counter = make_token_counter("groq")
     card = _full(_card()).text
     for text in (
-        hwy_prompts.D1_SYSTEM_PROMPT,
-        hwy_prompts.format_d2_mutation(_code(), card),
-        hwy_prompts.format_d1_initial(reflection=card),
+        cn_prompts.D1_SYSTEM_PROMPT,
+        cn_prompts.format_d2_mutation(_code(), card),
+        cn_prompts.format_d1_initial(reflection=card),
     ):
         assert heuristic_token_count(text) >= counter.count(text)
 
@@ -485,7 +499,7 @@ def _render_fn(card, user_builder, counter_system=CLIENT_SYSTEM):
         trim = ladder[level]
         rc = card.render(trim)
         user = user_builder(rc.text, trim.compact_instructions)
-        return [counter_system, f"{hwy_prompts.D1_SYSTEM_PROMPT}\n\n{user}"], trim.name, {
+        return [counter_system, f"{cn_prompts.D1_SYSTEM_PROMPT}\n\n{user}"], trim.name, {
             "sections": rc.sections, "history_ids": rc.history_ids,
         }
 
@@ -493,7 +507,7 @@ def _render_fn(card, user_builder, counter_system=CLIENT_SYSTEM):
 
 
 def _mutation_user(card_text, compact):
-    return hwy_prompts.format_d2_mutation(_code(-60.0, lane_bonus=True), card_text, compact=compact)
+    return cn_prompts.format_d2_mutation(_code(-60.0, clearance_bonus=True), card_text, compact=compact)
 
 
 def test_truncation_follows_priority_order():
@@ -593,7 +607,7 @@ def test_every_call_type_gets_the_card_within_budget(tmp_path):
     assert "DIAGNOSTIC FEEDBACK CARD (reference)" in llm.prompts[3]
     # Output schema and sandbox constraints stay in every prompt.
     for prompt in llm.prompts:
-        assert prompt.startswith(hwy_prompts.D1_SYSTEM_PROMPT)
+        assert prompt.startswith(cn_prompts.D1_SYSTEM_PROMPT)
         assert "(total_reward, reward_components)" in prompt or "dict[str, float]" in prompt
 
     requests = _requests(tmp_path)
@@ -673,7 +687,7 @@ def test_disabled_card_sends_the_legacy_prompt_exactly(tmp_path):
     parent.metadata["proxy_feedback"] = "Holdout eval (30 episodes): SR=0.63"
     evo._try_mutate(parent, "note", phase="mutation", attempt=1)
     weakness = f"Parent mut_0009.\nHoldout eval (30 episodes): SR=0.63\nGlobal reflection: note"
-    expected = f"{hwy_prompts.D1_SYSTEM_PROMPT}\n\n" + hwy_prompts.format_d2_mutation(parent.code, weakness)
+    expected = f"{cn_prompts.D1_SYSTEM_PROMPT}\n\n" + cn_prompts.format_d2_mutation(parent.code, weakness)
     assert evo.llm.prompts == [expected]
     req = _requests(tmp_path)[0]
     assert req["feedback_card"] is False and req["status"] == "sent"
@@ -705,23 +719,32 @@ def test_runner_fast_loop_logs_cards_and_persists_archive(tmp_path):
 
 
 class _FakeEnv:
-    _time_step = 0.2
+    """Minimal stand-in for RewardInjectedCrowdNavEnv (scripted steps, robot moves +1 m in x)."""
+
+    time_step = 0.25
+    v_pref = 1.0
+    time_limit = 25.0
 
     def __init__(self, plans):
         self.plans = plans
         self.ep = -1
+        self.sim = SimpleNamespace(robot=SimpleNamespace(px=0.0, py=0.0))
+        self.last_state = None
 
-    def reset(self, seed=None):
+    def reset(self, *, seed=None, options=None):
         self.ep += 1
         self.t = 0
-        return np.zeros(3), {"raise_lane_index": 1}
+        self.sim.robot.px = 0.0
+        return np.zeros(3), {}
 
     def step(self, action):
         reward, info = self.plans[self.ep][self.t]
         self.t += 1
-        terminated = bool(info.get("raise_collision"))
-        truncated = self.t == len(self.plans[self.ep]) and not terminated
-        return np.zeros(3), reward, terminated, truncated, info
+        self.sim.robot.px += 1.0
+        self.last_state = SimpleNamespace(robot=SimpleNamespace(px=self.sim.robot.px, py=0.0))
+        terminated = info["raise_outcome"] in ("success", "collision")
+        truncated = info["raise_outcome"] == "timeout"
+        return np.zeros(3), reward, terminated, truncated, {**info, "raise_global_time": self.t * self.time_step}
 
 
 class _FakeModel:
@@ -729,49 +752,56 @@ class _FakeModel:
         return 0, None
 
 
-def _info(collision=False, comps=None):
-    return {"raise_lane_index": 1, "raise_progress": 4.0, "raise_speed": 20.0,
-            "raise_collision": collision, "raise_off_road": False,
-            "raise_reward_components": comps or {}}
+def _info(outcome=None, native=0.0, danger=None, comps=None):
+    return {
+        "raise_outcome": outcome, "raise_native_reward": native,
+        "raise_min_separation": 0.1 if danger is None else danger,
+        "raise_danger": danger is not None, "raise_danger_min_dist": danger,
+        "raise_reward_components": comps or {},
+    }
 
 
 @pytest.mark.parametrize("record_components", [True, False])
 def test_eval_metrics_keeps_per_episode_records(record_components):
     plans = [
-        [(1.0, _info(comps={"a": 0.5, "b": 0.5}))] * 3,
-        [(1.0, _info(comps={"a": 1.0})), (-5.0, _info(True, {"crash": -5.0}))],
+        [(1.0, _info(comps={"a": 0.5, "b": 0.5})), (1.0, _info(danger=0.05, comps={"a": 0.5, "b": 0.5})),
+         (1.0, _info("success", native=1.0, comps={"a": 0.5, "b": 0.5}))],
+        [(1.0, _info(comps={"a": 1.0})), (-5.0, _info("collision", native=-0.25, comps={"crash": -5.0}))],
     ]
-    metrics = _eval_metrics(_FakeEnv(plans), _FakeModel(), n_episodes=2,
+    metrics = _eval_metrics(_FakeEnv(plans), _FakeModel(), cases=[0, 1],
                             record_components=record_components)
-    ok, crash = metrics._highway_episodes
+    ok, crash = metrics._crowdnav_episodes
     assert ok["outcome"] == "success" and crash["outcome"] == "collision"
     assert ok["return"] == pytest.approx(3.0)
     assert ok["disc_return"] == pytest.approx(1 + PPO_GAMMA + PPO_GAMMA ** 2, abs=1e-4)
-    assert crash["steps"] == 2 and ok["progress"] == pytest.approx(12.0)
+    # Upstream Explorer discount: gamma ** (t * time_step * v_pref).
+    assert ok["task_return"] == pytest.approx(CROWDNAV_EVAL_GAMMA ** (2 * 0.25), abs=1e-4)
+    assert crash["task_return"] == pytest.approx(-0.25 * CROWDNAV_EVAL_GAMMA ** 0.25, abs=1e-4)
+    assert crash["steps"] == 2 and ok["path_length"] == pytest.approx(3.0)
+    assert ok["danger_steps"] == 1 and ok["time"] == pytest.approx(0.75)
     if record_components:
         assert ok["components"] == {"a": 1.5, "b": 1.5}
         assert crash["components"] == {"a": 1.0, "crash": -5.0}
     else:
         assert "components" not in ok
     assert metrics.sr == 0.5 and metrics.cr == 0.5
+    assert metrics.nt == pytest.approx(0.75) and metrics.pl == pytest.approx(3.0)
+    assert metrics.itr == pytest.approx(1 / 5) and metrics.sd == pytest.approx(0.05)
 
 
 def test_training_dynamics_recorder_windows():
     rec = TrainingDynamicsRecorder(100, n_windows=4)
-    steps = []
+    outcomes = {10: "collision", 30: "success", 90: "timeout"}
     for t in range(1, 101):
-        done = t in (10, 30, 90)
-        info = {"raise_speed": 10.0, "raise_collision": t == 10}
+        done = t in outcomes
+        info = {"raise_outcome": outcomes.get(t), "raise_global_time": 2.5}
         if done:
             info["episode"] = {"r": float(t), "l": 10}
-        steps.append((info, done, t))
-    for info, done, t in steps:
         rec.observe([info], [done], t)
     summary = rec.summary()
     w = summary["windows"]
     assert summary["n_episodes"] == 3
     assert w[0]["n_episodes"] == 1 and w[0]["CR"] == 1.0
-    assert w[1]["n_episodes"] == 1 and w[1]["SR"] == 1.0
+    assert w[1]["n_episodes"] == 1 and w[1]["SR"] == 1.0 and w[1]["nav_time"] == 2.5
     assert w[2]["n_episodes"] == 0
-    assert w[3]["mean_return"] == 90.0 and w[3]["mean_speed"] == pytest.approx(10.0)
-    assert math.isclose(w[1]["mean_speed"], 10.0)
+    assert w[3]["TR"] == 1.0 and w[3]["mean_return"] == 90.0 and w[3]["nav_time"] is None

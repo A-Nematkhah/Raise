@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 
-from domains.highway.state import default_smoke_states
+from domains.crowdnav.state import default_smoke_states
 from raise_core.llm import split_reward_function_sources, strip_redundant_scalar_subscripts
 from raise_core.sandbox.config import SandboxConfig
 from raise_core.sandbox.validator import RewardValidator
@@ -25,18 +25,18 @@ def test_strip_scalar_subscripts_survives_hostile_input():
     assert strip_redundant_scalar_subscripts(huge) == huge.strip()
 
 
-def test_strip_scalar_subscripts_targets_highway_fields_only():
+def test_strip_scalar_subscripts_targets_reward_state_fields_only():
     code = (
         "def compute_reward(state, memory):\n"
-        "    a = state.ego.speed[0] + state.progress[0] + state.ego.lane_index[-1]\n"
-        "    b = state.others[0].x[0]\n"
+        "    a = state.robot.px[0] + state.progress[0] + state.robot.v_pref[-1]\n"
+        "    b = state.humans[0].px[0]\n"
         "    c = state.action[0]\n"
         "    return a + b + c\n"
     )
     out = strip_redundant_scalar_subscripts(code)
-    assert "state.ego.speed +" in out and "state.progress +" in out
-    assert "state.ego.lane_index\n" in out
-    assert "state.others[0].x\n" in out
+    assert "state.robot.px +" in out and "state.progress +" in out
+    assert "state.robot.v_pref\n" in out
+    assert "state.humans[0].px\n" in out
     assert "state.action[0]" in out
 
 

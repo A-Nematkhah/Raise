@@ -20,9 +20,10 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__
         "raise_core.population_io",
         "raise_core.pipeline",
         "raise_core.raise_loop.runner",
-        "domains.highway.metrics",
-        "domains.highway.adapter",
-        "domains.highway.pack",
+        "domains.crowdnav.metrics",
+        "domains.crowdnav.env_wrapper",
+        "domains.crowdnav.adapter",
+        "domains.crowdnav.pack",
     ],
 )
 def test_module_imports_first(module):

@@ -8,8 +8,8 @@ from dataclasses import replace
 
 import pytest
 
-from domains.highway.reward_checks import make_highway_validator
-from domains.highway.state import default_smoke_states
+from domains.crowdnav.reward_checks import make_crowdnav_validator
+from domains.crowdnav.state import default_smoke_states
 from raise_core.sandbox.config import SandboxConfig
 from raise_core.sandbox.errors import RewardSandboxError
 from raise_core.sandbox.runtime import smoke_test_compute
@@ -58,5 +58,5 @@ def test_validator_still_accepts_fast_reward():
 def compute_reward(state, memory):
     return float(state.progress)
 """
-    rw = make_highway_validator().validate_code(code)
+    rw = make_crowdnav_validator().validate_code(code)
     assert rw is not None

@@ -11,7 +11,7 @@ from raise_core.llm import (
     normalize_to_compute_reward,
     split_reward_function_sources,
 )
-from domains.highway.prompts import format_d1_initial_batch
+from domains.crowdnav.prompts import format_d1_initial_batch
 
 
 def test_extract_python_code_strips_fences_and_prose():
@@ -54,7 +54,7 @@ def test_format_d1_initial_batch_asks_for_n_functions():
     assert "compute_reward_vK" in prompt
     assert "all 8 functions" in prompt
     assert "helper functions" in prompt
-    assert "state.ego.x" in prompt
+    assert "state.robot.px" in prompt
 
 
 def test_extract_all_python_blocks_multiple_fences():

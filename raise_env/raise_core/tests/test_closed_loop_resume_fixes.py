@@ -7,7 +7,7 @@ import os
 
 import pytest
 
-from domains.highway.reward_checks import make_highway_validator
+from domains.crowdnav.reward_checks import make_crowdnav_validator
 from raise_core.explore import RewardCandidate
 from raise_core.raise_loop import runner as runner_mod
 from raise_core.raise_loop.checkpoint import build_checkpoint, load_checkpoint, save_checkpoint
@@ -23,7 +23,7 @@ def _cand(cid: str, k: float, **md) -> RewardCandidate:
     return RewardCandidate(
         candidate_id=cid,
         code=code,
-        reward_fn=make_highway_validator().validate_code(code),
+        reward_fn=make_crowdnav_validator().validate_code(code),
         valid=True,
         origin="test",
         score=0.5,

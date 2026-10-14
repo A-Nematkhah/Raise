@@ -82,7 +82,7 @@ class _ReevalRecordingTrainer(_RecordingTrainer):
         self.reevaluated: list[tuple[str, int]] = []
 
     def reevaluate(self, candidate, *, round_index, config):
-        self.reevaluated.append((str(candidate.candidate_id), int(config.highway_eval_seed_base)))
+        self.reevaluated.append((str(candidate.candidate_id), int(config.eval_seed_base)))
         if self.fail:
             raise RuntimeError("saved policy unreadable")
         return super().reevaluate(candidate, round_index=round_index, config=config)

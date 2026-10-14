@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from domains.highway.reward_checks import make_highway_validator
+from domains.crowdnav.reward_checks import make_crowdnav_validator
 from raise_core.explore import RewardCandidate
 from raise_core.validate import (
     STAGE3_STEPS,
@@ -19,7 +19,7 @@ from raise_core.validate import (
 
 
 def _make_population(n: int = 2) -> list:
-    validator = make_highway_validator()
+    validator = make_crowdnav_validator()
     pop = []
     for i in range(n):
         code = f"def compute_reward(state, memory):\n    return float({i}.0)\n"
@@ -53,7 +53,7 @@ def test_stage3_trains_each_candidate_once_and_picks_best_by_fitness(tmp_path: P
     pop = _make_population(3)
     runner = Stage3Runner(
         StubPolicyTrainer(),
-        validator=make_highway_validator(),
+        validator=make_crowdnav_validator(),
         config=Stage3Config(
             train_env_steps=8,
             eval_episodes=2,

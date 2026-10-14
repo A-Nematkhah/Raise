@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from domains.highway.prompts import D5_SEED_FUNCTION as HW_SEED
+from domains.crowdnav.prompts import D5_SEED_FUNCTION as HW_SEED
 from raise_core.domains import load_domain, make_validator_for_domain
 from raise_core.sandbox.errors import RewardSandboxError
 
@@ -30,8 +30,8 @@ from raise_core.sandbox.errors import RewardSandboxError
         ),
     ],
 )
-def test_highway_rejects_comprehensions(kind: str, body: str):
-    pack = load_domain("highway")
+def test_crowdnav_rejects_comprehensions(kind: str, body: str):
+    pack = load_domain("crowdnav")
     v = make_validator_for_domain(pack)
     code = f"def compute_reward(state, memory):\n    {body}\n"
     with pytest.raises(RewardSandboxError) as ei:
@@ -42,12 +42,12 @@ def test_highway_rejects_comprehensions(kind: str, body: str):
 
 
 def test_explicit_for_loop_still_ok():
-    hw = make_validator_for_domain(load_domain("highway"))
+    hw = make_validator_for_domain(load_domain("crowdnav"))
     hw_ok = """
 def compute_reward(state, memory):
     nearest = 50.0
-    for v in state.others:
-        d = (float(v.x) ** 2 + float(v.y) ** 2) ** 0.5
+    for h in state.humans:
+        d = ((h.px - state.robot.px) ** 2 + (h.py - state.robot.py) ** 2) ** 0.5
         if d < nearest:
             nearest = d
     return float(state.progress + 0.01 * nearest)
@@ -56,4 +56,4 @@ def compute_reward(state, memory):
 
 
 def test_domain_seed_still_validates():
-    assert make_validator_for_domain(load_domain("highway")).validate_code(HW_SEED)
+    assert make_validator_for_domain(load_domain("crowdnav")).validate_code(HW_SEED)

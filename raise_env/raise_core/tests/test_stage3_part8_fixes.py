@@ -7,7 +7,7 @@ import runpy
 import sys
 from pathlib import Path
 
-from domains.highway.reward_checks import make_highway_validator
+from domains.crowdnav.reward_checks import make_crowdnav_validator
 from raise_core import pipeline as pipeline_mod
 from raise_core import validate as validate_mod
 from raise_core.candidate import RewardCandidate
@@ -27,7 +27,7 @@ _RAISE_ROOT = Path(__file__).resolve().parents[2]
 
 def _cand(cid: str, fitness: float | None = None, se: float | None = None) -> RewardCandidate:
     code = f"def compute_reward(state, memory):\n    return float({len(cid)}.0)\n"
-    reward_fn, err = make_highway_validator().try_validate(code)
+    reward_fn, err = make_crowdnav_validator().try_validate(code)
     assert reward_fn is not None, err
     md = {}
     if fitness is not None:
@@ -81,13 +81,13 @@ def _run_fast(tmp_path, monkeypatch, **trainer_kwargs):
 def test_stage3_and_final_eval_use_unseen_seed_families(tmp_path, monkeypatch):
     cfg, arts, manifest, trainer, out = _run_fast(tmp_path, monkeypatch)
     stage3_base = cfg.seed + STAGE3_EVAL_SEED_OFFSET
-    assert {c.highway_eval_seed_base for c in trainer.train_configs} == {stage3_base}
+    assert {c.eval_seed_base for c in trainer.train_configs} == {stage3_base}
     # Closed-loop generation g evaluates on seed + g * 1000.
     assert all(stage3_base != cfg.seed + g * 1000 for g in range(cfg.generations + 1))
 
     assert len(trainer.reeval_configs) == 1
     final_cfg = trainer.reeval_configs[0]
-    assert final_cfg.highway_eval_seed_base == cfg.seed + FINAL_EVAL_SEED_OFFSET
+    assert final_cfg.eval_seed_base == cfg.seed + FINAL_EVAL_SEED_OFFSET
     assert final_cfg.eval_episodes == cfg.final_eval_episodes
 
     final = manifest["final_eval"]
@@ -131,7 +131,7 @@ def test_all_failed_stage3_is_labelled(tmp_path, monkeypatch):
 def test_final_eval_disabled_with_zero_episodes(tmp_path):
     runner = Stage3Runner(
         StubPolicyTrainer(),
-        validator=make_highway_validator(),
+        validator=make_crowdnav_validator(),
         config=Stage3Config(output_root=str(tmp_path / "s3"), resume=False),
     )
     assert runner.final_eval(_cand("c0", 0.1), episodes=0, seed_base=1) is None
@@ -141,10 +141,10 @@ def test_stage3_warm_start_has_its_own_flag(tmp_path):
     cfg = RaiseRunConfig(output_dir=str(tmp_path / "run"))
     cfg.apply_fast_profile()
     cfg.stage3_warm_start = True
-    assert RaisePipeline(cfg)._stage3_config().highway_warm_start is True
+    assert RaisePipeline(cfg)._stage3_config().warm_start is True
     cfg.stage3_warm_start = False
-    cfg.highway_warm_start = True
-    assert RaisePipeline(cfg)._stage3_config().highway_warm_start is False
+    cfg.warm_start = True
+    assert RaisePipeline(cfg)._stage3_config().warm_start is False
 
 
 def test_statistical_ties_use_the_larger_se():
@@ -162,7 +162,7 @@ def test_statistical_ties_use_the_larger_se():
 def test_selection_summary_reports_ties(tmp_path):
     runner = Stage3Runner(
         StubPolicyTrainer(),
-        validator=make_highway_validator(),
+        validator=make_crowdnav_validator(),
         config=Stage3Config(output_root=str(tmp_path / "s3"), resume=False),
     )
     runner.trained = [_cand("best", -0.5, 0.2), _cand("near", -0.6, 0.2)]
@@ -177,8 +177,8 @@ def test_resume_warns_when_eval_mode_changes(tmp_path, monkeypatch):
     pop = [_cand("c0"), _cand("c11")]
     Stage3Runner(
         StubPolicyTrainer(),
-        validator=make_highway_validator(),
-        config=Stage3Config(output_root=out_root, highway_eval_mode="both"),
+        validator=make_crowdnav_validator(),
+        config=Stage3Config(output_root=out_root, eval_mode="both"),
     ).run(pop)
 
     warnings = []
@@ -187,13 +187,13 @@ def test_resume_warns_when_eval_mode_changes(tmp_path, monkeypatch):
     )
     Stage3Runner(
         StubPolicyTrainer(),
-        validator=make_highway_validator(),
-        config=Stage3Config(output_root=out_root, highway_eval_mode="holdout_only"),
+        validator=make_crowdnav_validator(),
+        config=Stage3Config(output_root=out_root, eval_mode="holdout_only"),
     ).run(pop)
-    assert any("highway_eval_mode" in w for w in warnings)
+    assert any("eval_mode" in w for w in warnings)
 
 
-def test_cli_exposes_stage3_and_meta_fine_flags(monkeypatch, capsys):
+def test_cli_exposes_stage3_and_robot_flags(monkeypatch, capsys):
     script = _RAISE_ROOT / "scripts" / "run_raise.py"
     monkeypatch.chdir(_RAISE_ROOT)
     monkeypatch.setattr(
@@ -203,11 +203,11 @@ def test_cli_exposes_stage3_and_meta_fine_flags(monkeypatch, capsys):
             str(script),
             "--print-config",
             "--domain",
-            "highway",
-            "--highway-meta-fine-low",
-            "12.5",
-            "--highway-meta-fine-high",
-            "30",
+            "crowdnav",
+            "--robot-kinematics",
+            "unicycle",
+            "--action-mode",
+            "continuous",
             "--stage3-warm-start",
             "--final-eval-episodes",
             "60",
@@ -218,8 +218,8 @@ def test_cli_exposes_stage3_and_meta_fine_flags(monkeypatch, capsys):
     except SystemExit as exc:
         assert int(exc.code or 0) == 0
     out = capsys.readouterr().out
-    assert "domain='highway'" in out
-    assert "highway_meta_fine_low=12.5" in out
-    assert "highway_meta_fine_high=30.0" in out
+    assert "domain='crowdnav'" in out
+    assert "robot_kinematics='unicycle'" in out
+    assert "action_mode='continuous'" in out
     assert "stage3_warm_start=True" in out
     assert "final_eval_episodes=60" in out
