@@ -49,8 +49,9 @@ DEFAULT_REQUEST_TIMEOUT = float(os.environ.get("GROQ_TIMEOUT_SECONDS", "120"))
 # Attempts across the key pool for transient network failures / empty replies.
 DEFAULT_MAX_ATTEMPTS = int(os.environ.get("GROQ_MAX_ATTEMPTS", "8"))
 DEFAULT_TRANSIENT_BACKOFF = float(os.environ.get("GROQ_TRANSIENT_BACKOFF", "2.0"))
-# Longest a single request waits out rate limits before the run stops.
-DEFAULT_MAX_WAIT_SECONDS = float(os.environ.get("GROQ_MAX_WAIT_SECONDS", "180"))
+# Longest a single request waits out rate limits before the run soft-fails.
+# ~10 min covers several TPM windows for gpt-oss with the feedback card.
+DEFAULT_MAX_WAIT_SECONDS = float(os.environ.get("GROQ_MAX_WAIT_SECONDS", "600"))
 _PLACEHOLDER_PREFIXES = ("gsk_REPLACE", "gsk_your_", "YOUR_KEY")
 
 # raise_core/key_manager.py → raise_env/ (where groq_keys.json lives)
