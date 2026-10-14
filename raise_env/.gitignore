@@ -1,14 +1,16 @@
 # Local run artifacts (regenerate via scripts/; never commit warm models)
 results/
 
-# Highway Stage I dataset (regenerate via scripts/collect_highway_stage1_dataset.py)
-domains/highway/data/stage1_dataset/
-domains/highway/data/stage1_dataset_*/
-!domains/highway/data/README.md
+# CrowdNav Stage I dataset (regenerate via scripts/collect_crowdnav_stage1_dataset.py)
+domains/crowdnav/data/stage1_dataset/
+domains/crowdnav/data/stage1_dataset_*/
+!domains/crowdnav/data/README.md
+
+# Local datasets of the removed HighwayEnv domain (not used by the code)
+domains/highway/
 
 # Legacy path aliases (if someone still writes under raise_env/data/)
 data/stage1_dataset/
-data/highway_stage1_dataset/
 
 # Experiment artifacts / PPO checkpoints
 artifacts/**
