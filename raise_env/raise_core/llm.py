@@ -1,12 +1,12 @@
 """
 LLM client for reward-code generation.
 
-Thin provider wrappers (Groq / local vLLM OpenAI-compatible / scripted).
-Interface mirrors mobile_robot_env.rewards.generators: no crowd-nav logic
-inside the client — only text in, raw completion strings out.
+Thin provider wrappers (Groq / local vLLM / Ollama OpenAI-compatible / scripted /
+seed). Text in, raw completion strings out — no domain logic in the client.
 
-Primary API for RAISE Stage I:
-    generate(prompt: str, n: int) -> list[str]
+Primary Stage I API:
+    complete(prompt, max_tokens=...) -> str
+    generate(prompt, n, max_tokens=...) -> list[str]
 """
 
 from __future__ import annotations
@@ -16,22 +16,35 @@ import os
 import re
 import time
 from abc import ABC, abstractmethod
-from typing import List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
 from raise_core.key_manager import (
     GroqKeyManager,
+    _is_non_retryable_client_error,
+    finish_reason,
     get_key_manager,
     groq_key_pool_available,
     resolve_single_groq_api_key,
 )
-from raise_core.llm_errors import CompletionTruncatedError, EmptyCompletionError
+from raise_core.llm_errors import (
+    CompletionTruncatedError,
+    EmptyCompletionError,
+    GroqRateLimitError,
+)
+
+# Shared by Groq / vLLM defaults and feedback-card token-count tests.
+DEFAULT_CLIENT_SYSTEM = (
+    "You are a reward-function designer. Put the code in exactly one "
+    "```python fenced block; any explanation must come before the fence."
+)
 
 
 class LLMClient(ABC):
-    """Minimal text-completion interface (sister-project compatible)."""
+    """Minimal text-completion interface."""
 
-    # Used by produce_final_ranking to decide LLM vs lex fallback.
     provider: str = ""
+    # Filled by providers after each ``complete`` (usage / finish_reason / latency).
+    last_usage: Optional[Dict[str, Any]] = None
 
     @abstractmethod
     def complete(self, prompt: str, *, max_tokens: Optional[int] = None) -> str:
@@ -46,7 +59,9 @@ class LLMClient(ABC):
 
 def is_recoverable_llm_error(exc: BaseException) -> bool:
     """True for soft LLM failures that Stage I should retry / soft-fail on."""
-    if isinstance(exc, (CompletionTruncatedError, EmptyCompletionError)):
+    if isinstance(
+        exc, (CompletionTruncatedError, EmptyCompletionError, GroqRateLimitError)
+    ):
         return True
     msg = str(exc).lower()
     return any(
@@ -57,6 +72,23 @@ def is_recoverable_llm_error(exc: BaseException) -> bool:
             "no closing code fence",
         )
     )
+
+
+def _usage_from_response(
+    response: Any, *, latency_s: float, attempts: int = 1
+) -> Dict[str, Any]:
+    usage = getattr(response, "usage", None)
+    return {
+        "prompt_tokens": getattr(usage, "prompt_tokens", None) if usage else None,
+        "completion_tokens": getattr(usage, "completion_tokens", None) if usage else None,
+        "finish_reason": finish_reason(response),
+        "latency_s": round(float(latency_s), 3),
+        "attempts": int(attempts),
+    }
+
+
+def _gpt_oss_model(model: str) -> bool:
+    return "gpt-oss" in str(model or "").lower()
 
 
 class ScriptedLLMClient(LLMClient):
@@ -111,13 +143,14 @@ class GroqLLMClient(LLMClient):
         api_key: Optional[str] = None,
         system_prompt: Optional[str] = None,
         use_key_pool: bool = True,
+        reasoning_effort: Optional[str] = None,
     ) -> None:
         self.model = model
         self.temperature = temperature
         self.max_tokens = max_tokens
-        self.system_prompt = system_prompt or (
-            "You are a reward-function designer. Reply with one Python code block only."
-        )
+        self.reasoning_effort = reasoning_effort
+        self.system_prompt = system_prompt or DEFAULT_CLIENT_SYSTEM
+        self.last_usage: Optional[Dict[str, Any]] = None
         explicit = (api_key or "").strip() or None
         if explicit is None and use_key_pool and groq_key_pool_available():
             self._key_manager = get_key_manager()
@@ -131,7 +164,7 @@ class GroqLLMClient(LLMClient):
         self._key_manager = GroqKeyManager(keys=[key])
 
     def complete(self, prompt: str, *, max_tokens: Optional[int] = None) -> str:
-        create_kwargs = {
+        create_kwargs: Dict[str, Any] = {
             "model": self.model,
             "messages": [
                 {"role": "system", "content": self.system_prompt},
@@ -140,13 +173,27 @@ class GroqLLMClient(LLMClient):
             "temperature": self.temperature,
             "max_tokens": int(max_tokens) if max_tokens is not None else self.max_tokens,
         }
+        if self.reasoning_effort is not None and _gpt_oss_model(self.model):
+            create_kwargs["reasoning_effort"] = self.reasoning_effort
+        started = time.monotonic()
         try:
             response = self._key_manager.chat_completion(**create_kwargs)
         except ImportError as exc:
             raise RuntimeError(
                 "GroqLLMClient requires the 'groq' package. Install with: pip install groq"
             ) from exc
+        self.last_usage = _usage_from_response(
+            response,
+            latency_s=time.monotonic() - started,
+            attempts=getattr(self._key_manager, "last_attempts", 1) or 1,
+        )
+        reason = self.last_usage.get("finish_reason")
         content = response.choices[0].message.content
+        if reason == "length":
+            raise CompletionTruncatedError(
+                "Groq finish_reason=length; completion hit max_tokens "
+                "(including any reasoning budget)."
+            )
         if not content or not str(content).strip():
             raise EmptyCompletionError("Groq returned an empty completion.")
         return str(content)
@@ -176,6 +223,7 @@ class VLLMLLMClient(LLMClient):
         system_prompt: Optional[str] = None,
         max_attempts: int = 3,
         retry_delay_seconds: float = 3.0,
+        reasoning_effort: Optional[str] = None,
     ) -> None:
         self.model = model
         self.base_url = (base_url or os.environ.get("VLLM_BASE_URL") or self.DEFAULT_BASE_URL).rstrip(
@@ -184,18 +232,22 @@ class VLLMLLMClient(LLMClient):
         self.api_key = api_key or os.environ.get("VLLM_API_KEY", "EMPTY")
         self.temperature = temperature
         self.max_tokens = max_tokens
-        self.system_prompt = system_prompt or (
-            "You are a reward-function designer. Reply with one Python code block only."
-        )
+        self.reasoning_effort = reasoning_effort
+        self.system_prompt = system_prompt or DEFAULT_CLIENT_SYSTEM
         self.max_attempts = int(max_attempts)
         self.retry_delay_seconds = float(retry_delay_seconds)
+        self.last_usage: Optional[Dict[str, Any]] = None
 
     def complete(self, prompt: str, *, max_tokens: Optional[int] = None) -> str:
         last_error: Optional[Exception] = None
         for attempt in range(1, self.max_attempts + 1):
             try:
-                return self._complete_once(prompt, max_tokens=max_tokens)
+                return self._complete_once(prompt, max_tokens=max_tokens, attempt=attempt)
+            except (CompletionTruncatedError, EmptyCompletionError):
+                raise
             except Exception as exc:  # noqa: BLE001
+                if _is_non_retryable_client_error(exc):
+                    raise
                 last_error = exc
                 if attempt >= self.max_attempts:
                     break
@@ -204,12 +256,15 @@ class VLLMLLMClient(LLMClient):
             f"vLLM LLM failed after {self.max_attempts} attempts. Last error: {last_error}"
         ) from last_error
 
-    def _complete_once(self, prompt: str, *, max_tokens: Optional[int] = None) -> str:
+    def _complete_once(
+        self, prompt: str, *, max_tokens: Optional[int] = None, attempt: int = 1
+    ) -> str:
         messages = [
             {"role": "system", "content": self.system_prompt},
             {"role": "user", "content": prompt},
         ]
         token_limit = int(max_tokens) if max_tokens is not None else self.max_tokens
+        started = time.monotonic()
         try:
             from openai import OpenAI
 
@@ -221,34 +276,52 @@ class VLLMLLMClient(LLMClient):
                 max_tokens=token_limit,
                 **self._request_options(),
             )
-            content = self._extract_message_text(response.choices[0].message)
-            if not content or not str(content).strip():
-                raise RuntimeError("vLLM returned an empty completion.")
-            return str(content)
+            self.last_usage = _usage_from_response(
+                response, latency_s=time.monotonic() - started, attempts=attempt
+            )
+            return self._content_or_raise(response.choices[0], provider="vLLM")
         except ImportError:
-            return self._complete_urllib(messages, max_tokens=token_limit)
+            return self._complete_urllib(messages, max_tokens=token_limit, attempt=attempt)
 
     def _request_options(self) -> dict:
         """Return provider-specific OpenAI-compatible request options."""
+        if self.reasoning_effort is not None:
+            return {"reasoning_effort": self.reasoning_effort}
         return {}
 
     @staticmethod
     def _extract_message_text(message) -> str:
-        """Read normal and reasoning-model message shapes from SDK responses."""
+        """Read the assistant ``content`` field only (never fall back to reasoning)."""
         if isinstance(message, dict):
             content = message.get("content")
-            reasoning = message.get("reasoning")
         else:
             content = getattr(message, "content", None)
-            reasoning = getattr(message, "reasoning", None)
         if isinstance(content, list):
             content = "".join(
                 str(item.get("text", "")) if isinstance(item, dict) else str(item)
                 for item in content
             )
-        return str(content or reasoning or "")
+        return str(content or "")
 
-    def _complete_urllib(self, messages: list, *, max_tokens: int) -> str:
+    def _content_or_raise(self, choice: Any, *, provider: str) -> str:
+        reason = getattr(choice, "finish_reason", None)
+        if isinstance(choice, dict):
+            reason = choice.get("finish_reason", reason)
+            message = choice.get("message")
+        else:
+            message = getattr(choice, "message", None)
+        content = self._extract_message_text(message)
+        if str(reason) == "length":
+            raise CompletionTruncatedError(
+                f"{provider} finish_reason=length; completion hit max_tokens."
+            )
+        if not content.strip():
+            raise EmptyCompletionError(f"{provider} returned an empty completion.")
+        return content
+
+    def _complete_urllib(
+        self, messages: list, *, max_tokens: int, attempt: int = 1
+    ) -> str:
         import json
         import urllib.error
         import urllib.request
@@ -271,15 +344,20 @@ class VLLMLLMClient(LLMClient):
             },
             method="POST",
         )
+        started = time.monotonic()
         try:
             with urllib.request.urlopen(req, timeout=120) as resp:
                 body = json.loads(resp.read().decode("utf-8"))
         except urllib.error.URLError as exc:
             raise RuntimeError(f"vLLM request failed: {exc}") from exc
-        content = self._extract_message_text(body["choices"][0]["message"])
-        if not content or not str(content).strip():
-            raise RuntimeError("vLLM returned an empty completion.")
-        return str(content)
+        self.last_usage = {
+            "prompt_tokens": (body.get("usage") or {}).get("prompt_tokens"),
+            "completion_tokens": (body.get("usage") or {}).get("completion_tokens"),
+            "finish_reason": (body.get("choices") or [{}])[0].get("finish_reason"),
+            "latency_s": round(time.monotonic() - started, 3),
+            "attempts": int(attempt),
+        }
+        return self._content_or_raise(body["choices"][0], provider="vLLM")
 
 
 class OllamaLLMClient(VLLMLLMClient):
@@ -477,7 +555,9 @@ def extract_python_code(completion: str, *, max_tokens: Optional[int] = None) ->
     If multiple blocks exist, returns the first non-empty block.
     """
     text = (completion or "").strip()
-    opening = re.search(r"```python\b", text, re.IGNORECASE)
+    # Fallback when the provider does not expose finish_reason (chars ≈ tokens
+    # for dense code; prefer finish_reason=="length" in the client).
+    opening = re.search(r"```(?:python\b)?", text, re.IGNORECASE)
     if (
         max_tokens is not None
         and len(text) >= 0.95 * int(max_tokens)
@@ -641,7 +721,8 @@ def strip_redundant_scalar_subscripts(code: str) -> str:
     Drop ``[0]``/``[1]``/``[-1]`` on known float/bool state fields.
 
     Does **not** touch ``state.action[...]`` (a tuple in continuous mode).
-    On parse failure, returns ``code`` unchanged.
+    On parse failure, or when nothing changes, returns ``code`` unchanged so
+    LLM comments are preserved (``ast.unparse`` would strip them).
     """
     text = (code or "").strip()
     if not text:
@@ -650,7 +731,10 @@ def strip_redundant_scalar_subscripts(code: str) -> str:
     if tree is None:
         return text
     try:
+        before = ast.dump(tree)
         new_tree = _StripScalarSubscripts().visit(tree)
+        if ast.dump(new_tree) == before:
+            return text
         ast.fix_missing_locations(new_tree)
         return ast.unparse(new_tree)
     except Exception:  # noqa: BLE001 — keep original if transform/unparse fails (incl. RecursionError)

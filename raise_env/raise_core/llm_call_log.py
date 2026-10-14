@@ -58,6 +58,27 @@ class LLMCallLog:
         )
         return snap
 
+    def write_response(
+        self,
+        *,
+        call_id: str,
+        status: str,
+        usage: Optional[Dict[str, Any]] = None,
+        error: Optional[str] = None,
+    ) -> None:
+        """Log tokens / finish_reason / latency after ``llm.complete`` (or its failure)."""
+        record: Dict[str, Any] = {
+            "event": "response",
+            "ts_utc": datetime.now(timezone.utc).isoformat(),
+            "call_id": call_id,
+            "status": status,
+        }
+        if usage:
+            record.update(usage)
+        if error:
+            record["error"] = str(error)[:300]
+        self._append(record)
+
     def write_validation(
         self,
         *,

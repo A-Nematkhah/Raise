@@ -495,7 +495,21 @@ class StageIEvolver:
             fit.messages,
         )
         self._last_call = {"call_id": call_id, "card": card is not None}
-        raw = self.llm.complete(fit.messages[-1], max_tokens=max_tokens)
+        try:
+            raw = self.llm.complete(fit.messages[-1], max_tokens=max_tokens)
+        except BaseException as exc:
+            self._call_log.write_response(
+                call_id=call_id,
+                status="error",
+                usage=getattr(self.llm, "last_usage", None),
+                error=f"{type(exc).__name__}: {exc}",
+            )
+            raise
+        self._call_log.write_response(
+            call_id=call_id,
+            status="ok",
+            usage=getattr(self.llm, "last_usage", None),
+        )
         if not raw or not str(raw).strip():
             raise EmptyCompletionError(
                 "LLM returned empty completion (retry layer should raise)."
