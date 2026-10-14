@@ -228,7 +228,13 @@ def test_rate_limit_beyond_wait_budget_stops_the_run(clock):
     with pytest.raises(GroqRateLimitError, match="after waiting up to 180s") as info:
         manager.chat_completion(model="m", messages=[])
     assert clock.slept == [pytest.approx(100.0)]
-    assert not is_recoverable_llm_error(info.value)
+    # Soft-fail the Stage I slot instead of killing a multi-hour run.
+    assert is_recoverable_llm_error(info.value)
+
+
+def test_default_rate_limit_wait_budget_is_ten_minutes():
+    assert km.DEFAULT_MAX_WAIT_SECONDS == 600.0
+    assert GroqKeyManager(keys=[KEY_A]).max_wait_seconds == 600.0
 
 
 def test_retry_after_header_absent_uses_default_cooldown(clock):

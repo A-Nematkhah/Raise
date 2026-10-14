@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import pytest
+
 from raise_core.llm import (
+    CompletionTruncatedError,
     extract_all_python_blocks,
     extract_python_code,
+    normalize_to_compute_reward,
     split_reward_function_sources,
 )
 from domains.highway.prompts import format_d1_initial_batch
@@ -22,6 +26,12 @@ def test_extract_python_code_strips_fences_and_prose():
     code = extract_python_code(raw)
     assert "def compute_reward" in code
     assert "Hope" not in code
+
+
+def test_extract_python_code_detects_truncated_unlabeled_fence():
+    raw = "```\n" + ("x" * 100)
+    with pytest.raises(CompletionTruncatedError):
+        extract_python_code(raw, max_tokens=100)
 
 
 def test_split_reward_function_sources_multiple_defs():
@@ -43,9 +53,20 @@ def test_format_d1_initial_batch_asks_for_n_functions():
     assert "8 diverse" in prompt
     assert "compute_reward_vK" in prompt
     assert "all 8 functions" in prompt
+    assert "helper functions" in prompt
+    assert "state.ego.x" in prompt
 
 
 def test_extract_all_python_blocks_multiple_fences():
     raw = "```python\nx=1\n```\n\n```python\ndef f():\n pass\n```"
     blocks = extract_all_python_blocks(raw)
     assert len(blocks) == 2
+
+
+def test_normalize_preserves_comments_when_unchanged():
+    code = (
+        "def compute_reward(state, memory):\n"
+        "    # keep this comment\n"
+        "    return float(state.progress), {'progress_term': float(state.progress)}\n"
+    )
+    assert "# keep this comment" in normalize_to_compute_reward(code)

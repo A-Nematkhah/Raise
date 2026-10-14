@@ -60,7 +60,7 @@ def test_ollama_complete_extracts_code_after_thinking_preamble(monkeypatch):
     assert extract_python_code(completion) == "def compute_reward(state):\n    return 1.0"
 
 
-def test_ollama_disables_reasoning_and_accepts_reasoning_field(monkeypatch):
+def test_ollama_disables_reasoning_and_rejects_empty_content(monkeypatch):
     captured = {}
 
     class FakeCompletions:
@@ -69,10 +69,11 @@ def test_ollama_disables_reasoning_and_accepts_reasoning_field(monkeypatch):
             return types.SimpleNamespace(
                 choices=[
                     types.SimpleNamespace(
+                        finish_reason="stop",
                         message=types.SimpleNamespace(
                             content="",
                             reasoning="```python\ndef compute_reward(state):\n    return 2.0\n```",
-                        )
+                        ),
                     )
                 ]
             )
@@ -82,7 +83,9 @@ def test_ollama_disables_reasoning_and_accepts_reasoning_field(monkeypatch):
             self.chat = types.SimpleNamespace(completions=FakeCompletions())
 
     monkeypatch.setitem(sys.modules, "openai", types.SimpleNamespace(OpenAI=FakeOpenAI))
-    completion = OllamaLLMClient(max_attempts=1).complete("prompt")
+    from raise_core.llm_errors import EmptyCompletionError
+
+    with pytest.raises(EmptyCompletionError):
+        OllamaLLMClient(max_attempts=1).complete("prompt")
 
     assert captured["reasoning_effort"] == "none"
-    assert "def compute_reward" in completion

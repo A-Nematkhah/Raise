@@ -16,7 +16,29 @@ def test_selection_objective_describes_holdout_fitness():
     assert "holdout fitness" in text and "higher is better" in text
     assert "survival rate minus twice the collision rate" in text
     assert "proportion to positive survival" in text
+    assert "10th percentile" in text
+    assert "one third" in text
     assert "Pareto" not in text
+
+
+def test_batch_prompt_includes_state_access_and_sandbox_rules():
+    prompt = prompts.format_d1_initial_batch(6)
+    assert "state.ego.x" in prompt and "ego-relative" in prompt
+    assert "Do NOT define helper functions" in prompt
+    assert "No module-level lists/dicts/sets" in prompt
+    assert "+/-" in prompt or "max_abs_reward" in prompt or "Keep every per-step" in prompt
+
+
+def test_mutation_prompt_names_parent_not_underperforming():
+    text = prompts.format_d2_mutation("def compute_reward(state, memory):\n    return 0.0, {}", "note")
+    assert "underperforming" not in text.lower()
+    assert "Parent Code to Mutate" in text
+    assert "targeted change" in text
+
+
+def test_d1_system_allows_prose_before_fence():
+    assert "for this initial generation" not in prompts.D1_SYSTEM_PROMPT
+    assert "before the fence" in prompts.D1_SYSTEM_PROMPT.lower()
 
 
 def test_action_block_documents_action_type_per_mode():

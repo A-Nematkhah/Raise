@@ -27,7 +27,7 @@ from raise_core.feedback import (
     diff_code,
     summarize_code,
 )
-from raise_core.llm import LLMClient
+from raise_core.llm import DEFAULT_CLIENT_SYSTEM, LLMClient
 from raise_core.llm_call_log import CALLS_FILE
 from raise_core.raise_loop.config import ClosedLoopConfig
 from raise_core.raise_loop.runner import ClosedLoopRunner
@@ -40,7 +40,7 @@ from raise_core.token_budget import (
     tiktoken,
 )
 
-CLIENT_SYSTEM = "You are a reward-function designer. Reply with one Python code block only."
+CLIENT_SYSTEM = DEFAULT_CLIENT_SYSTEM
 
 
 # ------------------------------------------------------------------ fixtures
