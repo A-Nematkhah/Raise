@@ -1,26 +1,36 @@
 # NOTICE
 
-This directory started as a local copy of the MIT-licensed open-source
-repository below. The CrowdNav++ simulator, policies and baselines have since
-been removed; RAISE now targets HighwayEnv only.
+## Vendored: vita-epfl/CrowdNav simulator
 
-**CrowdNav_Prediction_AttnGraph**  
-https://github.com/Shuijing725/CrowdNav_Prediction_AttnGraph
+`third_party/crowdnav/` contains the `crowd_sim` package and the default
+configuration files of
 
-## Source attribution
+**CrowdNav**, https://github.com/vita-epfl/CrowdNav, commit
+`20d678085c06831e658a65b9e20c8bb6f6ecdc10`, MIT License,
+Copyright (c) 2018 VITA lab at EPFL (see `third_party/crowdnav/LICENSE`).
 
-The simulation environment and baseline policy implementations in this tree
-(CrowdNav++ / attention-based interaction graph navigation, DS-RNN-style SRNN
-policies, Social Force (SF), and ORCA) originate from:
+The files are byte-identical to that commit; see
+`third_party/crowdnav/UPSTREAM.md` for what is vendored and what RAISE
+re-implements. Please cite:
 
-> Liu, Shuijing; Chang, Peixin; Huang, Zhe; Chakraborty, Neeloy; Hong, Kaiwen;
-> Liang, Weihang; Livingston McPherson, D.; Geng, Junyi; Driggs-Campbell, Katherine.
-> **"Intention Aware Robot Crowd Navigation with Attention-Based Interaction Graph."**
-> *IEEE International Conference on Robotics and Automation (ICRA)*, 2023,
-> pp. 12015–12021.
-> https://arxiv.org/abs/2203.01821
+> Chen, Changan; Liu, Yuejiang; Kreiss, Sven; Alahi, Alexandre.
+> **"Crowd-Robot Interaction: Crowd-aware Robot Navigation with Attention-based
+> Deep Reinforcement Learning."** *IEEE International Conference on Robotics
+> and Automation (ICRA)*, 2019. https://arxiv.org/abs/1809.08835
 
-Please also see the upstream `LICENSE` file (MIT) and `README.md` citation
-blocks for related prior work (DS-RNN, Gumbel Social Transformer).
+## Runtime dependency: Python-RVO2
 
-Upstream authorship and license terms remain unchanged.
+The simulated humans use ORCA through Python-RVO2
+(https://github.com/sybrenstuvel/Python-RVO2, Apache License 2.0), installed
+from source at commit `c2c46ba8d59556aa10faf03479293236efea154d`; it is not
+vendored.
+
+## History
+
+This directory started as a local copy of the MIT-licensed
+**CrowdNav_Prediction_AttnGraph** repository
+(https://github.com/Shuijing725/CrowdNav_Prediction_AttnGraph; Liu et al.,
+"Intention Aware Robot Crowd Navigation with Attention-Based Interaction
+Graph", ICRA 2023). That code was removed earlier; none of it remains.
+RAISE later targeted HighwayEnv and now targets the vita-epfl CrowdNav
+simulator above.
