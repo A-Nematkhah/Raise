@@ -107,14 +107,20 @@ def record_policy_episode(
     model: Any,
     seed: int,
     max_steps: int = 400,
+    traffic: str = "holdout",
 ) -> Tuple[List[np.ndarray], Dict[str, Any]]:
-    """Roll out one episode; return rgb frames + summary."""
-    from domains.highway.env_wrapper import RewardInjectedHighwayEnv, training_env_config
+    """Roll out one episode on ``holdout`` (eval) or ``train`` traffic; return frames + summary."""
+    from domains.highway.env_wrapper import (
+        RewardInjectedHighwayEnv,
+        holdout_env_config,
+        training_env_config,
+    )
 
+    env_config = holdout_env_config() if traffic == "holdout" else training_env_config()
     env = RewardInjectedHighwayEnv(
         reward_fn,
         seed=int(seed),
-        config=training_env_config(),
+        config=env_config,
         render_mode="rgb_array",
     )
     obs, _info = env.reset(seed=int(seed))
@@ -150,6 +156,7 @@ def record_policy_episode(
         "progress_m": float(progress),
         "mean_speed": float(np.mean(speeds)) if speeds else 0.0,
         "seed": int(seed),
+        "traffic": str(traffic),
     }
     return frames, summary
 
@@ -191,6 +198,10 @@ def visualize_best_policy(
 ) -> Dict[str, Any]:
     """
     Load best Stage III (else II) SB3 zip + reward code; write GIF(s) under plots/viz.
+
+    Episodes run on holdout traffic with seeds ``seed + 97 * ep``; pass an eval
+    seed base (the pipeline uses the final blind-eval family) so the GIF
+    shows scenarios the policy was not selected on.
     """
     run_dir = os.path.abspath(run_dir)
     out_root = os.path.abspath(output_dir or os.path.join(run_dir, "plots", "viz"))
@@ -224,9 +235,9 @@ def visualize_best_policy(
     summaries: List[Dict[str, Any]] = []
 
     for ep in range(int(episodes)):
-        ep_seed = int(seed) + 10003 + ep * 97
+        ep_seed = int(seed) + ep * 97
         frames, summary = record_policy_episode(
-            reward_fn=reward_fn, model=model, seed=ep_seed
+            reward_fn=reward_fn, model=model, seed=ep_seed, traffic="holdout"
         )
         summaries.append(summary)
         strip = os.path.join(out_root, f"{cid}_ep{ep}_strip.png")
@@ -260,6 +271,9 @@ def visualize_best_policy(
         "ok": True,
         "candidate_id": cid,
         "checkpoint": ckpt,
+        "traffic": "holdout",
+        "seed_base": int(seed),
+        "deterministic": True,
         "episodes": summaries,
         "written": written,
         "output_dir": out_root,

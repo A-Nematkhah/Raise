@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from domains.highway.action_config import configure_action_mode_from_config
-from domains.highway.post_run import write_highway_run_artifacts
+from domains.highway.post_run import post_run_summary, write_highway_run_artifacts
 from raise_core import console
 from raise_core.domains import (
     DEFAULT_DOMAIN,
@@ -390,10 +390,12 @@ class RaisePipeline:
             art = write_highway_run_artifacts(
                 cfg.output_dir,
                 episodes=2,
-                seed=int(cfg.seed),
+                seed=int(cfg.seed) + FINAL_EVAL_SEED_OFFSET,
             )
-            n_plots = len(art.get("plots") or [])
-            viz_ok = bool((art.get("viz") or {}).get("ok"))
+            manifest["post_run"] = post_run_summary(art)
+            write_json(os.path.join(cfg.output_dir, "manifest.json"), manifest)
+            n_plots = manifest["post_run"]["n_plots"]
+            viz_ok = manifest["post_run"]["viz_ok"]
             console.status(
                 f"plots={n_plots} viz={'ok' if viz_ok else 'skipped'} "
                 f"→ {os.path.join(cfg.output_dir, 'plots')}",

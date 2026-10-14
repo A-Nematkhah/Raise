@@ -75,3 +75,17 @@ def write_highway_run_artifacts(
 
     result["ok"] = bool(result["plots"]) or bool((result.get("viz") or {}).get("ok"))
     return result
+
+
+def post_run_summary(result: Dict[str, Any]) -> Dict[str, Any]:
+    """Compact ``manifest.json`` row, so a failed plot or GIF shows in the artifacts."""
+    viz = result.get("viz") or {}
+    return {
+        "ok": bool(result.get("ok")),
+        "n_plots": len(result.get("plots") or []),
+        "plots_error": result.get("plots_error"),
+        "viz_ok": bool(viz.get("ok")),
+        "viz_reason": viz.get("reason"),
+        "viz_error": result.get("viz_error"),
+        "viz_seed_base": viz.get("seed_base"),
+    }
