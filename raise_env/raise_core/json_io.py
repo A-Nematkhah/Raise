@@ -6,7 +6,7 @@ import json
 import os
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 _REPLACE_RETRIES = 5
 _REPLACE_BACKOFF_S = 0.05
@@ -38,18 +38,30 @@ def atomic_write_json(
     indent: int = 2,
     ensure_ascii: bool = False,
     sort_keys: bool = False,
+    default: Optional[Callable[[Any], Any]] = None,
 ) -> str:
     """Write ``payload`` to ``path`` via temp file + ``os.replace``.
 
     A crash mid-write leaves the previous file intact instead of truncated JSON.
     """
+    text = json.dumps(
+        payload,
+        indent=indent,
+        ensure_ascii=ensure_ascii,
+        sort_keys=sort_keys,
+        default=default,
+    )
+    return atomic_write_text(path, text + "\n")
+
+
+def atomic_write_text(path: str, text: str) -> str:
+    """Replace ``path`` with ``text`` atomically (temp file + fsync + ``os.replace``)."""
     parent = os.path.dirname(os.path.abspath(path))
     os.makedirs(parent, exist_ok=True)
     tmp = f"{path}.tmp.{os.getpid()}"
     try:
         with open(tmp, "w", encoding="utf-8") as fh:
-            json.dump(payload, fh, indent=indent, ensure_ascii=ensure_ascii, sort_keys=sort_keys)
-            fh.write("\n")
+            fh.write(text)
             fh.flush()
             os.fsync(fh.fileno())
         # Windows: os.replace raises PermissionError while another process
@@ -71,4 +83,4 @@ def atomic_write_json(
     return path
 
 
-__all__ = ["atomic_write_json", "read_json_dict", "utc_now_z"]
+__all__ = ["atomic_write_json", "atomic_write_text", "read_json_dict", "utc_now_z"]

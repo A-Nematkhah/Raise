@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, List, Optional, Sequence
 
+from raise_core.json_io import atomic_write_text
 from raise_core.raise_loop.logging_io import (
     closed_loop_dir,
     read_epochs,
@@ -68,7 +69,7 @@ def build_closed_loop_report(
     lines.append("files:")
     lines.append(f"  {os.path.join(output_dir, 'closed_loop', 'epochs.jsonl')}")
     lines.append(f"  {os.path.join(output_dir, 'closed_loop', 'REPORT.txt')}")
-    lines.append(f"  {os.path.join(output_dir, 'manifest.json')}")
+    lines.append(f"  {os.path.join(output_dir, 'closed_loop', 'manifest.json')}")
     return "\n".join(lines) + "\n"
 
 
@@ -78,9 +79,7 @@ def write_closed_loop_report(
     manifest: Optional[Dict[str, Any]] = None,
 ) -> str:
     text = build_closed_loop_report(output_dir, manifest=manifest)
-    path = os.path.join(closed_loop_dir(output_dir), "REPORT.txt")
-    with open(path, "w", encoding="utf-8") as fh:
-        fh.write(text)
+    path = atomic_write_text(os.path.join(closed_loop_dir(output_dir), "REPORT.txt"), text)
     # Also keep a JSON summary for tooling.
     rows = read_epochs(output_dir)
     write_json(
