@@ -1,11 +1,13 @@
 # raise_env
 
-RAISE experiment tree: LLM-guided reward evolution on HighwayEnv.
+RAISE experiment tree: LLM-guided reward evolution on the vita-epfl/CrowdNav
+simulator.
 
 | Area | Location |
 |------|----------|
 | RAISE core | `raise_core/` |
-| Highway domain | `domains/highway/` (spec: [`domains/highway/spec.md`](domains/highway/spec.md)) |
+| CrowdNav domain | `domains/crowdnav/` (spec: [`domains/crowdnav/spec.md`](domains/crowdnav/spec.md)) |
+| Vendored simulator | `third_party/crowdnav/` ([`UPSTREAM.md`](third_party/crowdnav/UPSTREAM.md)) |
 | CLIs | `scripts/` |
 
 ```bash
@@ -18,4 +20,5 @@ A non-`--fast` run with the default `--llm seed` (no real LLM) is refused
 unless you pass `--allow-seed-llm` (debug only). Run budgets are CLI flags
 (`--population`, `--generations`, `--stage2-train-steps`,
 `--stage3-train-steps`, …); defaults live in `raise_core/pipeline.py`
-(`RaiseRunConfig`). Install, keys and run details: [`README_RAISE.md`](README_RAISE.md).
+(`RaiseRunConfig`). Install (including Python-RVO2), keys and run details:
+[`README_RAISE.md`](README_RAISE.md).

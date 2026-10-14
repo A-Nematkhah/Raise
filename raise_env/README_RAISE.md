@@ -1,12 +1,15 @@
-# RAISE (highway)
+# RAISE (CrowdNav)
 
-LLM-guided reward evolution for `highway-fast-v0` with Stable-Baselines3 PPO.
+LLM-guided reward evolution for crowd-aware robot navigation in the
+[vita-epfl/CrowdNav](https://github.com/vita-epfl/CrowdNav) simulator with
+Stable-Baselines3 PPO.
 
 | Package | Role |
 |---------|------|
 | `raise_core/` | LLM client, reward sandbox, evolution loop, Stage III |
-| `domains/highway/` | HighwayEnv pack (prompts, env wrapper, PPO trainer, Score1) + `data/` |
-| `raise_paths.py` | Puts `raise_env/` on `sys.path` for scripts |
+| `domains/crowdnav/` | CrowdNav pack (prompts, env wrapper, PPO trainer, Score1, viz) + `data/` |
+| `third_party/crowdnav/` | Upstream `crowd_sim` @ `20d6780`, unmodified (MIT) |
+| `raise_paths.py` | Puts `raise_env/` and the vendored simulator on `sys.path` |
 
 Repository layout map: [`../docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md).
 
@@ -16,7 +19,20 @@ Repository layout map: [`../docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md).
 cd raise_env
 py -3.10 -m venv .venv
 .venv\Scripts\python.exe -m pip install -r requirements.txt
+.venv\Scripts\python.exe -m pip install Cython==0.29.36 cmake
+.venv\Scripts\python.exe -m pip install --no-build-isolation "pyrvo2 @ git+https://github.com/sybrenstuvel/Python-RVO2.git@c2c46ba8d59556aa10faf03479293236efea154d"
 ```
+
+The simulator needs `gym==0.15.7` (in `requirements.txt`) and Python-RVO2
+(`import rvo2`, ORCA for the humans). Python-RVO2 has no wheel: its
+`setup.py` runs CMake and Cython, so it needs a C++ compiler (MSVC Build
+Tools on Windows, `build-essential` on Linux) and `--no-build-isolation`
+(Cython must already be installed). CI builds it on Ubuntu with the commands
+above. On Windows, `cmake --build` defaults to the Debug configuration and
+writes `RVO.lib` under `build/RVO2/src/Debug/`, where the pinned `setup.py`
+does not look; if linking fails, build the checkout manually with
+`cmake --build . --config Release` and copy the library to
+`build/RVO2/src/`.
 
 The pinned GPU wheel is `torch==2.11.0+cu128`. Adjust the `cu1xx` suffix and
 the PyTorch index URL in `requirements.txt` to match the local CUDA driver, or
@@ -47,9 +63,9 @@ The server URL defaults to `http://localhost:11434/v1`; override it with
 | Goal | Command | Hardware | Time |
 |------|---------|----------|------|
 | Wiring smoke | `python scripts/run_raise.py --fast` | CPU | seconds |
-| Stage I dataset | `python scripts/collect_highway_stage1_dataset.py` | CPU | minutes |
+| Stage I dataset | `python scripts/collect_crowdnav_stage1_dataset.py` | CPU | seconds |
 | Real PPO, no LLM | `python scripts/run_raise.py --llm seed --allow-seed-llm --population 2 --generations 1 --stage2-train-steps 256 --stage3-train-steps 512 --device cpu` | CPU | minutes |
-| Full run | `python scripts/run_raise.py --llm groq --output-dir results/highway_run` | GPU/CPU + Groq | hours |
+| Full run | `python scripts/run_raise.py --llm groq --output-dir results/crowdnav_run` | GPU/CPU + Groq | hours |
 
 Resume: rerun with the same `--output-dir` (on by default; `--no-resume`
 starts fresh). Checkpoints: `closed_loop/checkpoint.json` (per trained
@@ -60,16 +76,18 @@ candidate) and `stage3/checkpoint.json` (per Stage III candidate).
 1. Gen0: the LLM proposes N reward functions; each passes the sandbox
    (AST policy → spawned smoke test → compile).
 2. Each of G generations: Score1 on the Stage I dataset, PPO train + holdout
-   eval of every new candidate, rank by `highway_fitness`, LLM crossover /
+   eval of every new candidate, rank by fitness (mean discounted upstream
+   task return on `val` scenarios), LLM crossover /
    mutation (with the evaluation metrics in the prompt) / random restarts,
    elitism. Default next generation at N=6: 1 elite + 2 crossover + 2
    mutation + 1 random; `--n-crossover`, `--n-mutation`, `--n-random` and
    `--no-elitism` change the split (elite + children must equal
    `--population`; an unset count absorbs the remainder).
-3. Stage III: long PPO on the final population (on eval seeds no generation
-   saw); the final candidate is the best Stage III fitness.
-4. Final blind eval: the winner alone is re-evaluated on further unseen seeds
-   (`--final-eval-episodes`, default 100). Report `manifest.json` →
+3. Stage III: long PPO on the final population (evaluated on `val`
+   scenarios drawn from a separate seed base; `val` has only 100 cases, so
+   they can overlap with Stage II ones); the final candidate is the best Stage III fitness.
+4. Final blind eval: the winner alone is re-evaluated on upstream `test`
+   scenarios (`--final-eval-episodes`, default 100). Report `manifest.json` →
    `final_eval.fitness`, not the selection score, which is biased upward.
 
 Outputs under `--output-dir`: `config.json`, `seed_reward.py`,
@@ -77,11 +95,16 @@ Outputs under `--output-dir`: `config.json`, `seed_reward.py`,
 `stage1_rejections.jsonl`, `stage2_train/` PPO models),
 `stage2_population.json`, `stage3_train/`, `stage3_population.json`,
 `best_stage{1,2,3}.json`, `final_candidate.json`, `manifest.json`, and
-`plots/` (non-fast runs).
+`plots/` (non-fast runs: metric plots plus `plots/viz/` with a GIF, frame
+strip and trajectory plot of the best policy on `test` scenarios).
+
+Robot / action options: `--robot-kinematics {holonomic,unicycle}`,
+`--action-mode {discrete,continuous}` (discrete = the 81 CADRL actions),
+`--env-config` (an upstream-format `env.config`).
 
 ## Tests
 
 ```bash
 pytest -m "not slow"   # CI default
-pytest -m slow         # 1 real-env rollout test
+pytest -m slow         # end-to-end CLI run with real PPO (about 1 min on CPU)
 ```

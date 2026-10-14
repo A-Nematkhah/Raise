@@ -5,7 +5,7 @@ tests and data. RAISE currently has one domain:
 
 | Domain | Package | Role |
 |--------|---------|------|
-| `highway` | `domains.highway` | HighwayEnv (`highway-fast-v0`) + SB3 PPO |
+| `crowdnav` | `domains.crowdnav` | vita-epfl/CrowdNav `crowd_sim` (vendored) + SB3 PPO |
 
 Registry: `raise_core.domains` (`load_domain`, trainer / validator / Score1
 factories).
@@ -14,12 +14,12 @@ factories).
 
 ```text
 domains/
-  highway/
+  crowdnav/
     pack.py, prompts.py, env_wrapper.py, adapter.py, …
     tests/
-    data/                                # highway Stage I dataset
+    data/                                # CrowdNav Stage I dataset (generated)
   README.md
 ```
 
-See [`highway/spec.md`](highway/spec.md) for the state contract, Score1,
-sandbox, fitness and run flow.
+See [`crowdnav/spec.md`](crowdnav/spec.md) for the state contract,
+observation / action spaces, Score1 and fitness.
