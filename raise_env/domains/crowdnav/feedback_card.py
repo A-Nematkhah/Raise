@@ -182,9 +182,28 @@ def _delta_text(spec: MetricSpec, child: ArchiveRecord, parent: ArchiveRecord) -
     tags = []
     if spec.direction != 0:
         tags.append("better" if d * spec.direction > 0 else "worse")
-    se_a, se_b = _standard_error(parent, spec), _standard_error(child, spec)
-    if se_a is not None and se_b is not None and abs(d) <= 2.0 * math.hypot(se_a, se_b):
-        tags.append("within noise")
+    noise_mode = "independent"
+    se_band: Optional[float] = None
+    if spec.key == "fitness":
+        from domains.crowdnav.metrics import paired_difference
+
+        paired = paired_difference(_episodes(parent), _episodes(child), key="task_return")
+        if paired is None:
+            paired = paired_difference(
+                _episodes(parent), _episodes(child), key="disc_return"
+            )
+        if paired is not None:
+            d = float(paired["mean"])
+            se_band = float(paired["se"])
+            noise_mode = "paired"
+    if se_band is None:
+        se_a, se_b = _standard_error(parent, spec), _standard_error(child, spec)
+        if se_a is not None and se_b is not None:
+            se_band = math.hypot(se_a, se_b)
+    if se_band is not None and abs(d) <= 2.0 * se_band:
+        tags.append(f"within noise ({noise_mode})")
+    elif se_band is not None:
+        tags.append(noise_mode)
     tag = (" " + ", ".join(tags)) if tags else ""
     return f"{spec.label} {_fmt(spec, a)}->{_fmt(spec, b)} ({d:+{spec.fmt}}{tag})"
 

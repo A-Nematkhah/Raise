@@ -35,6 +35,7 @@ __all__ = [
     "fitness_components",
     "fitness_standard_error",
     "format_crowdnav_metrics_line",
+    "paired_difference",
 ]
 
 OUTCOMES = ("success", "collision", "timeout")
@@ -84,6 +85,43 @@ def fitness_standard_error(task_returns: Sequence[float]) -> float:
     if n < 2:
         return 0.0
     return float(np.std(np.asarray(task_returns, dtype=float), ddof=1) / math.sqrt(n))
+
+
+def paired_difference(
+    eps_a: Sequence[Mapping[str, Any]],
+    eps_b: Sequence[Mapping[str, Any]],
+    *,
+    key: str = "task_return",
+) -> Optional[Dict[str, float]]:
+    """Mean per-case difference and its SE when both lists share the same cases.
+
+    Episodes are matched by ``case`` (must be the same multiset). Returns
+    ``None`` when cases differ or fewer than two pairs are available.
+    """
+    def _by_case(eps: Sequence[Mapping[str, Any]]) -> Optional[Dict[Any, float]]:
+        out: Dict[Any, float] = {}
+        for row in eps:
+            if not isinstance(row, Mapping) or "case" not in row or key not in row:
+                return None
+            case = row["case"]
+            if case in out:
+                return None
+            try:
+                out[case] = float(row[key])
+            except (TypeError, ValueError):
+                return None
+        return out
+
+    map_a, map_b = _by_case(eps_a), _by_case(eps_b)
+    if map_a is None or map_b is None:
+        return None
+    if set(map_a) != set(map_b) or len(map_a) < 2:
+        return None
+    diffs = [map_b[c] - map_a[c] for c in sorted(map_a, key=lambda x: (str(type(x)), x))]
+    arr = np.asarray(diffs, dtype=float)
+    mean = float(np.mean(arr))
+    se = float(np.std(arr, ddof=1) / math.sqrt(len(arr)))
+    return {"mean": mean, "se": se, "n": float(len(arr))}
 
 
 def episode_fields(
