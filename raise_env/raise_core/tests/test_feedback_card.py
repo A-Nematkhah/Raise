@@ -367,6 +367,8 @@ def test_large_change_with_many_episodes_is_not_noise():
     text = _full(_card(archive, subjects=("b",))).text
     assert "SR 0.40->0.63 (+0.23 better)" in text
     assert "CR 0.60->0.37 (-0.23 better)" in text
+    # Only fitness names its SE mode; no per-case episodes here, so independent.
+    assert "fitness 0.010->0.160 (+0.149 better, independent)" in text
     # Danger frequency is not a rate with a binomial SE: no noise verdict.
     assert "danger_freq 0.080->0.030 (-0.050 better)" in text
 

@@ -365,8 +365,6 @@ def main() -> int:
     output_dir = args.output_dir or (
         "results/crowdnav_" + datetime.now().strftime("%Y%m%d_%H%M%S")
     )
-    console.configure_run_logging(verbose=bool(args.verbose), output_dir=output_dir)
-
     cfg = RaiseRunConfig(
         output_dir=output_dir,
         seed=args.seed,
@@ -424,6 +422,7 @@ def main() -> int:
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 2
+    console.configure_run_logging(verbose=bool(args.verbose), output_dir=cfg.output_dir)
 
     logging.info(
         "RAISE -> %s (fast=%s, N=%d, G=%d, K2=%d, K3=%d, operators=%s)",

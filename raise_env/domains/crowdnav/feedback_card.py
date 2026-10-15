@@ -200,10 +200,11 @@ def _delta_text(spec: MetricSpec, child: ArchiveRecord, parent: ArchiveRecord) -
         se_a, se_b = _standard_error(parent, spec), _standard_error(child, spec)
         if se_a is not None and se_b is not None:
             se_band = math.hypot(se_a, se_b)
-    if se_band is not None and abs(d) <= 2.0 * se_band:
-        tags.append(f"within noise ({noise_mode})")
-    elif se_band is not None:
-        tags.append(noise_mode)
+    within = se_band is not None and abs(d) <= 2.0 * se_band
+    if spec.key == "fitness" and se_band is not None:
+        tags.append(f"within noise ({noise_mode})" if within else noise_mode)
+    elif within:
+        tags.append("within noise")
     tag = (" " + ", ".join(tags)) if tags else ""
     return f"{spec.label} {_fmt(spec, a)}->{_fmt(spec, b)} ({d:+{spec.fmt}}{tag})"
 
