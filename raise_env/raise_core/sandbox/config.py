@@ -114,6 +114,9 @@ class SandboxConfig:
     # Default raised from 1s → 5s: smoke validation now runs in a spawn'd
     # child process (killable on timeout); Windows cold-start can exceed 1s.
     timeout_seconds: float = 5.0
+    # Interpreter spawn + re-import of the parent's __main__ happen before the
+    # child runs any candidate code and are bounded separately.
+    startup_timeout_seconds: float = 120.0
     max_code_length: int = 20_000
     required_function_name: str = REQUIRED_FUNCTION_NAME
     required_arg_name: str = REQUIRED_ARG_NAME

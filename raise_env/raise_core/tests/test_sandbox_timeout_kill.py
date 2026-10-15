@@ -34,6 +34,49 @@ def test_smoke_timeout_kills_the_worker():
     assert not leaked, f"timed-out workers still alive: {leaked}"
 
 
+class _SlowStartWorker:
+    """Worker that takes ``delay`` s to start, then answers immediately."""
+
+    def __init__(self, delay: float, result=("ok", None)):
+        self._t0 = time.monotonic()
+        self._delay = delay
+        self._result = result
+
+    def is_set(self) -> bool:
+        return time.monotonic() - self._t0 >= self._delay
+
+    def get(self, timeout: float):
+        from queue import Empty
+
+        if not self.is_set():
+            time.sleep(timeout)
+            raise Empty
+        return self._result
+
+
+class _AliveProc:
+    exitcode = None
+
+    def is_alive(self) -> bool:
+        return True
+
+
+def test_slow_worker_startup_is_not_charged_to_the_candidate():
+    from raise_core.sandbox.runtime import _await_smoke_result
+
+    w = _SlowStartWorker(delay=0.4)
+    status, _ = _await_smoke_result(_AliveProc(), w, 0.2, startup_timeout_seconds=5.0, ready=w)
+    assert status == "ok"
+
+
+def test_worker_that_never_starts_reports_startup_timeout():
+    from raise_core.sandbox.runtime import _await_smoke_result
+
+    w = _SlowStartWorker(delay=60.0)
+    with pytest.raises(RewardSandboxError, match="did not start"):
+        _await_smoke_result(_AliveProc(), w, 0.2, startup_timeout_seconds=0.3, ready=w)
+
+
 def test_smoke_requires_source_code():
     with pytest.raises(RewardSandboxError, match="source_code"):
         smoke_test_compute("", default_smoke_states()[:1], SandboxConfig())

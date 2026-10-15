@@ -220,8 +220,11 @@ def _smoke_worker(
     config: SandboxConfig,
     states: Sequence[Any],
     allow_components: bool = False,
+    ready: Any = None,
 ) -> None:
     """Child-process entry: recompile source and smoke-test states."""
+    if ready is not None:
+        ready.set()
     try:
         compute_fn = compile_compute_reward(source_code, config)
         memory: Dict[str, Any] = {}
@@ -267,10 +270,26 @@ def _stop_process(proc: Any) -> None:
         proc.join(timeout=2.0)
 
 
-def _await_smoke_result(proc: Any, queue: Any, timeout_seconds: float) -> Tuple[str, Any]:
-    """Read the worker's result before joining (a full pipe would block its exit)."""
-    deadline = time.monotonic() + timeout_seconds
+def _await_smoke_result(
+    proc: Any,
+    queue: Any,
+    timeout_seconds: float,
+    startup_timeout_seconds: Optional[float] = None,
+    ready: Any = None,
+) -> Tuple[str, Any]:
+    """Read the worker's result before joining (a full pipe would block its exit).
+
+    With ``ready`` (an Event the worker sets before touching candidate code),
+    the ``timeout_seconds`` budget starts when it is set, so slow process
+    startup is not charged to the candidate.
+    """
+    started = ready is None or startup_timeout_seconds is None
+    budget = float(timeout_seconds) if started else float(startup_timeout_seconds)
+    deadline = time.monotonic() + budget
     while True:
+        if not started and ready.is_set():
+            started = True
+            deadline = time.monotonic() + float(timeout_seconds)
         try:
             return queue.get(timeout=0.05)
         except QueueEmpty:
@@ -283,6 +302,10 @@ def _await_smoke_result(proc: Any, queue: Any, timeout_seconds: float) -> Tuple[
                     f"smoke worker exited with code {proc.exitcode} without a result"
                 ) from None
         if time.monotonic() >= deadline:
+            if not started:
+                raise RewardSandboxError(
+                    f"smoke worker did not start within {startup_timeout_seconds}s"
+                )
             raise RewardSandboxError(f"execution exceeded timeout of {timeout_seconds}s")
 
 
@@ -308,14 +331,19 @@ def smoke_test_compute(
 
     ctx = mp.get_context("spawn")
     queue: mp.Queue = ctx.Queue(maxsize=1)
+    ready = ctx.Event()
     proc = ctx.Process(
         target=_smoke_worker,
-        args=(queue, str(source_code), config, tuple(states), bool(allow_components)),
+        args=(queue, str(source_code), config, tuple(states), bool(allow_components), ready),
     )
     proc.start()
     try:
         status, payload = _await_smoke_result(
-            proc, queue, float(config.timeout_seconds)
+            proc,
+            queue,
+            float(config.timeout_seconds),
+            float(config.startup_timeout_seconds),
+            ready,
         )
         proc.join(timeout=2.0)
     finally:
