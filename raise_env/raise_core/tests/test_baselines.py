@@ -223,6 +223,36 @@ def test_run_baselines_writes_expected_schema(tmp_path, monkeypatch):
     assert "B_col_0001" not in data["baselines"]
 
 
+def test_baseline_b_pick_equal_to_final_is_not_retrained(tmp_path, monkeypatch):
+    bas = _load_baselines_mod()
+    run = _write_minimal_run(tmp_path)
+    final = json.loads((run / "final_candidate.json").read_text(encoding="utf-8"))
+    final["candidate_id"] = "ini_0000"
+    atomic_write_json(str(run / "final_candidate.json"), final)
+
+    trained = []
+
+    def _no_train(self, candidate, **kw):
+        trained.append(candidate.candidate_id)
+        raise AssertionError("must not train")
+
+    monkeypatch.setattr(bas.CrowdNavPPOTrainer, "train_and_eval", _no_train)
+    bas.run_baselines(str(run), eval_episodes=2, train_steps=8, skip_a=True, skip_c=True)
+    data = json.loads((run / "baselines.json").read_text(encoding="utf-8"))
+    assert data["baselines"]["B_ini_0000"]["status"] == "same_as_final"
+    assert "B_ini_0000" not in data["comparisons"]
+    assert trained == []
+
+
+def test_stage2_loader_skips_sandbox_without_validator(tmp_path):
+    bas = _load_baselines_mod()
+    run = _write_minimal_run(tmp_path)
+    cands = bas.load_stage2_candidates(str(run))
+    assert set(cands) == {"ini_0000", "col_0001"}
+    assert all(c.reward_fn is None for c in cands.values())
+    assert cands["ini_0000"].metadata["fitness"] == 0.3
+
+
 @pytest.mark.slow
 def test_run_baselines_tiny_real_ppo_smoke(tmp_path):
     """Optional slow smoke: tiny K3 + 1 eval episode (needs CrowdNav deps)."""

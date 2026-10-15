@@ -177,11 +177,26 @@ def _vs_final(
 def _candidate_row_to_reward(
     row: Dict[str, Any], *, validator: Any
 ) -> RewardCandidate:
-    """Rebuild a RewardCandidate from a flattened pop_epoch / JSON row."""
+    """Rebuild a RewardCandidate from a flattened pop_epoch / JSON row.
+
+    ``validator=None`` skips the sandbox (``reward_fn`` stays None): each
+    validation spawns a child that re-imports this script (~6 s on Windows).
+    """
     md = dict(row.get("metadata") or {})
     for key in ("fitness", "last_metrics", "checkpoint_path", "train_steps"):
         if key in row and key not in md:
             md[key] = row[key]
+    if validator is None:
+        return RewardCandidate(
+            candidate_id=str(row.get("candidate_id", "loaded")),
+            code=str(row["code"]),
+            score=row.get("score"),
+            valid=True,
+            origin=str(row.get("origin", "loaded")),
+            parent_ids=tuple(row.get("parent_ids") or ()),
+            validation_error=row.get("validation_error"),
+            metadata=md,
+        )
     payload = {
         "candidate_id": row.get("candidate_id", "loaded"),
         "code": row["code"],
@@ -195,7 +210,9 @@ def _candidate_row_to_reward(
     return load_candidate_dict(payload, validator=validator)
 
 
-def load_stage2_candidates(run_dir: str, *, validator: Any) -> Dict[str, RewardCandidate]:
+def load_stage2_candidates(
+    run_dir: str, *, validator: Any = None
+) -> Dict[str, RewardCandidate]:
     """Latest Stage-II snapshot per id across ``closed_loop/pop_epoch_*.json``."""
     cl = os.path.join(run_dir, "closed_loop")
     by_id: Dict[str, Tuple[int, RewardCandidate]] = {}
@@ -503,15 +520,26 @@ def run_baselines(
 
     # ----- Baseline B: Stage-II genomes -----
     if not skip_b:
-        stage2 = load_stage2_candidates(run_dir, validator=validator)
+        stage2 = load_stage2_candidates(run_dir)
         b_ids = select_baseline_b_ids(stage2, collapse_cr=cr_thresh, extra_ids=extra)
         for cid in b_ids:
             src = stage2[cid]
+            key = f"B_{cid}"
+            if cid == final_id and cid not in extra:
+                # Same genome, seed and K3 as Stage III: retraining repeats it.
+                logger.info("Baseline B pick %s is the final candidate; not retrained", cid)
+                results["baselines"][key] = {
+                    "kind": "B_stage2",
+                    "source_id": cid,
+                    "status": "same_as_final",
+                    "stage2_fitness": (src.metadata or {}).get("fitness"),
+                }
+                continue
             cand = RewardCandidate(
                 candidate_id=f"baseline_B_{cid}",
                 code=src.code,
-                reward_fn=src.reward_fn,
-                valid=src.valid,
+                reward_fn=validator.validate_code(src.code),
+                valid=True,
                 origin="baseline_B",
                 parent_ids=(cid,),
             )
@@ -522,7 +550,6 @@ def run_baselines(
             summary = _train_and_final_eval(
                 cand, trainer=trainer, train_cfg=train_cfg, final_cfg=final_cfg, round_index=0
             )
-            key = f"B_{cid}"
             entry = {
                 "kind": "B_stage2",
                 "source_id": cid,
