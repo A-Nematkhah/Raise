@@ -109,6 +109,8 @@ class RaiseRunConfig:
     generations: int = 4
     stage2_train_steps: int = 12_000
     stage2_eval_episodes: int = 30
+    # Stage II holdout pool: val (default) | train. Stage III/final stay val/test.
+    stage2_eval_split: str = "val"
 
     # Stage III: long PPO on the final population.
     stage3_train_steps: int = STAGE3_STEPS
@@ -282,6 +284,7 @@ class RaisePipeline:
             resume=bool(cfg.resume),
             domain=str(self.domain_pack.name),
             eval_episodes=int(cfg.stage2_eval_episodes),
+            stage2_eval_split=str(cfg.stage2_eval_split or "val"),
             n_envs=max(1, int(cfg.n_envs or 1)),
             label_workers=max(1, int(cfg.label_workers or 1)),
             warm_start=bool(cfg.warm_start),

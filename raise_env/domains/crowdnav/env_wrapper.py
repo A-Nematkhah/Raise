@@ -27,6 +27,7 @@ deterministic (ORCA humans, no noise).
 from __future__ import annotations
 
 import configparser
+import logging
 import math
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -122,13 +123,29 @@ def scenario_case(seed: int, phase: str, size: int) -> int:
 
 
 def eval_cases(seed_base: int, n_episodes: int, size: int) -> List[int]:
-    """``n_episodes`` distinct cases (while ``n_episodes <= size``) for one evaluation."""
+    """Deterministic case indices for one evaluation.
+
+    Returns ``n_episodes`` indices in ``[0, size)``. When ``n_episodes <= size``
+    they are distinct (full cycle of a fixed stride). When ``n_episodes > size``
+    the sequence wraps and repeats cases; with a stochastic policy that still
+    gives independent rollouts on the same case, so callers should treat the
+    extras as additional samples rather than new scenarios.
+    """
+    size = max(1, int(size))
+    n_episodes = max(0, int(n_episodes))
+    if n_episodes > size:
+        logging.getLogger(__name__).warning(
+            "eval_cases: n_episodes=%d > case_set_size=%d; cases will cycle "
+            "(stochastic policies still see independent rollouts per repeat)",
+            n_episodes,
+            size,
+        )
     start = int(
         np.random.SeedSequence(abs(int(seed_base))).generate_state(1, dtype=np.uint64)[0]
         % np.uint64(size)
     )
     stride = _EVAL_CASE_STRIDE if math.gcd(_EVAL_CASE_STRIDE, int(size)) == 1 else 1
-    return [(start + i * stride) % int(size) for i in range(int(n_episodes))]
+    return [(start + i * stride) % size for i in range(n_episodes)]
 
 
 def step_min_separation(sim: CrowdSim, action: Any) -> float:

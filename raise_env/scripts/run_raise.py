@@ -121,6 +121,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--stage2-eval-episodes", type=int, default=_DEFAULTS.stage2_eval_episodes
     )
     parser.add_argument(
+        "--stage2-eval-split",
+        choices=("val", "train"),
+        default=_DEFAULTS.stage2_eval_split,
+        help=(
+            "Stage II holdout pool (default val). 'train' uses train-split cases "
+            "for selection; Stage III/final eval stay on val/test."
+        ),
+    )
+    parser.add_argument(
         "--stage3-train-steps",
         type=int,
         default=_DEFAULTS.stage3_train_steps,
@@ -362,6 +371,7 @@ def main() -> int:
         generations=args.generations,
         stage2_train_steps=args.stage2_train_steps,
         stage2_eval_episodes=args.stage2_eval_episodes,
+        stage2_eval_split=str(args.stage2_eval_split),
         stage3_train_steps=args.stage3_train_steps,
         stage3_eval_episodes=args.stage3_eval_episodes,
         stage3_warm_start=bool(args.stage3_warm_start),

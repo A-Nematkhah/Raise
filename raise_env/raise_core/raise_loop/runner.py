@@ -175,6 +175,7 @@ _RESUME_CONFIG_KEYS = (
     "action_rotation_samples",
     "env_config_path",
     "eval_mode",
+    "stage2_eval_split",
 )
 
 
@@ -329,6 +330,7 @@ class ClosedLoopRunner:
             n_envs=max(1, int(cfg.n_envs or 1)),
             warm_start=bool(cfg.warm_start),
             eval_mode=str(cfg.eval_mode or "both"),
+            eval_split=str(getattr(cfg, "stage2_eval_split", None) or "val"),
             action_mode=str(cfg.action_mode or "discrete"),
             robot_kinematics=str(cfg.robot_kinematics or "holonomic"),
             action_speed_samples=int(cfg.action_speed_samples),

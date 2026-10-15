@@ -32,8 +32,9 @@ class Stage2Config:
     n_envs: int = 1
     warm_start: bool = False
     eval_mode: str = "both"
-    # Upstream scenario split for the selection eval (val | test; train with
-    # eval_mode=both is always added as the train-split check).
+    # Upstream scenario split for the selection eval (val | train | test).
+    # Stage II may use train via --stage2-eval-split; Stage III stays on val
+    # and the final blind eval on test.
     eval_split: str = "val"
     # Robot / action space (domains.crowdnav.settings).
     action_mode: str = "discrete"

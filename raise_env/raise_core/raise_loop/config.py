@@ -40,6 +40,9 @@ class ClosedLoopConfig:
     label_workers: int = 1
     warm_start: bool = False
     eval_mode: str = "holdout_only"  # both | holdout_only
+    # Stage II holdout pool: val (default) | train (fresh train-split cases).
+    # Stage III / final eval stay on val / test regardless of this setting.
+    stage2_eval_split: str = "val"
     # Robot / action space (domains.crowdnav.settings).
     action_mode: str = "discrete"
     robot_kinematics: str = "holonomic"

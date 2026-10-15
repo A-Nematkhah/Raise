@@ -45,7 +45,7 @@ warnings.filterwarnings(
     category=UserWarning,
 )
 
-EVAL_SPLITS = ("val", "test")
+EVAL_SPLITS = ("val", "test", "train")
 # Seed offsets of the training-scenario eval (``eval_mode=both``) and of the
 # stochastic-policy action sampling, relative to the eval seed base.
 TRAIN_EVAL_SEED_OFFSET = 10_003
@@ -715,6 +715,7 @@ class CrowdNavPPOTrainer:
             )
             context = {
                 "split": split,
+                "selection_pool": split,
                 "case_set_size": int(holdout_env.sim.case_size[split]),
                 "cases": [int(c) for c in holdout_cases],
                 "human_num": int(holdout_env.human_num),
