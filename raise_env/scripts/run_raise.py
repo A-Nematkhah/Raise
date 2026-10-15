@@ -139,6 +139,22 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--stage3-skip-collapsed",
+        action=argparse.BooleanOptionalAction,
+        default=_DEFAULTS.stage3_skip_collapsed,
+        help=(
+            "Skip Stage III training for candidates whose Stage II holdout CR "
+            "is at/above --collapse-cr (default: on). Timeout-heavy results "
+            "are kept. If every candidate is collapsed, all are trained."
+        ),
+    )
+    parser.add_argument(
+        "--collapse-cr",
+        type=float,
+        default=_DEFAULTS.collapse_cr,
+        help="Stage II collision-rate threshold for --stage3-skip-collapsed",
+    )
+    parser.add_argument(
         "--final-eval-episodes",
         type=int,
         default=_DEFAULTS.final_eval_episodes,
@@ -349,6 +365,8 @@ def main() -> int:
         stage3_train_steps=args.stage3_train_steps,
         stage3_eval_episodes=args.stage3_eval_episodes,
         stage3_warm_start=bool(args.stage3_warm_start),
+        stage3_skip_collapsed=bool(args.stage3_skip_collapsed),
+        collapse_cr=float(args.collapse_cr),
         final_eval_episodes=max(0, int(args.final_eval_episodes)),
         use_stub=bool(args.fast),
         elitism=bool(args.elitism),

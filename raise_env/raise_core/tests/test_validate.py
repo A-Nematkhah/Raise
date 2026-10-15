@@ -108,3 +108,49 @@ def test_stage3_input_preserves_stage2_aliases_without_leaking():
     assert "training_dynamics" not in md
     assert md["stage2_training_dynamics"]["source"] == "stage2"
     assert md["stage2_warm_start_checkpoint"] == "stage2_parent.zip"
+
+
+def test_stage3_skips_collapsed_candidates(tmp_path: Path):
+    pop = _make_population(2)
+    pop[0].metadata["last_metrics"] = {"holdout": {"CR": 0.95, "SR": 0.0, "TR": 0.05}}
+    pop[0].metadata["fitness"] = -0.2
+    pop[1].metadata["last_metrics"] = {"holdout": {"CR": 0.3, "SR": 0.6, "TR": 0.1}}
+    pop[1].metadata["fitness"] = 0.05
+    runner = Stage3Runner(
+        StubPolicyTrainer(),
+        validator=make_crowdnav_validator(),
+        config=Stage3Config(
+            train_env_steps=8,
+            eval_episodes=2,
+            output_root=str(tmp_path / "stage3_train"),
+            resume=False,
+            skip_collapsed=True,
+            collapse_cr=0.8,
+        ),
+    )
+    out = runner.run(pop)
+    assert [c.candidate_id for c in out] == ["c1"]
+    skipped = [r for r in runner.history if r.status == "skipped_collapsed"]
+    assert [r.candidate_id for r in skipped] == ["c0"]
+
+
+def test_stage3_all_collapsed_trains_everyone(tmp_path: Path):
+    pop = _make_population(2)
+    for c in pop:
+        c.metadata["last_metrics"] = {"holdout": {"CR": 0.9, "SR": 0.0, "TR": 0.1}}
+        c.metadata["fitness"] = -0.2
+    runner = Stage3Runner(
+        StubPolicyTrainer(),
+        validator=make_crowdnav_validator(),
+        config=Stage3Config(
+            train_env_steps=8,
+            eval_episodes=2,
+            output_root=str(tmp_path / "stage3_all"),
+            resume=False,
+            skip_collapsed=True,
+            collapse_cr=0.8,
+        ),
+    )
+    out = runner.run(pop)
+    assert {c.candidate_id for c in out} == {"c0", "c1"}
+    assert not any(r.status == "skipped_collapsed" for r in runner.history)

@@ -104,6 +104,12 @@ class Stage3Config:
     eval_deterministic: bool = False
     # None -> ``seed + round_index`` (the closed loop's generation-0 scenarios).
     eval_seed_base: Optional[int] = None
+    # Skip Stage-II collision-collapsed candidates (CR >= collapse_cr). Default
+    # on: they waste K3 wall-clock and stay collapsed after long training.
+    # Timeout-heavy Stage II (high TR, low SR) is NOT filtered — that often
+    # reflects under-training rather than a broken reward.
+    skip_collapsed: bool = True
+    collapse_cr: float = 0.8
 
 
 @dataclass
@@ -186,10 +192,34 @@ class StubPolicyTrainer(PolicyTrainer):
         ).metrics
 
 
+def _stage2_collision_rate(candidate: RewardCandidate) -> Optional[float]:
+    """Stage II holdout CR, or None when metrics are missing."""
+    md = candidate.metadata or {}
+    metrics = md.get("last_metrics")
+    if not isinstance(metrics, dict):
+        return None
+    holdout = metrics.get("holdout") if isinstance(metrics.get("holdout"), dict) else metrics
+    try:
+        return float(holdout.get("CR", holdout.get("cr")))
+    except (TypeError, ValueError):
+        return None
+
+
+def stage2_is_collapsed(
+    candidate: RewardCandidate, *, collapse_cr: float = 0.8
+) -> bool:
+    """True when Stage II holdout CR is at/above the collapse threshold."""
+    cr = _stage2_collision_rate(candidate)
+    return cr is not None and cr >= float(collapse_cr)
+
+
 def _stage3_input(candidate: RewardCandidate) -> RewardCandidate:
     """Detached copy without Stage II results (kept under ``stage2_*`` for reports)."""
     md = dict(candidate.metadata or {})
     preserved = {"stage2_fitness": md.get("fitness")}
+    cr = _stage2_collision_rate(candidate)
+    if cr is not None:
+        preserved["stage2_cr"] = cr
     for key in _STAGE2_PRESERVE_AS:
         if key in md:
             preserved[f"stage2_{key}"] = md[key]
@@ -249,6 +279,8 @@ class Stage3Runner:
             "ppo_n_steps": int(cfg.ppo_n_steps),
             "eval_deterministic": bool(cfg.eval_deterministic),
             "eval_seed_base": cfg.eval_seed_base,
+            "skip_collapsed": bool(cfg.skip_collapsed),
+            "collapse_cr": float(cfg.collapse_cr),
         }
 
     def _warn_config_drift(self, saved: Dict[str, Any]) -> None:
@@ -356,22 +388,56 @@ class Stage3Runner:
             else None
         )
 
+    def _apply_collapse_filter(
+        self, population: Sequence[RewardCandidate]
+    ) -> List[RewardCandidate]:
+        """Drop Stage-II collision-collapsed candidates unless that would empty the set."""
+        if not bool(self.config.skip_collapsed):
+            return [_stage3_input(c) for c in population]
+        threshold = float(self.config.collapse_cr)
+        kept: List[RewardCandidate] = []
+        skipped: List[RewardCandidate] = []
+        for cand in population:
+            if stage2_is_collapsed(cand, collapse_cr=threshold):
+                skipped.append(cand)
+            else:
+                kept.append(cand)
+        if skipped and not kept:
+            console.warn(
+                f"all {len(skipped)} Stage III candidates are collapsed "
+                f"(CR>={threshold:g}); training all of them anyway",
+                stage="Stage III",
+            )
+            return [_stage3_input(c) for c in population]
+        for cand in skipped:
+            cr = _stage2_collision_rate(cand)
+            console.status(
+                f"skip {cand.candidate_id} (Stage II CR={cr:.3f} >= {threshold:g})",
+                stage="Stage III",
+            )
+            self.history.append(
+                Stage3Record(
+                    candidate_id=str(cand.candidate_id),
+                    metrics={"CR": cr, "collapse_cr": threshold},
+                    status="skipped_collapsed",
+                )
+            )
+        return [_stage3_input(c) for c in kept]
+
     def run(self, population: Sequence[RewardCandidate]) -> List[RewardCandidate]:
         console.banner(
             f"Stage III - long PPO (K3={self.config.train_env_steps}, "
             f"E3={self.config.eval_episodes})"
         )
-        pop = [_stage3_input(c) for c in population]
         start = 0
         payload = load_checkpoint(self._ckpt_dir()) if self.config.resume else None
         if payload:
             self._warn_config_drift(payload.get("config") or {})
+            self._restore(payload)
             saved_pop = deserialize_population(
                 payload.get("population"), validator=self.validator
             )
-            if saved_pop:
-                pop = saved_pop
-            self._restore(payload)
+            pop = saved_pop if saved_pop else self._apply_collapse_filter(population)
             start = int(payload.get("next_index") or 0)
             if str(payload.get("status")) == "done":
                 console.status(
@@ -383,6 +449,8 @@ class Stage3Runner:
                 f"resuming Stage III at candidate {start + 1}/{len(pop)}",
                 stage="Stage III",
             )
+        else:
+            pop = self._apply_collapse_filter(population)
 
         n = len(pop)
         for i in range(start, n):

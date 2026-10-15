@@ -116,6 +116,9 @@ class RaiseRunConfig:
     # Off: Stage III compares candidates at K3 steps each, and a warm start
     # would add the Stage II steps to some of them.
     stage3_warm_start: bool = False
+    # Skip Stage-II collision-collapsed candidates in Stage III (default on).
+    stage3_skip_collapsed: bool = True
+    collapse_cr: float = 0.8
     # Episodes of the blind re-evaluation of the Stage III winner (0 = skip).
     final_eval_episodes: int = 100
 
@@ -310,6 +313,8 @@ class RaisePipeline:
             warm_start=bool(cfg.stage3_warm_start),
             n_envs=max(1, int(cfg.n_envs or 1)),
             eval_seed_base=int(cfg.seed) + STAGE3_EVAL_SEED_OFFSET,
+            skip_collapsed=bool(cfg.stage3_skip_collapsed),
+            collapse_cr=float(cfg.collapse_cr),
             **self._space_knobs(),
         )
 
