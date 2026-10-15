@@ -347,6 +347,16 @@ def _n_envs(config: Any) -> int:
         return 1
 
 
+def _ppo_gamma(config: Any) -> float:
+    raw = getattr(config, "ppo_gamma", None)
+    if raw is None:
+        return float(PPO_GAMMA)
+    gamma = float(raw)
+    if not (0.0 < gamma <= 1.0):
+        raise ValueError(f"ppo_gamma must be in (0, 1], got {raw!r}")
+    return gamma
+
+
 def _eval_mode(config: Any) -> str:
     mode = str(getattr(config, "eval_mode", None) or "both").strip().lower()
     return mode if mode in ("both", "holdout_only") else "both"
@@ -551,6 +561,7 @@ class CrowdNavPPOTrainer:
             n_steps = min(n_steps_cap, max(16, train_steps // max(1, n_envs)))
             batch_size = min(64 * n_envs, max(8, n_steps * n_envs))
             n_epochs = max(1, int(getattr(config, "ppo_n_epochs", 10) or 10))
+            ppo_gamma = _ppo_gamma(config)
             # Always build a fresh PPO so n_steps/batch_size match this VecEnv.
             # PPO.load + mutating n_steps leaves a stale RolloutBuffer (IndexError).
             # Warm-start copies policy weights only (new model → _last_obs is None,
@@ -565,7 +576,7 @@ class CrowdNavPPOTrainer:
                 n_steps=n_steps,
                 batch_size=batch_size,
                 n_epochs=n_epochs,
-                gamma=PPO_GAMMA,
+                gamma=ppo_gamma,
                 learning_rate=3e-4,
                 ent_coef=float(getattr(config, "ppo_ent_coef", 0.0) or 0.0),
             )
@@ -638,6 +649,7 @@ class CrowdNavPPOTrainer:
         md["actual_train_steps"] = int(getattr(model, "num_timesteps", train_steps) or train_steps)
         md["train_seed"] = int(seed)
         md["ppo_n_steps"] = int(n_steps)
+        md["ppo_gamma"] = float(ppo_gamma)
         md["train_wall_seconds"] = float(train_wall)
         md["train_steps_per_second"] = float(sps)
         if dynamics is not None:

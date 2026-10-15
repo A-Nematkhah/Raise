@@ -49,6 +49,8 @@ class Stage2Config:
     # PPO rollout length cap per env and optimisation epochs per rollout.
     ppo_n_steps: int = 256
     ppo_n_epochs: int = 10
+    # PPO per-step discount; None -> domain default (CrowdNav PPO_GAMMA = 0.99).
+    ppo_gamma: Optional[float] = None
     # Eval scenario seed shared by every candidate trained in one generation
     # (None → per-candidate ``seed + round_index``).
     eval_seed_base: Optional[int] = None

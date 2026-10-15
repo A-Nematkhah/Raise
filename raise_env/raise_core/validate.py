@@ -103,6 +103,8 @@ class Stage3Config:
     n_envs: int = 1
     # Same PPO rollout / eval policy mode as Stage II so both stages are comparable.
     ppo_n_steps: int = 256
+    # PPO per-step discount; None -> domain default (CrowdNav PPO_GAMMA = 0.99).
+    ppo_gamma: Optional[float] = None
     eval_deterministic: bool = False
     # None -> ``seed + round_index`` (the closed loop's generation-0 scenarios).
     eval_seed_base: Optional[int] = None

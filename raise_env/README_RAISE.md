@@ -126,6 +126,25 @@ Robot / action options: `--robot-kinematics {holonomic,unicycle}`,
 `--action-mode {discrete,continuous}` (discrete = the 81 CADRL actions),
 `--env-config` (an upstream-format `env.config`).
 
+## Sanity checks and ablations
+
+```bash
+# ORCA robot on all 500 test cases vs Chen et al. 2019 Table I (~6 s; exit 1 on mismatch)
+python scripts/check_orca_reference.py --out results/orca_reference_check.json
+# Baselines on a finished run; --seeds applies to native-reward PPO (A)
+python scripts/run_baselines.py --run-dir results/crowdnav_16h --seeds 3 --skip-b --skip-c
+# PPO discount sweep: fixed rewards and blind eval, K3 per (reward, gamma, seed)
+python scripts/run_gamma_sweep.py --run-dir results/crowdnav_16h --gammas matched,0.99,0.995 --rewards native,final --seeds 2
+```
+
+The paper's ORCA reward (0.054) is the discounted success/collision reward
+only; the RAISE fitness also counts discomfort penalties (−0.022 for ORCA).
+PPO discounts 0.99 per 0.25 s step (~25 s horizon) while the fitness discounts
+0.9 per second (~0.974 per step, ~9.6 s horizon); `matched` uses the latter.
+`run_baselines.py --ppo-gamma G` writes `baselines_gamma<G>.json`; the sweep
+writes `gamma_sweep.json` (resumable, paired per-seed deltas vs 0.99). Score1
+keeps `PPO_GAMMA`, so these change training only, not Stage I ranking.
+
 LLM: Groq default `max_tokens` is 3500 (gpt-oss reasoning tokens count);
 override with `--llm-max-tokens` / `--llm-reasoning-effort`.
 

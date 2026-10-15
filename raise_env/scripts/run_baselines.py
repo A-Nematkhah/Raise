@@ -91,12 +91,17 @@ def _stage3_train_config(
     train_steps: int,
     seed: int,
     eval_episodes: int = 2,
+    ppo_gamma: Optional[float] = None,
+    output_subdir: str = "baselines_train",
 ) -> Stage3Config:
+    if ppo_gamma is not None and output_subdir == "baselines_train":
+        output_subdir = f"baselines_train_gamma{float(ppo_gamma):g}"
     return Stage3Config(
         train_env_steps=int(train_steps),
         eval_episodes=int(eval_episodes),
         seed=int(seed),
-        output_root=os.path.join(run_dir, "baselines_train"),
+        output_root=os.path.join(run_dir, output_subdir),
+        ppo_gamma=ppo_gamma,
         device=str(run_cfg.get("device") or "cpu"),
         resume=False,
         eval_mode=str(run_cfg.get("eval_mode") or "holdout_only"),
@@ -304,6 +309,7 @@ def _train_and_final_eval(
     summary["candidate_id"] = str(candidate.candidate_id)
     summary["train_steps"] = int(train_cfg.train_env_steps)
     summary["train_seed"] = int(train_cfg.seed) + int(round_index)
+    summary["ppo_gamma"] = (candidate.metadata or {}).get("ppo_gamma")
     return summary
 
 
@@ -442,8 +448,13 @@ def run_baselines(
     skip_a: bool = False,
     skip_b: bool = False,
     skip_c: bool = False,
+    ppo_gamma: Optional[float] = None,
 ) -> Dict[str, Any]:
-    """Train/eval baselines for ``run_dir`` and write ``baselines.json``."""
+    """Train/eval baselines for ``run_dir`` and write ``baselines.json``.
+
+    A non-default ``ppo_gamma`` writes ``baselines_gamma<g>.json`` instead so
+    the reference results are not overwritten.
+    """
     run_dir = os.path.abspath(run_dir)
     run_cfg = read_json_dict(os.path.join(run_dir, "config.json")) or {}
     seed = int(run_cfg.get("seed", 425))
@@ -472,6 +483,7 @@ def run_baselines(
         "eval_split": FINAL_EVAL_SPLIT,
         "eval_deterministic": False,
         "train_steps_k3": k3,
+        "ppo_gamma": ppo_gamma,
         "final_candidate_id": final_id,
         "final_fitness": final_fit if math.isfinite(final_fit) else None,
         "baselines": {},
@@ -491,7 +503,8 @@ def run_baselines(
                 origin="baseline_A",
             )
             train_cfg = _stage3_train_config(
-                run_dir, run_cfg, train_steps=k3, seed=seed + i, eval_episodes=2
+                run_dir, run_cfg, train_steps=k3, seed=seed + i, eval_episodes=2,
+                ppo_gamma=ppo_gamma,
             )
             final_cfg = _final_eval_config(train_cfg, episodes=n_eval, seed_base=seed_base)
             summary = _train_and_final_eval(
@@ -544,7 +557,8 @@ def run_baselines(
                 parent_ids=(cid,),
             )
             train_cfg = _stage3_train_config(
-                run_dir, run_cfg, train_steps=k3, seed=seed, eval_episodes=2
+                run_dir, run_cfg, train_steps=k3, seed=seed, eval_episodes=2,
+                ppo_gamma=ppo_gamma,
             )
             final_cfg = _final_eval_config(train_cfg, episodes=n_eval, seed_base=seed_base)
             summary = _train_and_final_eval(
@@ -599,7 +613,8 @@ def run_baselines(
                 final_fitness=final_fit,
             )
 
-    out_path = os.path.join(run_dir, "baselines.json")
+    out_name = "baselines.json" if ppo_gamma is None else f"baselines_gamma{float(ppo_gamma):g}.json"
+    out_path = os.path.join(run_dir, out_name)
     atomic_write_json(out_path, results)
     logger.info("Wrote %s", out_path)
     return results
@@ -631,6 +646,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--skip-a", action="store_true")
     p.add_argument("--skip-b", action="store_true")
     p.add_argument("--skip-c", action="store_true")
+    p.add_argument(
+        "--ppo-gamma",
+        type=float,
+        default=None,
+        help="PPO per-step discount for A/B (default: 0.99; writes baselines_gamma<g>.json)",
+    )
     p.add_argument("--verbose", action="store_true")
     return p
 
@@ -653,6 +674,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         skip_a=bool(args.skip_a),
         skip_b=bool(args.skip_b),
         skip_c=bool(args.skip_c),
+        ppo_gamma=args.ppo_gamma,
     )
     return 0
 
