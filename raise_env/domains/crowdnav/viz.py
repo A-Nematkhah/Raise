@@ -6,6 +6,7 @@ import glob
 import json
 import logging
 import os
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import matplotlib
@@ -91,8 +92,9 @@ def record_policy_episode(
     case: int,
     split: str = "test",
     render: bool = True,
+    deterministic: bool = True,
 ) -> Tuple[List[np.ndarray], Dict[str, Any]]:
-    """Roll out one deterministic episode on upstream ``split`` case ``case``; return frames + summary."""
+    """Roll out one episode on upstream ``split`` case ``case``; return frames + summary."""
     env = RewardInjectedCrowdNavEnv(
         reward_fn, phase=split, render_mode="rgb_array" if render else None
     )
@@ -107,7 +109,7 @@ def record_policy_episode(
     while not done:
         if render:
             frames.append(env.render())
-        action, _ = model.predict(obs, deterministic=True)
+        action, _ = model.predict(obs, deterministic=bool(deterministic))
         obs, _r, terminated, truncated, info = env.step(action)
         steps += 1
         min_sep = min(min_sep, float(info["raise_min_separation"]))
@@ -190,6 +192,43 @@ def save_frame_strip(frames: Sequence[np.ndarray], out_path: str, *, max_panels:
     fig.savefig(out_path, dpi=120)
 
 
+def _select_viz_cases(
+    run_dir: str,
+    *,
+    seed: int,
+    episodes: int,
+    case_set_size: int,
+) -> List[int]:
+    """Prefer a mix that includes a non-success when final_eval recorded one."""
+    default = eval_cases(int(seed), int(episodes), int(case_set_size))
+    final_path = os.path.join(run_dir, "final_candidate.json")
+    if not os.path.isfile(final_path) or episodes < 1:
+        return default
+    try:
+        final = json.loads(Path(final_path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return default
+    md = (final.get("metadata") or {}).get("final_eval") or {}
+    metrics = md.get("metrics") or {}
+    eps = metrics.get("holdout_episodes") or []
+    if not isinstance(eps, list) or not eps:
+        return default
+    fail = next(
+        (
+            int(e["case"])
+            for e in eps
+            if isinstance(e, dict)
+            and e.get("case") is not None
+            and str(e.get("outcome") or "") not in ("success", "")
+        ),
+        None,
+    )
+    if fail is None:
+        return default
+    cases = [fail] + [c for c in default if c != fail]
+    return cases[: int(episodes)]
+
+
 def visualize_best_policy(
     run_dir: str,
     *,
@@ -197,6 +236,7 @@ def visualize_best_policy(
     episodes: int = 2,
     seed: int = 425,
     fps: int = 4,
+    viz_mode: str = "stochastic",
 ) -> Dict[str, Any]:
     """
     Load the best Stage III (else II) SB3 zip + reward code; write GIF(s),
@@ -205,10 +245,16 @@ def visualize_best_policy(
     Episodes run on upstream ``test`` cases chosen from ``seed`` exactly as
     the final blind evaluation chooses them, so pass that evaluation's seed
     base to show scenarios the policy was not selected on.
+
+    ``viz_mode`` is ``stochastic`` (default; fixed torch seed) or
+    ``deterministic``. When final-eval episodes are available, at least one
+    non-success case is preferred if any exist.
     """
     run_dir = os.path.abspath(run_dir)
     out_root = os.path.abspath(output_dir or os.path.join(run_dir, "plots", "viz"))
     os.makedirs(out_root, exist_ok=True)
+    mode = str(viz_mode or "stochastic").strip().lower()
+    deterministic = mode == "deterministic"
 
     cand = _pick_best_candidate(run_dir)
     if cand is None:
@@ -231,16 +277,25 @@ def visualize_best_policy(
         return {"ok": False, "reason": f"reward invalid: {err}"}
 
     model = PPO.load(ckpt, device="cpu")
+    if not deterministic:
+        model.set_random_seed(int(seed))
     cid = str(cand.get("candidate_id", "best"))
     written: List[str] = []
     summaries: List[Dict[str, Any]] = []
     probe = RewardInjectedCrowdNavEnv(None, phase="test")
-    cases = eval_cases(int(seed), int(episodes), int(probe.sim.case_size["test"]))
+    case_set_size = int(probe.sim.case_size["test"])
     probe.close()
+    cases = _select_viz_cases(
+        run_dir, seed=int(seed), episodes=int(episodes), case_set_size=case_set_size
+    )
 
     for ep, case in enumerate(cases):
         frames, summary = record_policy_episode(
-            reward_fn=reward_fn, model=model, case=case, split="test"
+            reward_fn=reward_fn,
+            model=model,
+            case=case,
+            split="test",
+            deterministic=deterministic,
         )
         traj = os.path.join(out_root, f"{cid}_ep{ep}_traj.png")
         save_trajectory_plot(summary, traj)
@@ -264,8 +319,11 @@ def visualize_best_policy(
         "checkpoint": ckpt,
         "split": "test",
         "seed_base": int(seed),
-        "deterministic": True,
+        "viz_mode": mode,
+        "deterministic": bool(deterministic),
+        "cases": [int(c) for c in cases],
         "episodes": summaries,
+        "outcomes": [s.get("outcome") for s in summaries],
         "written": written,
         "output_dir": out_root,
     }

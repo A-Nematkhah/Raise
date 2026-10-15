@@ -131,7 +131,9 @@ def plot_stage_metrics(
         round_centers.append(((start + end) / 2.0, f"R{r}"))
         x += 0.8  # gap
 
-    fig, axes = plt.subplots(2, 1, figsize=(max(8.0, 0.55 * len(names) + 2), 7.0), sharex=True)
+    fig, axes = plt.subplots(
+        2, 1, figsize=(max(10.0, 0.7 * len(names) + 2), 7.5), sharex=True
+    )
     width = 0.25
     xs = np.asarray(xticks)
     axes[0].bar(xs - width, srs, width, label="SR", color="#2ca02c")
@@ -149,7 +151,7 @@ def plot_stage_metrics(
     axes[1].set_title(f"{stage_label} — scalar score (cached domain fitness when available)")
     axes[1].grid(True, alpha=0.3)
     axes[1].set_xticks(xs)
-    axes[1].set_xticklabels(names, rotation=45, ha="right", fontsize=8)
+    axes[1].set_xticklabels(names, rotation=90, ha="center", fontsize=7)
     for cx, lab in round_centers:
         axes[1].annotate(
             lab,
@@ -173,7 +175,7 @@ def plot_stage_summary(run_dir: str, out_path: str) -> bool:
 
     rows: List[Tuple[str, Dict[str, float]]] = []
     for label, fname in (
-        ("Stage I\n(Score1 only)", "best_stage1.json"),
+        ("Best Score1\n(Stage-II metrics shown)", "best_stage1.json"),
         ("Stage II", "best_stage2.json"),
         ("Stage III", "best_stage3.json"),
     ):
@@ -182,7 +184,7 @@ def plot_stage_summary(run_dir: str, out_path: str) -> bool:
             continue
         md = payload.get("metadata") or {}
         metrics = md.get("last_metrics") or {}
-        if not metrics and label.startswith("Stage I"):
+        if not metrics and "Score1" in label:
             score = payload.get("score")
             if score is None:
                 continue
@@ -375,7 +377,7 @@ def plot_best_crowdnav_detail(run_dir: str, out_path: str) -> bool:
     if not any(r[1]["nav_time"] > 0 or r[1]["path_length"] > 0 for r in rows):
         return False
 
-    fig, axes = plt.subplots(1, 2, figsize=(10.0, 4.2))
+    fig, axes = plt.subplots(1, 3, figsize=(12.5, 4.2))
     labels = [lab for lab, _ in rows]
     x = np.arange(len(labels))
     width = 0.25
@@ -391,17 +393,26 @@ def plot_best_crowdnav_detail(run_dir: str, out_path: str) -> bool:
     axes[0].legend(fontsize=8)
     axes[0].grid(True, axis="y", alpha=0.3)
 
-    metrics_r = ("nav_time", "path_length", "danger_freq", "min_dist_danger", "scalar")
-    colors_r = ("#1f77b4", "#8c564b", "#17becf", "#bcbd22", "#9467bd")
-    width_r = 0.15
-    for i, (k, color) in enumerate(zip(metrics_r, colors_r)):
-        vals = [m[k] for _, m in rows]
-        axes[1].bar(x + (i - 2) * width_r, vals, width_r, label=k, color=color)
+    width_m = 0.35
+    for i, (k, color) in enumerate((("nav_time", "#1f77b4"), ("path_length", "#8c564b"))):
+        axes[1].bar(x + (i - 0.5) * width_m, [m[k] for _, m in rows], width_m, label=k, color=color)
     axes[1].set_xticks(x)
     axes[1].set_xticklabels(labels)
-    axes[1].set_title("Best — nav time (s) / path (m) / danger / fitness")
-    axes[1].legend(fontsize=7)
+    axes[1].set_ylabel("seconds / metres")
+    axes[1].set_title("Best — nav time & path length")
+    axes[1].legend(fontsize=8)
     axes[1].grid(True, axis="y", alpha=0.3)
+
+    width_f = 0.25
+    for i, (k, color) in enumerate(
+        (("danger_freq", "#17becf"), ("min_dist_danger", "#bcbd22"), ("scalar", "#9467bd"))
+    ):
+        axes[2].bar(x + (i - 1) * width_f, [m[k] for _, m in rows], width_f, label=k, color=color)
+    axes[2].set_xticks(x)
+    axes[2].set_xticklabels(labels)
+    axes[2].set_title("Best — danger + fitness")
+    axes[2].legend(fontsize=7)
+    axes[2].grid(True, axis="y", alpha=0.3)
 
     fig.tight_layout()
     fig.savefig(out_path, dpi=150)
