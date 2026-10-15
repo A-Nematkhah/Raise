@@ -20,20 +20,41 @@ def candidate_to_dict(cand: RewardCandidate) -> Dict[str, Any]:
     }
 
 
+def _restore_score(raw: Any, metadata: Dict[str, Any]) -> Any:
+    """Map persisted Score1 back to an in-memory float.
+
+    Writers sanitize ``-inf`` to ``null`` (strict JSON). Hard-rejected
+    candidates must still sort below every finite Score1, so restore ``-inf``
+    when the null came from a reject (or when the legacy file stored Infinity).
+    """
+    if raw is None:
+        if metadata.get("score1_rejected") or metadata.get("unscored"):
+            return float("-inf")
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return raw
+    if value != value:  # NaN
+        return float("-inf") if metadata.get("score1_rejected") else None
+    return value
+
+
 def load_candidate_dict(d: Dict[str, Any], *, validator: Any) -> RewardCandidate:
     """Rebuild one candidate; ``validator`` re-validates the stored code."""
     code = d["code"]
     reward_fn, err = validator.try_validate(code)
+    metadata = dict(d.get("metadata") or {})
     return RewardCandidate(
         candidate_id=d.get("candidate_id", "loaded"),
         code=code,
         reward_fn=reward_fn,
-        score=d.get("score"),
+        score=_restore_score(d.get("score"), metadata),
         valid=reward_fn is not None,
         origin=d.get("origin", "loaded"),
         parent_ids=tuple(d.get("parent_ids") or ()),
         validation_error=err or d.get("validation_error"),
-        metadata=dict(d.get("metadata") or {}),
+        metadata=metadata,
     )
 
 

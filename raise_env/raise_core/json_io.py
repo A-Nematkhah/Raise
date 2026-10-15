@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import time
 from datetime import datetime, timezone
@@ -22,8 +23,23 @@ def utc_now_z() -> str:
     )
 
 
+def sanitize_nonfinite(obj: Any) -> Any:
+    """Recursively replace NaN / ±Infinity with ``None`` (strict-JSON safe)."""
+    if isinstance(obj, float):
+        return obj if math.isfinite(obj) else None
+    if isinstance(obj, dict):
+        return {k: sanitize_nonfinite(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [sanitize_nonfinite(v) for v in obj]
+    return obj
+
+
 def read_json_dict(path: str) -> Optional[Dict[str, Any]]:
-    """Load a JSON object from ``path``; None if missing or not a dict."""
+    """Load a JSON object from ``path``; None if missing or not a dict.
+
+    Accepts legacy artifacts that contain non-standard ``Infinity`` / ``NaN``
+    tokens (Python ``json.load`` default); new writers never emit those.
+    """
     if not os.path.isfile(path):
         return None
     with open(path, "r", encoding="utf-8") as fh:
@@ -39,17 +55,22 @@ def atomic_write_json(
     ensure_ascii: bool = False,
     sort_keys: bool = False,
     default: Optional[Callable[[Any], Any]] = None,
+    sanitize: bool = True,
 ) -> str:
     """Write ``payload`` to ``path`` via temp file + ``os.replace``.
 
     A crash mid-write leaves the previous file intact instead of truncated JSON.
+    With ``sanitize=True`` (default), NaN/±inf become ``null`` and the dump
+    rejects non-finite values (``allow_nan=False``).
     """
+    data = sanitize_nonfinite(payload) if sanitize else payload
     text = json.dumps(
-        payload,
+        data,
         indent=indent,
         ensure_ascii=ensure_ascii,
         sort_keys=sort_keys,
         default=default,
+        allow_nan=not sanitize,
     )
     return atomic_write_text(path, text + "\n")
 
@@ -83,4 +104,10 @@ def atomic_write_text(path: str, text: str) -> str:
     return path
 
 
-__all__ = ["atomic_write_json", "atomic_write_text", "read_json_dict", "utc_now_z"]
+__all__ = [
+    "atomic_write_json",
+    "atomic_write_text",
+    "read_json_dict",
+    "sanitize_nonfinite",
+    "utc_now_z",
+]

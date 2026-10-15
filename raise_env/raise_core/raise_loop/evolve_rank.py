@@ -16,9 +16,12 @@ def _score1(c: RewardCandidate) -> float:
     if c.score is None:
         return float("-inf")
     try:
-        return float(c.score)
+        value = float(c.score)
     except (TypeError, ValueError):
         return float("-inf")
+    if value != value:  # NaN
+        return float("-inf")
+    return value
 
 
 def _has_proxy(c: RewardCandidate) -> bool:
