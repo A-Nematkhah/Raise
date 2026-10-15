@@ -36,6 +36,15 @@ def _make_population(n: int = 2) -> list:
                     "fitness": 9.0,
                     "last_metrics": {"SR": 1.0},
                     "checkpoint_path": "stage2.zip",
+                    "training_dynamics": {
+                        "source": "stage2",
+                        "total_timesteps": 150_000,
+                    },
+                    "warm_start_checkpoint": "stage2_parent.zip",
+                    "eval_generation": 3,
+                    "fitness_history": [{"generation": 2, "fitness": 8.0}],
+                    "duplicate_of": None,
+                    "llm_fallback_clone": False,
                 },
             )
         )
@@ -74,3 +83,28 @@ def test_stage3_trains_each_candidate_once_and_picks_best_by_fitness(tmp_path: P
         assert md["fitness"] != 9.0
         assert md["checkpoint_path"] is None
         assert md["stage3_trained"] is True
+        # Stale Stage II training/warm-start fields are stripped (P0-1).
+        assert "training_dynamics" not in md
+        assert "warm_start_checkpoint" not in md
+        assert "eval_generation" not in md
+        assert "fitness_history" not in md
+        assert "duplicate_of" not in md
+        assert "llm_fallback_clone" not in md
+        assert md["stage2_training_dynamics"]["total_timesteps"] == 150_000
+        assert md["stage2_warm_start_checkpoint"] == "stage2_parent.zip"
+        assert md["stage2_eval_generation"] == 3
+
+
+def test_stage3_input_preserves_stage2_aliases_without_leaking():
+    from raise_core.validate import _stage3_input
+
+    cand = _make_population(1)[0]
+    out = _stage3_input(cand)
+    md = out.metadata
+    assert md["stage2_fitness"] == 9.0
+    assert "fitness" not in md or md.get("fitness") is None
+    assert "last_metrics" not in md
+    assert "checkpoint_path" not in md
+    assert "training_dynamics" not in md
+    assert md["stage2_training_dynamics"]["source"] == "stage2"
+    assert md["stage2_warm_start_checkpoint"] == "stage2_parent.zip"

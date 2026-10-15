@@ -51,13 +51,30 @@ FINAL_EVAL_SEED_OFFSET: int = 20_000_000
 # Scenario split of the final blind evaluation (never used for selection).
 FINAL_EVAL_SPLIT: str = "test"
 
-# Stage II results that must not leak into Stage III selection.
+# Stage II results that must not leak into Stage III selection / final eval.
+# Values still useful for reports are preserved as ``stage2_*`` in ``_stage3_input``.
 _STAGE2_RESULT_KEYS = (
     "last_metrics",
     "fitness",
     "selection_scalar",
     "checkpoint_path",
     "proxy_feedback",
+    "training_dynamics",
+    "warm_start_checkpoint",
+    "eval_generation",
+    "fitness_history",
+    "duplicate_of",
+    "llm_fallback_clone",
+)
+
+# Stage II keys kept under a ``stage2_`` prefix for reports (fitness always).
+_STAGE2_PRESERVE_AS = (
+    "training_dynamics",
+    "warm_start_checkpoint",
+    "eval_generation",
+    "fitness_history",
+    "duplicate_of",
+    "llm_fallback_clone",
 )
 
 
@@ -170,12 +187,15 @@ class StubPolicyTrainer(PolicyTrainer):
 
 
 def _stage3_input(candidate: RewardCandidate) -> RewardCandidate:
-    """Detached copy without Stage II results (Stage II fitness kept for reports)."""
+    """Detached copy without Stage II results (kept under ``stage2_*`` for reports)."""
     md = dict(candidate.metadata or {})
-    stage2_fitness = md.get("fitness")
+    preserved = {"stage2_fitness": md.get("fitness")}
+    for key in _STAGE2_PRESERVE_AS:
+        if key in md:
+            preserved[f"stage2_{key}"] = md[key]
     for key in _STAGE2_RESULT_KEYS:
         md.pop(key, None)
-    md["stage2_fitness"] = stage2_fitness
+    md.update(preserved)
     return replace(candidate, metadata=md)
 
 
