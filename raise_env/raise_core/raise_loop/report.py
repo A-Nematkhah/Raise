@@ -73,12 +73,26 @@ def build_closed_loop_report(
     return "\n".join(lines) + "\n"
 
 
+def _score1_vs_fitness_line(output_dir: str) -> Optional[str]:
+    """One-line Spearman summary; never fails the report writer."""
+    try:
+        # Imported lazily so stub/fast tests need no scipy/numpy beyond metrics.
+        from scripts.analyze_score1_vs_fitness import analyze_run, format_report_line
+
+        return format_report_line(analyze_run(__import__("pathlib").Path(output_dir)))
+    except Exception as exc:  # noqa: BLE001
+        return f"Score1 vs fitness: unavailable ({type(exc).__name__}: {exc})"
+
+
 def write_closed_loop_report(
     output_dir: str,
     *,
     manifest: Optional[Dict[str, Any]] = None,
 ) -> str:
     text = build_closed_loop_report(output_dir, manifest=manifest)
+    extra = _score1_vs_fitness_line(output_dir)
+    if extra:
+        text = text.rstrip("\n") + "\n" + extra + "\n"
     path = atomic_write_text(os.path.join(closed_loop_dir(output_dir), "REPORT.txt"), text)
     # Also keep a JSON summary for tooling.
     rows = read_epochs(output_dir)
