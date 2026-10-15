@@ -567,12 +567,9 @@ class StageIEvolver:
         if fp in self._generation_behaviors:
             return self._generation_behaviors[fp]
         for rec in self.archive.records():
-            cached = (rec.metadata or {}).get("behavior_fp")
+            cached = (getattr(rec, "metadata", None) or {}).get("behavior_fp")
             if cached == fp:
                 return rec.candidate_id
-            if rec.reward_fn is None:
-                continue
-            # Archive records usually lack reward_fn; skip recompute.
         return None
 
     def _register_behavior(self, fp: str, candidate_id: str) -> None:

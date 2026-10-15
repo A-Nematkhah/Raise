@@ -325,6 +325,12 @@ class RaisePipeline:
         cfg = self.config
         os.makedirs(cfg.output_dir, exist_ok=True)
         wall_t0 = time.perf_counter()
+        try:
+            from raise_core.provenance import write_provenance
+
+            write_provenance(cfg.output_dir, torch_threads=int(cfg.torch_threads))
+        except Exception as exc:  # noqa: BLE001 - provenance must never abort a run
+            console.warn(f"provenance write skipped ({type(exc).__name__}: {exc})")
         pack = self.domain_pack
         if pack.name != str(cfg.domain).strip().lower():
             raise ValueError(

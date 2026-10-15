@@ -326,6 +326,16 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_false",
         help="Ignore existing checkpoints and start fresh",
     )
+    parser.add_argument(
+        "--baselines",
+        action="store_true",
+        default=False,
+        help=(
+            "After the final blind eval, run scripts/run_baselines.py on this "
+            "output dir (native-reward PPO, best Stage-II genome, ORCA/Linear). "
+            "Off by default."
+        ),
+    )
     return parser
 
 
@@ -355,7 +365,7 @@ def main() -> int:
     output_dir = args.output_dir or (
         "results/crowdnav_" + datetime.now().strftime("%Y%m%d_%H%M%S")
     )
-    console.configure_run_logging(verbose=bool(args.verbose))
+    console.configure_run_logging(verbose=bool(args.verbose), output_dir=output_dir)
 
     cfg = RaiseRunConfig(
         output_dir=output_dir,
@@ -432,6 +442,19 @@ def main() -> int:
     if os.path.isfile(report):
         with open(report, encoding="utf-8") as fh:
             print("\n--- closed_loop/REPORT.txt ---\n" + fh.read())
+    if bool(getattr(args, "baselines", False)):
+        import importlib.util
+
+        bas_path = os.path.join(_ROOT, "scripts", "run_baselines.py")
+        spec = importlib.util.spec_from_file_location("run_baselines", bas_path)
+        if spec is None or spec.loader is None:
+            logging.error("Could not load %s", bas_path)
+            return 1
+        bas = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(bas)
+        logging.info("Running P1-1 baselines on %s", cfg.output_dir)
+        bas.run_baselines(cfg.output_dir)
+        logging.info("Baselines written to %s", os.path.join(cfg.output_dir, "baselines.json"))
     return 0
 
 

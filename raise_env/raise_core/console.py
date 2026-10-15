@@ -15,6 +15,7 @@ import sys
 import time
 import warnings
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from typing import Any, Iterable, Iterator, Optional
 
 logger = logging.getLogger(__name__)
@@ -71,12 +72,17 @@ class _TqdmAwareStreamHandler(logging.StreamHandler):
             self.handleError(record)
 
 
-def configure_run_logging(*, verbose: bool = False) -> None:
+def configure_run_logging(
+    *, verbose: bool = False, output_dir: Optional[str] = None
+) -> Optional[str]:
     """
     Readable default logs: INFO for RAISE, quiet HTTP/SDK noise.
 
     ``--verbose`` turns on DEBUG for RAISE packages only — not httpx/groq
     full request dumps (those made 1h runs unreadable).
+
+    When ``output_dir`` is set, also write ``run_<UTCstamp>.log`` under it
+    (so resumed-process console output is not lost).
     """
     root_level = logging.INFO
     handler = _TqdmAwareStreamHandler(sys.stderr)
@@ -86,9 +92,26 @@ def configure_run_logging(*, verbose: bool = False) -> None:
             datefmt="%H:%M:%S",
         )
     )
+    handlers: list = [handler]
+    log_path: Optional[str] = None
+    if output_dir:
+        try:
+            os.makedirs(output_dir, exist_ok=True)
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            log_path = os.path.join(output_dir, f"run_{stamp}.log")
+            file_handler = logging.FileHandler(log_path, encoding="utf-8")
+            file_handler.setFormatter(
+                logging.Formatter(
+                    fmt="%(asctime)s %(levelname)s %(name)s %(message)s",
+                    datefmt="%Y-%m-%dT%H:%M:%S",
+                )
+            )
+            handlers.append(file_handler)
+        except OSError:
+            log_path = None
     logging.basicConfig(
         level=root_level,
-        handlers=[handler],
+        handlers=handlers,
         force=True,
     )
     set_verbose(bool(verbose))
@@ -124,6 +147,7 @@ def configure_run_logging(*, verbose: bool = False) -> None:
         message="You are trying to run PPO on the GPU",
         category=UserWarning,
     )
+    return log_path
 
 
 def status(message: str, *, stage: Optional[str] = None) -> None:
