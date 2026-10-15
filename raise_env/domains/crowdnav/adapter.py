@@ -600,6 +600,8 @@ class CrowdNavPPOTrainer:
         md = dict(candidate.metadata or {})
         md["checkpoint_path"] = ckpt
         md["train_steps"] = int(train_steps)
+        # PPO rounds up to a multiple of n_envs * n_steps (e.g. 5_000_192).
+        md["actual_train_steps"] = int(getattr(model, "num_timesteps", train_steps) or train_steps)
         md["train_seed"] = int(seed)
         md["ppo_n_steps"] = int(n_steps)
         md["train_wall_seconds"] = float(train_wall)

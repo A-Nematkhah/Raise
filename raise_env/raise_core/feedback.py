@@ -26,12 +26,23 @@ ARCHIVED_METADATA_KEYS = (
     "eval_deterministic",
     "training_dynamics",
     "llm_diagnosis",
+    "llm_diagnosis_subjects",
     "score1_scenario_scores",
     "score1_n_pairs",
+    "score1_rejected",
+    "score1_reject_reason",
+    "score1_raw",
     "llm_fallback_clone",
     "eval_generation",
     "fitness_history",
     "checkpoint_path",
+    "train_wall_seconds",
+    "train_steps_per_second",
+    "train_seed",
+    "ppo_n_steps",
+    "eval_seed_base",
+    "eval_split",
+    "actual_train_steps",
 )
 _POP_EPOCH_RE = re.compile(r"pop_epoch_(\d+)\.json$")
 
