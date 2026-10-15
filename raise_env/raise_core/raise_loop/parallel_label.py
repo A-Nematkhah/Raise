@@ -5,9 +5,20 @@ from __future__ import annotations
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Callable, Dict, List, Sequence, Set, Tuple
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 
 logger = logging.getLogger(__name__)
+
+
+def _existing_path(path: Any) -> Optional[str]:
+    if not path:
+        return None
+    raw = str(path)
+    for cand in (raw, raw.replace("\\", os.sep).replace("/", os.sep), Path(raw).as_posix()):
+        if os.path.isfile(cand):
+            return cand
+    return None
 
 
 def attach_warm_start_checkpoints(
@@ -18,13 +29,14 @@ def attach_warm_start_checkpoints(
     Stamp ``warm_start_checkpoint`` on children from a parent's saved PPO zip.
 
     Uses ``parent_ids`` on the candidate and ``checkpoint_path`` on parents
-    already present in the (full) population / prior labels.
+    already present in the (full) population / prior labels. Stored paths use
+    POSIX separators so artifacts stay portable across OSes.
     """
     by_id: Dict[str, str] = {}
     for c in population:
-        path = (getattr(c, "metadata", None) or {}).get("checkpoint_path")
-        if path and os.path.isfile(str(path)):
-            by_id[str(c.candidate_id)] = str(path)
+        path = _existing_path((getattr(c, "metadata", None) or {}).get("checkpoint_path"))
+        if path:
+            by_id[str(c.candidate_id)] = Path(path).as_posix()
     for cand in to_label:
         md = dict(getattr(cand, "metadata", None) or {})
         if md.get("warm_start_checkpoint"):

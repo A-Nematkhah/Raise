@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 from raise_core.raise_loop.parallel_label import (
@@ -22,7 +23,8 @@ def test_attach_warm_start_from_parent():
         metadata={},
     )
     attach_warm_start_checkpoints([child], [parent, child])
-    assert child.metadata.get("warm_start_checkpoint") == __file__
+    assert child.metadata.get("warm_start_checkpoint") == Path(__file__).as_posix()
+
 
 
 def test_label_candidates_parallel_serial_fallback():
