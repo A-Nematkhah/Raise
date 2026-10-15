@@ -135,6 +135,28 @@ def operator_counts(
 MUTATION_PARENTS = ("lower", "rank_weighted", "tournament")
 
 
+def filter_mutation_pool(
+    ranked: Sequence[RewardCandidate],
+    *,
+    exclude_collapsed: bool = False,
+    collapse_cr: float = 0.8,
+) -> List[RewardCandidate]:
+    """Drop Stage-II collision-collapsed genomes from the mutation parent pool.
+
+    When every candidate is collapsed the unfiltered ranking is returned so
+    mutation still has parents (NEXT.md / ``--mutation-exclude-collapsed``).
+    """
+    pool = list(ranked)
+    if not exclude_collapsed or not pool:
+        return pool
+    from raise_core.validate import stage2_is_collapsed
+
+    kept = [
+        c for c in pool if not stage2_is_collapsed(c, collapse_cr=float(collapse_cr))
+    ]
+    return kept if kept else pool
+
+
 def select_mutation_parents(
     ranked: Sequence[RewardCandidate], n: int, *, mode: str, rng: random.Random
 ) -> List[RewardCandidate]:
@@ -183,6 +205,10 @@ class StageIConfig:
     # How mutation parents are picked (``MUTATION_PARENTS``); draws are seeded
     # by ``seed`` and the ranked ids, so a resumed run picks the same parents.
     mutation_parents: str = "lower"
+    # Drop Stage-II CR>=collapse_cr genomes from the mutation parent pool
+    # (default off for compatibility with older runs).
+    mutation_exclude_collapsed: bool = False
+    collapse_cr: float = 0.8
     seed: int = 0
     # Reject rewards whose smoke-state totals match an earlier genome
     # (catches comment/float-cast clones that genome_fingerprint misses).
@@ -1191,8 +1217,13 @@ class StageIEvolver:
         rng = random.Random(
             f"{cfg.seed}:" + ",".join(str(c.candidate_id) for c in ranked)
         )
+        mut_pool = filter_mutation_pool(
+            ranked,
+            exclude_collapsed=bool(cfg.mutation_exclude_collapsed),
+            collapse_cr=float(cfg.collapse_cr),
+        )
         mutation_parents = select_mutation_parents(
-            ranked, generated_mutation, mode=cfg.mutation_parents, rng=rng
+            mut_pool, generated_mutation, mode=cfg.mutation_parents, rng=rng
         )
 
         retries = RetryBudget(cfg.max_invalid_replacements)

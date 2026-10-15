@@ -121,8 +121,14 @@ class RaiseRunConfig:
     # Skip Stage-II collision-collapsed candidates in Stage III (default on).
     stage3_skip_collapsed: bool = True
     collapse_cr: float = 0.8
+    # Independent PPO seeds per Stage III finalist (1 = current behaviour).
+    stage3_seeds: int = 1
+    # After collapse filter, keep only top-k by Stage II fitness (None = all).
+    stage3_top_k: Optional[int] = None
     # Episodes of the blind re-evaluation of the Stage III winner (0 = skip).
     final_eval_episodes: int = 100
+    # Also blind-eval every Stage III statistical tie (report only; never select).
+    eval_tied_finalists: bool = True
 
     # Stub trainers (pytest / --fast).
     use_stub: bool = False
@@ -135,6 +141,10 @@ class RaiseRunConfig:
     n_random: Optional[int] = None
     # Mutation parents: lower (bottom half) | rank_weighted | tournament.
     mutation_parents: str = "lower"
+    # Drop Stage-II CR>=collapse_cr genomes from the mutation parent pool.
+    mutation_exclude_collapsed: bool = False
+    # Successive-halving Stage II (off by default).
+    stage2_successive_halving: bool = False
     # Crash-safe resume of closed loop + Stage III from output_dir.
     resume: bool = True
 
@@ -230,6 +240,87 @@ def limit_cpu_threads(n: int) -> None:
         torch.set_num_threads(n)
 
 
+def _eval_tied_finalists(
+    runner: Stage3Runner,
+    *,
+    stage3_pop: List[RewardCandidate],
+    best: RewardCandidate,
+    selection: Dict[str, Any],
+    winner_final_eval: Optional[Dict[str, Any]],
+    episodes: int,
+    seed_base: int,
+    enabled: bool,
+) -> Optional[Dict[str, Any]]:
+    """Blind-eval the Stage III winner and every statistical tie (report only).
+
+    Selection already happened on val; these test numbers must never change
+    ``best_stage3``. Returns ``None`` when disabled or episodes <= 0.
+    """
+    if not enabled or int(episodes) <= 0:
+        return None
+    tied = [str(x) for x in (selection.get("tied_ids") or [])]
+    ids = [str(best.candidate_id)]
+    for cid in tied:
+        if cid and cid not in ids:
+            ids.append(cid)
+    by_id = {str(c.candidate_id): c for c in stage3_pop}
+    evaluations: List[Dict[str, Any]] = []
+    for cid in ids:
+        if cid == str(best.candidate_id) and winner_final_eval is not None:
+            row = {k: v for k, v in winner_final_eval.items() if k != "metrics"}
+            row["role"] = "winner"
+            row["metrics_summary"] = {
+                k: (winner_final_eval.get("metrics") or {}).get(k)
+                for k in ("SR", "CR", "TR", "fitness", "fitness_se")
+            }
+            evaluations.append(row)
+            continue
+        cand = by_id.get(cid)
+        if cand is None:
+            evaluations.append(
+                {
+                    "candidate_id": cid,
+                    "role": "tie",
+                    "status": "missing",
+                    "error": "not in Stage III trained population",
+                }
+            )
+            continue
+        console.status(
+            f"blind test eval of tied finalist {cid} ({episodes} episodes)",
+            stage="pipeline",
+        )
+        row = runner.final_eval(cand, episodes=episodes, seed_base=seed_base)
+        if row is None:
+            evaluations.append(
+                {
+                    "candidate_id": cid,
+                    "role": "tie",
+                    "status": "skipped",
+                    "error": "trainer cannot reevaluate",
+                }
+            )
+            continue
+        slim = {k: v for k, v in row.items() if k != "metrics"}
+        slim["role"] = "tie" if cid != str(best.candidate_id) else "winner"
+        slim["metrics_summary"] = {
+            k: (row.get("metrics") or {}).get(k)
+            for k in ("SR", "CR", "TR", "fitness", "fitness_se")
+        }
+        evaluations.append(slim)
+    return {
+        "note": (
+            "Report only: blind test fitness of the Stage III winner and every "
+            "statistical tie. Never used for selection."
+        ),
+        "seed_base": int(seed_base),
+        "episodes": int(episodes),
+        "winner_id": str(best.candidate_id),
+        "tied_ids": tied,
+        "evaluations": evaluations,
+    }
+
+
 class RaisePipeline:
     """Run closed-loop evolution + Stage III and persist JSON artifacts."""
 
@@ -281,10 +372,13 @@ class RaisePipeline:
             n_mutation=cfg.n_mutation,
             n_random=cfg.n_random,
             mutation_parents=str(cfg.mutation_parents),
+            mutation_exclude_collapsed=bool(cfg.mutation_exclude_collapsed),
+            collapse_cr=float(cfg.collapse_cr),
             resume=bool(cfg.resume),
             domain=str(self.domain_pack.name),
             eval_episodes=int(cfg.stage2_eval_episodes),
             stage2_eval_split=str(cfg.stage2_eval_split or "val"),
+            stage2_successive_halving=bool(cfg.stage2_successive_halving),
             n_envs=max(1, int(cfg.n_envs or 1)),
             label_workers=max(1, int(cfg.label_workers or 1)),
             warm_start=bool(cfg.warm_start),
@@ -318,6 +412,8 @@ class RaisePipeline:
             eval_seed_base=int(cfg.seed) + STAGE3_EVAL_SEED_OFFSET,
             skip_collapsed=bool(cfg.stage3_skip_collapsed),
             collapse_cr=float(cfg.collapse_cr),
+            n_seeds=max(1, int(cfg.stage3_seeds)),
+            top_k=cfg.stage3_top_k,
             **self._space_knobs(),
         )
 
@@ -422,6 +518,21 @@ class RaisePipeline:
             )
             if final_eval is not None:
                 best_s3.metadata = {**(best_s3.metadata or {}), "final_eval": final_eval}
+        tied_final_evals = _eval_tied_finalists(
+            s3_runner,
+            stage3_pop=stage3_pop,
+            best=best_s3,
+            selection=stage3_selection,
+            winner_final_eval=final_eval,
+            episodes=int(cfg.final_eval_episodes),
+            seed_base=int(cfg.seed) + FINAL_EVAL_SEED_OFFSET,
+            enabled=bool(cfg.eval_tied_finalists),
+        )
+        if tied_final_evals is not None:
+            write_json(
+                os.path.join(cfg.output_dir, "tied_final_evals.json"),
+                tied_final_evals,
+            )
         write_json(
             os.path.join(cfg.output_dir, "stage3_population.json"),
             {
@@ -453,6 +564,14 @@ class RaisePipeline:
             None
             if final_eval is None
             else {k: v for k, v in final_eval.items() if k != "metrics"}
+        )
+        manifest["tied_final_evals"] = (
+            None
+            if tied_final_evals is None
+            else {
+                "n": len(tied_final_evals.get("evaluations") or []),
+                "note": tied_final_evals.get("note"),
+            }
         )
         manifest["closed_loop_summary"] = dict(cl_result.manifest)
         write_json(os.path.join(cfg.output_dir, "manifest.json"), manifest)

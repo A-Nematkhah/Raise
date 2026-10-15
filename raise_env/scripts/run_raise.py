@@ -161,7 +161,27 @@ def build_parser() -> argparse.ArgumentParser:
         "--collapse-cr",
         type=float,
         default=_DEFAULTS.collapse_cr,
-        help="Stage II collision-rate threshold for --stage3-skip-collapsed",
+        help="Stage II collision-rate threshold for --stage3-skip-collapsed "
+        "and --mutation-exclude-collapsed",
+    )
+    parser.add_argument(
+        "--stage3-seeds",
+        type=int,
+        default=_DEFAULTS.stage3_seeds,
+        help=(
+            "Independent PPO train seeds per Stage III finalist (default 1). "
+            "Selection uses mean fitness across seeds; pay for K>1 with "
+            "--stage3-top-k"
+        ),
+    )
+    parser.add_argument(
+        "--stage3-top-k",
+        type=int,
+        default=_DEFAULTS.stage3_top_k,
+        help=(
+            "After the collapse filter, keep only the top-k Stage II genomes "
+            "for Stage III (default: all survivors)"
+        ),
     )
     parser.add_argument(
         "--final-eval-episodes",
@@ -170,6 +190,15 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Blind re-evaluation of the Stage III winner on unseen scenarios "
             "(0 = skip); report this fitness, not the selection score"
+        ),
+    )
+    parser.add_argument(
+        "--eval-tied-finalists",
+        action=argparse.BooleanOptionalAction,
+        default=_DEFAULTS.eval_tied_finalists,
+        help=(
+            "Also blind-eval every Stage III statistical tie on the test split "
+            "(report only in tied_final_evals.json; never used for selection)"
         ),
     )
     parser.add_argument(
@@ -197,6 +226,26 @@ def build_parser() -> argparse.ArgumentParser:
         default=_DEFAULTS.mutation_parents,
         help="Mutation parents: lower = bottom half (default), rank_weighted = "
         "drawn by linear rank, tournament = better of two random genomes",
+    )
+    parser.add_argument(
+        "--mutation-exclude-collapsed",
+        action=argparse.BooleanOptionalAction,
+        default=_DEFAULTS.mutation_exclude_collapsed,
+        help=(
+            "Drop Stage II CR>=--collapse-cr genomes from the mutation parent "
+            "pool (default: off). If the filtered pool is empty, fall back to "
+            "the unfiltered pool"
+        ),
+    )
+    parser.add_argument(
+        "--stage2-successive-halving",
+        action=argparse.BooleanOptionalAction,
+        default=_DEFAULTS.stage2_successive_halving,
+        help=(
+            "Stage II successive-halving: train all at K2/3, continue the top "
+            "half from their own checkpoints for the remaining 2K2/3 (default: "
+            "off). Total budget per survivor is still K2"
+        ),
     )
     parser.add_argument(
         "--n-envs",
@@ -385,13 +434,20 @@ def main() -> int:
         stage3_warm_start=bool(args.stage3_warm_start),
         stage3_skip_collapsed=bool(args.stage3_skip_collapsed),
         collapse_cr=float(args.collapse_cr),
+        stage3_seeds=max(1, int(args.stage3_seeds)),
+        stage3_top_k=(
+            None if args.stage3_top_k is None else max(1, int(args.stage3_top_k))
+        ),
         final_eval_episodes=max(0, int(args.final_eval_episodes)),
+        eval_tied_finalists=bool(args.eval_tied_finalists),
         use_stub=bool(args.fast),
         elitism=bool(args.elitism),
         n_crossover=args.n_crossover,
         n_mutation=args.n_mutation,
         n_random=args.n_random,
         mutation_parents=args.mutation_parents,
+        mutation_exclude_collapsed=bool(args.mutation_exclude_collapsed),
+        stage2_successive_halving=bool(args.stage2_successive_halving),
         resume=bool(args.resume),
         n_envs=max(1, int(args.n_envs)),
         label_workers=max(1, int(args.label_workers)),

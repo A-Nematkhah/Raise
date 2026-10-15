@@ -17,6 +17,8 @@ evals use ``val``) for the number to report.
 from __future__ import annotations
 
 import logging
+import math
+import statistics
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, replace
 from typing import Any, Dict, List, Optional, Sequence
@@ -110,6 +112,13 @@ class Stage3Config:
     # reflects under-training rather than a broken reward.
     skip_collapsed: bool = True
     collapse_cr: float = 0.8
+    # Independent PPO train seeds per finalist (default 1 = current behaviour).
+    # Selection uses mean fitness across seeds; final eval uses the best seed's
+    # checkpoint. Pay for K>1 via ``top_k`` (top Stage-II non-collapsed).
+    n_seeds: int = 1
+    # After the collapse filter, keep only the top-k by Stage II fitness.
+    # None / <=0 = keep everyone that survived the collapse filter.
+    top_k: Optional[int] = None
 
 
 @dataclass
@@ -283,6 +292,8 @@ class Stage3Runner:
             "eval_seed_base": cfg.eval_seed_base,
             "skip_collapsed": bool(cfg.skip_collapsed),
             "collapse_cr": float(cfg.collapse_cr),
+            "n_seeds": max(1, int(cfg.n_seeds)),
+            "top_k": cfg.top_k,
         }
 
     def _warn_config_drift(self, saved: Dict[str, Any]) -> None:
@@ -426,10 +437,140 @@ class Stage3Runner:
             )
         return [_stage3_input(c) for c in kept]
 
+    def _apply_top_k(
+        self, population: Sequence[RewardCandidate]
+    ) -> List[RewardCandidate]:
+        """Keep the top-k by Stage II fitness (after the collapse filter)."""
+        k = self.config.top_k
+        pop = list(population)
+        if k is None or int(k) <= 0 or int(k) >= len(pop):
+            return pop
+        k = int(k)
+
+        def _s2_fit(c: RewardCandidate) -> float:
+            md = c.metadata or {}
+            try:
+                return float(md.get("stage2_fitness"))
+            except (TypeError, ValueError):
+                return float("-inf")
+
+        ranked = sorted(pop, key=_s2_fit, reverse=True)
+        kept, skipped = ranked[:k], ranked[k:]
+        for cand in skipped:
+            console.status(
+                f"skip {cand.candidate_id} (outside Stage III top_k={k})",
+                stage="Stage III",
+            )
+            self.history.append(
+                Stage3Record(
+                    candidate_id=str(cand.candidate_id),
+                    metrics={"stage2_fitness": _s2_fit(cand), "top_k": k},
+                    status="skipped_top_k",
+                )
+            )
+        return kept
+
+    def _prepare_population(
+        self, population: Sequence[RewardCandidate]
+    ) -> List[RewardCandidate]:
+        return self._apply_top_k(self._apply_collapse_filter(population))
+
+    def _train_candidate(self, cand: RewardCandidate) -> None:
+        """Train ``cand`` for ``n_seeds`` PPO seeds; select by mean fitness."""
+        n_seeds = max(1, int(self.config.n_seeds))
+        seed_runs: List[Dict[str, Any]] = []
+        best_bundle: Optional[TrainEvalBundle] = None
+        best_fit = float("-inf")
+        for s in range(n_seeds):
+            console.status(
+                f"candidate {cand.candidate_id} seed {s + 1}/{n_seeds}",
+                stage="Stage III",
+            )
+            try:
+                # ``round_index`` offsets the train seed; ``eval_seed_base`` stays
+                # fixed so every seed of a genome sees the same holdout cases.
+                bundle = self.trainer.train_and_eval(
+                    cand, round_index=s, config=self.config
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.exception(
+                    "Stage III seed %d failed for %s", s, cand.candidate_id
+                )
+                seed_runs.append(
+                    {
+                        "seed_index": s,
+                        "status": "failed",
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
+                )
+                continue
+            metrics = _trained_metrics(cand, bundle)
+            fit = float(metrics["fitness"])
+            seed_runs.append(
+                {
+                    "seed_index": s,
+                    "status": "ok",
+                    "fitness": fit,
+                    "fitness_se": metrics.get("fitness_se"),
+                    "checkpoint_path": bundle.checkpoint_path,
+                    "train_seed": (cand.metadata or {}).get("train_seed"),
+                }
+            )
+            if fit > best_fit:
+                best_fit = fit
+                best_bundle = bundle
+
+        ok_fits = [float(r["fitness"]) for r in seed_runs if r.get("status") == "ok"]
+        if not ok_fits or best_bundle is None:
+            first_err = next(
+                (str(r.get("error") or "") for r in seed_runs if r.get("status") == "failed"),
+                f"all {n_seeds} Stage III seed(s) failed",
+            )
+            self._record_failure(cand, RuntimeError(first_err or f"all {n_seeds} seed(s) failed"))
+            return
+
+        trained = self._record(cand, best_bundle)
+        md = dict(trained.metadata or {})
+        mean_fit = float(statistics.fmean(ok_fits))
+        if n_seeds > 1 and len(ok_fits) > 1:
+            # SE of the mean across independent train seeds.
+            se = float(statistics.stdev(ok_fits) / math.sqrt(len(ok_fits)))
+        else:
+            se = float((md.get("last_metrics") or {}).get("fitness_se") or 0.0)
+        last = dict(md.get("last_metrics") or {})
+        last["fitness"] = mean_fit
+        last["fitness_se"] = se
+        last["stage3_seed_fits"] = list(ok_fits)
+        md["last_metrics"] = last
+        md["fitness"] = mean_fit
+        md["selection_scalar"] = mean_fit
+        md["stage3_n_seeds"] = n_seeds
+        md["stage3_seed_runs"] = seed_runs
+        # Keep the best-seed checkpoint for blind re-eval / viz.
+        md["checkpoint_path"] = best_bundle.checkpoint_path
+        trained.metadata = md
+        # Refresh history row + best pointer with the aggregated fitness.
+        for row in self.history:
+            if row.candidate_id == str(cand.candidate_id) and row.status == "ok":
+                row.metrics = dict(last)
+                row.checkpoint_path = best_bundle.checkpoint_path
+                break
+        # ``_record`` ranked on the best seed alone; re-select by mean fitness.
+        self.best_trained = (
+            max(self.trained, key=candidate_fitness) if self.trained else None
+        )
+        if n_seeds > 1:
+            console.status(
+                f"{cand.candidate_id} mean_fitness={mean_fit:.3f} "
+                f"se={se:.3f} (n_seeds={len(ok_fits)})",
+                stage="Stage III",
+            )
+
     def run(self, population: Sequence[RewardCandidate]) -> List[RewardCandidate]:
+        n_seeds = max(1, int(self.config.n_seeds))
         console.banner(
             f"Stage III - long PPO (K3={self.config.train_env_steps}, "
-            f"E3={self.config.eval_episodes})"
+            f"E3={self.config.eval_episodes}, seeds={n_seeds})"
         )
         start = 0
         payload = load_checkpoint(self._ckpt_dir()) if self.config.resume else None
@@ -439,7 +580,7 @@ class Stage3Runner:
             saved_pop = deserialize_population(
                 payload.get("population"), validator=self.validator
             )
-            pop = saved_pop if saved_pop else self._apply_collapse_filter(population)
+            pop = saved_pop if saved_pop else self._prepare_population(population)
             start = int(payload.get("next_index") or 0)
             if str(payload.get("status")) == "done":
                 console.status(
@@ -452,7 +593,7 @@ class Stage3Runner:
                 stage="Stage III",
             )
         else:
-            pop = self._apply_collapse_filter(population)
+            pop = self._prepare_population(population)
 
         n = len(pop)
         for i in range(start, n):
@@ -460,14 +601,7 @@ class Stage3Runner:
             console.status(
                 f"candidate {cand.candidate_id} ({i + 1}/{n})", stage="Stage III"
             )
-            try:
-                bundle = self.trainer.train_and_eval(
-                    cand, round_index=0, config=self.config
-                )
-            except Exception as exc:  # noqa: BLE001 - one bad reward must not stop the run
-                self._record_failure(cand, exc)
-            else:
-                self._record(cand, bundle)
+            self._train_candidate(cand)
             self._persist(status="running", population=pop, next_index=i + 1)
 
         self._persist(status="done", population=pop, next_index=n)
@@ -498,6 +632,8 @@ class Stage3Runner:
             "tied_ids": ties,
             "n_trained": len(self.trained),
             "n_failed": n_failed,
+            "n_seeds": max(1, int(self.config.n_seeds)),
+            "top_k": self.config.top_k,
             "eval_episodes": int(self.config.eval_episodes),
             "eval_split": str(self.config.eval_split),
             "eval_seed_base": self.config.eval_seed_base,

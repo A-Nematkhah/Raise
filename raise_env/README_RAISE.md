@@ -88,10 +88,14 @@ candidate) and `stage3/checkpoint.json` (per Stage III candidate).
    they can overlap with Stage II ones). By default candidates whose Stage II
    holdout CR ≥ `--collapse-cr` (0.8) are skipped (`--no-stage3-skip-collapsed`
    to train everyone; if all finalists are collapsed they are all trained).
-   The winner is the best Stage III fitness; ties within 2 SE use paired
-   per-case SEs when episode `case` lists match.
-4. Final blind eval: the winner alone is re-evaluated on upstream `test`
-   scenarios (`--final-eval-episodes`, default 100). Report `manifest.json` →
+   Optional `--stage3-top-k` keeps only the best Stage-II survivors;
+   `--stage3-seeds K` trains each finalist K times and selects by mean
+   fitness (default K=1). The winner is the best Stage III fitness; ties
+   within 2 SE use paired per-case SEs when episode `case` lists match.
+4. Final blind eval: the winner is re-evaluated on upstream `test`
+   scenarios (`--final-eval-episodes`, default 100). By default every
+   statistical tie is also re-evaluated (`tied_final_evals.json`, report
+   only — never used for selection). Report `manifest.json` →
    `final_eval.fitness`, not the selection score, which is biased upward.
 5. Optional baselines (`--baselines`, off by default): native-reward PPO,
    best non-collapsed Stage II genome, and ORCA/Linear controllers on the
@@ -102,16 +106,21 @@ between-candidate fitness variance in a 16h CrowdNav run was evaluation
 noise. Prefer `--stage2-eval-episodes 200` (or more); evaluation is ~0.02 s
 per episode. `--stage2-eval-split {val,train}` chooses the holdout pool
 (default `val`; Stage III/final stay on val/test).
+`--stage2-successive-halving` (off by default) trains all at K2/3 then
+continues the top half from their own checkpoints for the remaining 2K2/3.
+`--mutation-exclude-collapsed` (off by default) drops CR≥`--collapse-cr`
+genomes from the mutation parent pool.
 
 Outputs under `--output-dir`: `config.json`, `config.resume_*.json` (on
 resume), `provenance.json`, `run_<UTC>.log`, `seed_reward.py`,
 `closed_loop/` (`epochs.jsonl`, `pop_epoch_*.json`, `REPORT.txt`,
 `stage1_rejections.jsonl`, `stage2_train/` PPO models),
 `stage2_population.json`, `stage3_train/`, `stage3_population.json`,
-`best_stage{1,2,3}.json`, `final_candidate.json`, `manifest.json`,
-`baselines.json` (if `--baselines`), and `plots/` (non-fast runs: metric
-plots plus `plots/viz/` with a GIF, frame strip and trajectory plot of the
-best policy on `test` scenarios; stochastic by default).
+`best_stage{1,2,3}.json`, `final_candidate.json`, `tied_final_evals.json`,
+`manifest.json`, `baselines.json` (if `--baselines`), and `plots/`
+(non-fast runs: metric plots plus `plots/viz/` with a GIF, frame strip and
+trajectory plot of the best policy on `test` scenarios; stochastic by
+default).
 
 Robot / action options: `--robot-kinematics {holonomic,unicycle}`,
 `--action-mode {discrete,continuous}` (discrete = the 81 CADRL actions),

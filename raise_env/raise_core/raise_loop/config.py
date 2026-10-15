@@ -30,6 +30,9 @@ class ClosedLoopConfig:
     n_random: Optional[int] = None
     # Mutation parents: lower (bottom half) | rank_weighted | tournament.
     mutation_parents: str = "lower"
+    # Drop Stage-II CR>=collapse_cr genomes from the mutation parent pool.
+    mutation_exclude_collapsed: bool = False
+    collapse_cr: float = 0.8
     # Crash-safe resume from ``checkpoint.json`` written under the run dir.
     resume: bool = True
     domain: str = "crowdnav"
@@ -39,6 +42,9 @@ class ClosedLoopConfig:
     n_envs: int = 1
     label_workers: int = 1
     warm_start: bool = False
+    # Successive-halving Stage II: train all at K2/3, continue top half from
+    # their own checkpoints for the remaining 2K2/3 (total still K2 steps).
+    stage2_successive_halving: bool = False
     eval_mode: str = "holdout_only"  # both | holdout_only
     # Stage II holdout pool: val (default) | train (fresh train-split cases).
     # Stage III / final eval stay on val / test regardless of this setting.

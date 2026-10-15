@@ -12,6 +12,7 @@ import math
 import os
 from collections import Counter
 from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from raise_core import console
@@ -169,6 +170,8 @@ _RESUME_CONFIG_KEYS = (
     "n_mutation",
     "n_random",
     "mutation_parents",
+    "mutation_exclude_collapsed",
+    "collapse_cr",
     "action_mode",
     "robot_kinematics",
     "action_speed_samples",
@@ -176,6 +179,7 @@ _RESUME_CONFIG_KEYS = (
     "env_config_path",
     "eval_mode",
     "stage2_eval_split",
+    "stage2_successive_halving",
 )
 
 
@@ -298,6 +302,10 @@ class ClosedLoopRunner:
             n_random=cfg.n_random,
             keep_runtime_elite=bool(cfg.keep_runtime_elite),
             mutation_parents=str(cfg.mutation_parents),
+            mutation_exclude_collapsed=bool(
+                getattr(cfg, "mutation_exclude_collapsed", False)
+            ),
+            collapse_cr=float(getattr(cfg, "collapse_cr", 0.8) or 0.8),
             seed=int(cfg.seed),
         )
         evolver = StageIEvolver(
@@ -539,6 +547,18 @@ class ClosedLoopRunner:
             to_train = [c for c in to_label if not _needs_reevaluation(c, g)]
             copies = _same_genome_copies(to_train)
             attach_warm_start_checkpoints(to_train, list(population))
+            use_sh = bool(getattr(cfg, "stage2_successive_halving", False))
+            k2_full = int(stage2_cfg.train_env_steps)
+            warm_default = bool(stage2_cfg.warm_start)
+            if use_sh and to_train:
+                phase1_steps = max(1, k2_full // 3)
+                phase2_steps = max(1, k2_full - phase1_steps)
+                stage2_cfg.train_env_steps = phase1_steps
+                console.status(
+                    f"epoch {g}: successive-halving phase 1 "
+                    f"({phase1_steps:,} of {k2_full:,} steps)",
+                    stage="closed-loop",
+                )
             label_candidates_parallel(
                 to_label,
                 already_done=labeled_this_epoch | set(copies),
@@ -547,6 +567,61 @@ class ClosedLoopRunner:
                 on_done=_on_done,
                 round_index_fn=lambda i: g * 1000 + i,
             )
+            if use_sh and to_train:
+                # Continue the top half from their own phase-1 checkpoints.
+                trained_ok = [
+                    c
+                    for c in to_train
+                    if str(c.candidate_id) not in copies
+                    and (c.metadata or {}).get("fitness") is not None
+                ]
+                trained_ok.sort(
+                    key=lambda c: float((c.metadata or {}).get("fitness") or float("-inf")),
+                    reverse=True,
+                )
+                n_keep = max(1, (len(trained_ok) + 1) // 2)
+                survivors = trained_ok[:n_keep]
+                console.status(
+                    f"epoch {g}: successive-halving phase 2 "
+                    f"({len(survivors)}/{len(trained_ok)} survivors, "
+                    f"{phase2_steps:,} steps, warm-start from own ckpt)",
+                    stage="closed-loop",
+                )
+                stage2_cfg.train_env_steps = phase2_steps
+                stage2_cfg.warm_start = True
+                for c in survivors:
+                    md = dict(c.metadata or {})
+                    ckpt = md.get("checkpoint_path")
+                    if ckpt:
+                        md["warm_start_checkpoint"] = Path(str(ckpt)).as_posix()
+                    # Clear so phase-2 metrics replace phase-1 (``_store_stage2_metrics``
+                    # only writes when fitness is missing).
+                    md.pop("fitness", None)
+                    md.pop("last_metrics", None)
+                    md.pop("eval_generation", None)
+                    c.metadata = md
+                    labeled_this_epoch.discard(str(c.candidate_id))
+                label_candidates_parallel(
+                    survivors,
+                    already_done=set(),
+                    workers=max(1, int(cfg.label_workers or 1)),
+                    label_one=_label_one,
+                    on_done=_on_done,
+                    round_index_fn=lambda i: g * 1000 + 500 + i,
+                )
+                for c in survivors:
+                    md = dict(c.metadata or {})
+                    md["successive_halving"] = {
+                        "phase1_steps": phase1_steps,
+                        "phase2_steps": phase2_steps,
+                        "k2": k2_full,
+                    }
+                    # Report the configured K2 budget (actual PPO steps are
+                    # phase1+phase2; warm-start does not reset num_timesteps).
+                    md["train_steps"] = k2_full
+                    c.metadata = md
+                stage2_cfg.train_env_steps = k2_full
+                stage2_cfg.warm_start = warm_default
             for cand in to_train:
                 original = copies.get(str(cand.candidate_id))
                 if original is not None and (original.metadata or {}).get("fitness") is not None:
