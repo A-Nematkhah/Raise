@@ -25,7 +25,12 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
-from raise_core.candidate import RewardCandidate, evaluation_fields, genome_fingerprint
+from raise_core.candidate import (
+    RewardCandidate,
+    behavior_fingerprint,
+    evaluation_fields,
+    genome_fingerprint,
+)
 from raise_core.domains import DEFAULT_DOMAIN, load_domain
 from raise_core.feedback import ArchiveRecord, CandidateArchive, FeedbackCardConfig
 from raise_core.llm import (
@@ -179,6 +184,9 @@ class StageIConfig:
     # by ``seed`` and the ranked ids, so a resumed run picks the same parents.
     mutation_parents: str = "lower"
     seed: int = 0
+    # Reject rewards whose smoke-state totals match an earlier genome
+    # (catches comment/float-cast clones that genome_fingerprint misses).
+    behavioral_dedup: bool = True
 
 
 class StageIEvolver:
@@ -231,6 +239,7 @@ class StageIEvolver:
         # Genomes accepted into the population being built (fingerprint -> id);
         # with the archive this rejects LLM children identical to known genomes.
         self._generation_genomes: Dict[str, str] = {}
+        self._generation_behaviors: Dict[str, str] = {}
         self._fingerprints: Dict[str, str] = {}
 
         self.operators = operator_counts(
@@ -554,6 +563,21 @@ class StageIEvolver:
             cand.candidate_id
         )
 
+    def _known_behavior(self, fp: str) -> Optional[str]:
+        if fp in self._generation_behaviors:
+            return self._generation_behaviors[fp]
+        for rec in self.archive.records():
+            cached = (rec.metadata or {}).get("behavior_fp")
+            if cached == fp:
+                return rec.candidate_id
+            if rec.reward_fn is None:
+                continue
+            # Archive records usually lack reward_fn; skip recompute.
+        return None
+
+    def _register_behavior(self, fp: str, candidate_id: str) -> None:
+        self._generation_behaviors[fp] = str(candidate_id)
+
     def _reused_evaluation(
         self, code: str, source: Optional[RewardCandidate]
     ) -> Dict[str, Any]:
@@ -632,7 +656,39 @@ class StageIEvolver:
                 metadata=md,
             )
             if cand.valid:
-                self._register_genome(cand)
+                if bool(getattr(self.config, "behavioral_dedup", True)) and cand.reward_fn is not None:
+                    try:
+                        bfp = behavior_fingerprint(
+                            cand.reward_fn, self.validator.smoke_states
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning(
+                            "behavior_fingerprint failed for %s: %s",
+                            cand.candidate_id,
+                            exc,
+                        )
+                        bfp = None
+                    if bfp is not None:
+                        md = dict(cand.metadata or {})
+                        md["behavior_fp"] = bfp
+                        dup_beh = self._known_behavior(bfp)
+                        if dup_beh is not None:
+                            cand = RewardCandidate(
+                                candidate_id=cand.candidate_id,
+                                code=cand.code,
+                                origin=origin,
+                                parent_ids=parent_ids,
+                                validation_error=f"duplicate behaviour of {dup_beh}",
+                                metadata=md,
+                            )
+                        else:
+                            cand.metadata = md
+                            self._register_behavior(bfp, cand.candidate_id)
+                            self._register_genome(cand)
+                    else:
+                        self._register_genome(cand)
+                else:
+                    self._register_genome(cand)
         if call_id:
             self._call_log.write_validation(
                 call_id=call_id,
@@ -765,6 +821,7 @@ class StageIEvolver:
         needed = cfg.population_size
         out: List[RewardCandidate] = []
         self._generation_genomes = {}
+        self._generation_behaviors = {}
         batch_id = f"gen0_batch_{self._counter:04d}"
         console.status(
             f"Gen 0/{cfg.generations} - generating initial population (N={needed})",
@@ -1121,6 +1178,7 @@ class StageIEvolver:
             raise ValueError("Need at least 2 ranked candidates to evolve.")
 
         self._generation_genomes = {}
+        self._generation_behaviors = {}
         top_a = ranked[0]
         fp_a = self._fingerprint(top_a.candidate_id, top_a.code)
         # Crossing a genome with its own copy is a mutation without evidence.

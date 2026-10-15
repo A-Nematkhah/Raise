@@ -43,6 +43,7 @@ ARCHIVED_METADATA_KEYS = (
     "eval_seed_base",
     "eval_split",
     "actual_train_steps",
+    "behavior_fp",
 )
 _POP_EPOCH_RE = re.compile(r"pop_epoch_(\d+)\.json$")
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import ast
 import hashlib
 from dataclasses import dataclass, field
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Dict, Mapping, Optional, Sequence
 
 from raise_core.sandbox.runtime import RewardFunction
 
@@ -53,6 +53,41 @@ def genome_fingerprint(code: str) -> str:
                 node.body = body[1:] or [ast.Pass()]
         canonical = ast.dump(tree, include_attributes=False)
     return hashlib.sha1(canonical.encode("utf-8")).hexdigest()
+
+
+def behavior_fingerprint(
+    reward_fn: Any,
+    states: Sequence[Any],
+    *,
+    ndigits: int = 6,
+) -> str:
+    """Hash of rounded reward totals over ``states`` (memory reset rule as smoke).
+
+    Resets the reward when ``global_time`` does not increase, matching
+    ``raise_core.sandbox.runtime._smoke_worker``. Used to catch rewards that
+    differ only in comments / zero-init order / ``float()`` casts.
+    """
+    prev_time: Optional[float] = None
+    totals: list = []
+    reset = getattr(reward_fn, "reset", None)
+    if callable(reset):
+        reset()
+    compute = getattr(reward_fn, "compute", None) or reward_fn
+    for state in states:
+        now = getattr(state, "global_time", None)
+        if now is not None:
+            now_f = float(now)
+            if prev_time is not None and now_f <= prev_time and callable(reset):
+                reset()
+            prev_time = now_f
+        value = compute(state)
+        if isinstance(value, tuple):
+            total = float(value[0])
+        else:
+            total = float(value)
+        totals.append(round(total, int(ndigits)))
+    payload = ",".join(f"{t:.{int(ndigits)}f}" for t in totals)
+    return hashlib.sha1(payload.encode("utf-8")).hexdigest()
 
 
 @dataclass
