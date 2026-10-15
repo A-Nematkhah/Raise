@@ -8,6 +8,7 @@ import math
 import os
 import time
 import warnings
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
 import numpy as np
@@ -366,12 +367,39 @@ def _make_train_vec_env(reward_fn: Any, *, seed: int, n_envs: int, settings: Any
     return DummyVecEnv([_thunk(i) for i in range(n)])
 
 
+def _normalize_stored_path(path: Any) -> str:
+    """POSIX-style path for persistence; readers still accept Windows separators."""
+    return Path(str(path)).as_posix()
+
+
+def _resolve_existing_path(path: Any) -> Optional[str]:
+    """Return an existing filesystem path, accepting ``/`` or ``\\`` separators."""
+    if not path:
+        return None
+    raw = str(path)
+    candidates = [
+        raw,
+        raw.replace("\\", os.sep).replace("/", os.sep),
+        Path(raw).as_posix(),
+    ]
+    seen = set()
+    for cand in candidates:
+        if cand in seen:
+            continue
+        seen.add(cand)
+        if os.path.isfile(cand):
+            return cand
+        if os.path.isfile(cand + ".zip"):
+            return cand + ".zip"
+    return None
+
+
 def _resolve_warm_start_path(candidate: Any) -> Optional[str]:
     md = getattr(candidate, "metadata", None) or {}
     for key in ("warm_start_checkpoint", "parent_checkpoint_path"):
-        path = md.get(key)
-        if path and os.path.isfile(str(path)):
-            return str(path)
+        resolved = _resolve_existing_path(md.get(key))
+        if resolved is not None:
+            return resolved
     return None
 
 
@@ -484,78 +512,80 @@ class CrowdNavPPOTrainer:
         train_env = _make_train_vec_env(
             candidate.reward_fn, seed=seed, n_envs=n_envs, settings=settings
         )
-        n_steps_cap = max(16, int(getattr(config, "ppo_n_steps", 256) or 256))
-        n_steps = min(n_steps_cap, max(16, train_steps // max(1, n_envs)))
-        batch_size = min(64 * n_envs, max(8, n_steps * n_envs))
-        n_epochs = max(1, int(getattr(config, "ppo_n_epochs", 10) or 10))
-        # Always build a fresh PPO so n_steps/batch_size match this VecEnv.
-        # PPO.load + mutating n_steps leaves a stale RolloutBuffer (IndexError).
-        # Warm-start copies policy weights only (new model → _last_obs is None,
-        # so SB3 resets the env regardless of reset_num_timesteps).
-        # MlpPolicy: Discrete → Categorical; Box → Gaussian (read from env).
-        model = PPO(
-            "MlpPolicy",
-            train_env,
-            verbose=0,
-            seed=seed,
-            device=device,
-            n_steps=n_steps,
-            batch_size=batch_size,
-            n_epochs=n_epochs,
-            gamma=PPO_GAMMA,
-            learning_rate=3e-4,
-            ent_coef=float(getattr(config, "ppo_ent_coef", 0.0) or 0.0),
-        )
-        if warm_path:
-            try:
-                donor = PPO.load(warm_path, device=device)
-                if not spaces_compatible(donor.action_space, model.action_space) or not (
-                    spaces_compatible(donor.observation_space, model.observation_space)
-                ):
+        try:
+            n_steps_cap = max(16, int(getattr(config, "ppo_n_steps", 256) or 256))
+            n_steps = min(n_steps_cap, max(16, train_steps // max(1, n_envs)))
+            batch_size = min(64 * n_envs, max(8, n_steps * n_envs))
+            n_epochs = max(1, int(getattr(config, "ppo_n_epochs", 10) or 10))
+            # Always build a fresh PPO so n_steps/batch_size match this VecEnv.
+            # PPO.load + mutating n_steps leaves a stale RolloutBuffer (IndexError).
+            # Warm-start copies policy weights only (new model → _last_obs is None,
+            # so SB3 resets the env regardless of reset_num_timesteps).
+            # MlpPolicy: Discrete → Categorical; Box → Gaussian (read from env).
+            model = PPO(
+                "MlpPolicy",
+                train_env,
+                verbose=0,
+                seed=seed,
+                device=device,
+                n_steps=n_steps,
+                batch_size=batch_size,
+                n_epochs=n_epochs,
+                gamma=PPO_GAMMA,
+                learning_rate=3e-4,
+                ent_coef=float(getattr(config, "ppo_ent_coef", 0.0) or 0.0),
+            )
+            if warm_path:
+                try:
+                    donor = PPO.load(warm_path, device=device)
+                    if not spaces_compatible(donor.action_space, model.action_space) or not (
+                        spaces_compatible(donor.observation_space, model.observation_space)
+                    ):
+                        logger.warning(
+                            "Warm-start skipped for %s: parent spaces %s/%s != current %s/%s",
+                            cid,
+                            donor.observation_space,
+                            donor.action_space,
+                            model.observation_space,
+                            model.action_space,
+                        )
+                        warm_path = None
+                    else:
+                        model.policy.load_state_dict(donor.policy.state_dict())
+                    del donor
+                except Exception as exc:  # noqa: BLE001
                     logger.warning(
-                        "Warm-start skipped for %s: parent spaces %s/%s != current %s/%s",
+                        "Warm-start load failed for %s (%s); training from scratch",
                         cid,
-                        donor.observation_space,
-                        donor.action_space,
-                        model.observation_space,
-                        model.action_space,
+                        exc,
                     )
                     warm_path = None
-                else:
-                    model.policy.load_state_dict(donor.policy.state_dict())
-                del donor
-            except Exception as exc:  # noqa: BLE001
-                logger.warning(
-                    "Warm-start load failed for %s (%s); training from scratch",
-                    cid,
-                    exc,
-                )
-                warm_path = None
 
-        t0 = time.perf_counter()
-        dynamics = (
-            TrainingDynamicsRecorder(train_steps)
-            if bool(getattr(config, "record_training_dynamics", False))
-            else None
-        )
-        cb = _ppo_progress_callback(
-            train_steps, desc=f"PPO {cid} ({stage_tag})", dynamics=dynamics
-        )
-        model.learn(total_timesteps=max(1, train_steps), progress_bar=False, callback=cb)
-        train_wall = time.perf_counter() - t0
-        sps = float(train_steps) / max(train_wall, 1e-6)
-        console.status(
-            f"PPO train done {cid} in {console.format_seconds(train_wall)} "
-            f"({sps:.0f} steps/s)",
-            stage=stage_tag,
-        )
+            t0 = time.perf_counter()
+            dynamics = (
+                TrainingDynamicsRecorder(train_steps)
+                if bool(getattr(config, "record_training_dynamics", False))
+                else None
+            )
+            cb = _ppo_progress_callback(
+                train_steps, desc=f"PPO {cid} ({stage_tag})", dynamics=dynamics
+            )
+            model.learn(total_timesteps=max(1, train_steps), progress_bar=False, callback=cb)
+            train_wall = time.perf_counter() - t0
+            sps = float(train_steps) / max(train_wall, 1e-6)
+            console.status(
+                f"PPO train done {cid} in {console.format_seconds(train_wall)} "
+                f"({sps:.0f} steps/s)",
+                stage=stage_tag,
+            )
 
-        ckpt = os.path.join(out_dir, "model.zip")
-        model.save(ckpt)
-        try:
-            train_env.close()
-        except Exception:  # noqa: BLE001
-            pass
+            ckpt = Path(out_dir, "model.zip").as_posix()
+            model.save(ckpt)
+        finally:
+            try:
+                train_env.close()
+            except Exception:  # noqa: BLE001
+                pass
 
         holdout_metrics, metrics_dict = self._evaluate(
             model,
