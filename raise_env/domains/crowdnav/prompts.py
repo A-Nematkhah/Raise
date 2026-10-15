@@ -215,8 +215,7 @@ D2_MUTATION_PROMPT = """You are a reward function optimizer for crowd-aware robo
 Prior Reflection / evidence:
 - {reflection}
 Parent Code to Mutate:
-- {func_signature}
-- {parent_code}
+- {parent_block}
 Mutation Task:
 - Create a mutated `{func_name}` with a targeted change that addresses your diagnosis.
 - Keep direct dot access; no getattr/hasattr.
@@ -394,10 +393,17 @@ def format_d2_mutation(
     func_signature: str = "def compute_reward(state, memory):",
     compact: bool = False,
 ) -> str:
+    # ``parent_code`` normally already starts with ``def ...``; only prepend the
+    # signature when a caller passes a body fragment (keeps the kwarg for API
+    # compatibility without duplicating the def line in the usual case).
+    body = str(parent_code or "").rstrip()
+    if "def " not in body.split("\n", 1)[0]:
+        parent_block = f"{func_signature}\n{body}".rstrip()
+    else:
+        parent_block = body
     return D2_MUTATION_PROMPT.format(
         reflection=reflection.strip() or "(none)",
-        func_signature=func_signature,
-        parent_code=parent_code.rstrip(),
+        parent_block=parent_block,
         func_name=func_name,
         sandbox_rules=_D2_SANDBOX_RULES.format(
             func_name=func_name,
