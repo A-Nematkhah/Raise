@@ -108,6 +108,7 @@ def test_build_reflection_is_fitness_table_with_diagnoses():
     pop[0].metadata["fitness"] = 0.6
     pop[1].metadata["fitness"] = 0.3
     pop[0].metadata["llm_diagnosis"] = "CR rising with speed shaping."
+    pop[0].metadata["llm_diagnosis_subjects"] = ["parent_x"]
     note = evo._build_reflection(pop, generation=1)
     assert "strengthen goal progress" not in note
     assert "Population(fitness desc):" in note
@@ -115,6 +116,37 @@ def test_build_reflection_is_fitness_table_with_diagnoses():
     assert "best_fitness_trend=[0.600]" in note
     assert "PriorLLMDiagnoses:" in note
     assert "CR rising" in note
+    assert "written when creating b from parent_x" in note
+
+
+def test_batch_candidates_do_not_store_shared_preamble_as_diagnosis(tmp_path):
+    """Gen0 batch preamble must not become every child's llm_diagnosis (P0-5)."""
+    from pathlib import Path
+
+    from raise_core.explore import StageIConfig
+
+    batch_body = (
+        "Below are six independent reward functions for CrowdNav.\n\n"
+        + "\n\n".join(
+            f"```python\n{D5_SEED_FUNCTION.replace('0.5', str(0.4 + 0.1 * i))}\n```"
+            for i in range(2)
+        )
+    )
+    evo = StageIEvolver(
+        ScriptedLLMClient([batch_body]),
+        score_fn=lambda *_a, **_k: type("R", (), {"score": 0.1, "rejected": False})(),
+        validator=make_crowdnav_validator(),
+        prompts=cn_prompts,
+        feedback=FeedbackCardConfig(enabled=False),
+        config=StageIConfig(population_size=2),
+        rejection_log_path=str(Path(tmp_path) / "rej.jsonl"),
+    )
+    pop = evo.initialize_population()
+    assert len(pop) >= 2
+    assert all(not (c.metadata or {}).get("llm_diagnosis") for c in pop)
+    note = evo._build_reflection(pop, generation=0)
+    assert "Below are six independent" not in note
+    assert "PriorLLMDiagnoses: (none)" in note
 
 
 def test_mutation_weakness_uses_evidence_block():

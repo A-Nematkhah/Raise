@@ -500,7 +500,11 @@ class StageIEvolver:
             },
             fit.messages,
         )
-        self._last_call = {"call_id": call_id, "card": card is not None}
+        self._last_call = {
+            "call_id": call_id,
+            "card": card is not None,
+            "subject_ids": list(record["subject_ids"]),
+        }
         try:
             raw = self.llm.complete(fit.messages[-1], max_tokens=max_tokens)
         except BaseException as exc:
@@ -597,8 +601,15 @@ class StageIEvolver:
     ) -> RewardCandidate:
         md = dict(metadata or {})
         call_id = self._last_call.get("call_id") if raw_completion else None
-        if raw_completion:
-            md["llm_diagnosis"] = extract_llm_diagnosis(raw_completion)
+        # Batch completions share one preamble ("Below are N independent...");
+        # that text is not a per-candidate diagnosis. Single-candidate calls
+        # diagnose the call subjects (usually the parents), so record them.
+        if raw_completion and batch_id is None:
+            diagnosis = extract_llm_diagnosis(raw_completion)
+            if diagnosis:
+                md["llm_diagnosis"] = diagnosis
+                subjects = self._last_call.get("subject_ids") or list(parent_ids)
+                md["llm_diagnosis_subjects"] = [str(s) for s in subjects]
         if call_id:
             md["llm_call_id"] = call_id
         duplicate_of = self._known_genome(genome_fingerprint(code))
@@ -1250,10 +1261,19 @@ class StageIEvolver:
             "; ".join(table_bits) if table_bits else "(empty)"
         )
         diag_bits: List[str] = []
-        for r in rows:
-            d = r.get("diagnosis")
-            if d:
-                diag_bits.append(f"{r['id']}: {str(d).strip()}")
+        for c in ranked:
+            md = c.metadata or {}
+            d = md.get("llm_diagnosis")
+            if not d or not str(d).strip():
+                continue
+            subjects = md.get("llm_diagnosis_subjects") or ()
+            subject_txt = ",".join(str(s) for s in subjects) if subjects else "?"
+            label = (
+                f"{c.candidate_id} (written when creating {c.candidate_id} "
+                f"from {subject_txt})"
+            )
+            snippet = str(d).strip()[:200]
+            diag_bits.append(f"{label}: {snippet}")
             if len(diag_bits) >= 3:
                 break
         diag = (
