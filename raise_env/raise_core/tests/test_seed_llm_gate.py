@@ -29,12 +29,12 @@ def _run_script(script_name: str, argv: list[str], monkeypatch) -> int:
     return 0
 
 
-def test_run_raise_refuses_seed_without_fast(monkeypatch, capsys):
+def test_run_raise_refuses_seed_without_fast(monkeypatch, capsys, tmp_path):
     """Non-fast + default seed LLM must exit before dataset/PPO work."""
-    out_dir = _RAISE_ROOT / "results" / "_seed_refuse_test"
+    out_dir = tmp_path / "seed_refuse"
     code = _run_script(
         "run_raise.py",
-        ["--output-dir", str(out_dir.relative_to(_RAISE_ROOT))],
+        ["--output-dir", str(out_dir)],
         monkeypatch,
     )
     assert code == 2
@@ -45,11 +45,12 @@ def test_run_raise_refuses_seed_without_fast(monkeypatch, capsys):
     assert not (out_dir / "config.json").exists()
 
 
-def test_run_raise_fast_still_allows_seed(monkeypatch):
+def test_run_raise_fast_still_allows_seed(monkeypatch, tmp_path):
+    out_dir = tmp_path / "seed_fast_ok"
     code = _run_script(
         "run_raise.py",
-        ["--fast", "--output-dir", "results/_seed_fast_ok", "--device", "cpu"],
+        ["--fast", "--output-dir", str(out_dir), "--device", "cpu"],
         monkeypatch,
     )
     assert code == 0
-    assert (_RAISE_ROOT / "results" / "_seed_fast_ok" / "manifest.json").is_file()
+    assert (out_dir / "manifest.json").is_file()

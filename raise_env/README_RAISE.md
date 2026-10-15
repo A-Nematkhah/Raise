@@ -85,22 +85,40 @@ candidate) and `stage3/checkpoint.json` (per Stage III candidate).
    `--population`; an unset count absorbs the remainder).
 3. Stage III: long PPO on the final population (evaluated on `val`
    scenarios drawn from a separate seed base; `val` has only 100 cases, so
-   they can overlap with Stage II ones); the final candidate is the best Stage III fitness.
+   they can overlap with Stage II ones). By default candidates whose Stage II
+   holdout CR ≥ `--collapse-cr` (0.8) are skipped (`--no-stage3-skip-collapsed`
+   to train everyone; if all finalists are collapsed they are all trained).
+   The winner is the best Stage III fitness; ties within 2 SE use paired
+   per-case SEs when episode `case` lists match.
 4. Final blind eval: the winner alone is re-evaluated on upstream `test`
    scenarios (`--final-eval-episodes`, default 100). Report `manifest.json` →
    `final_eval.fitness`, not the selection score, which is biased upward.
+5. Optional baselines (`--baselines`, off by default): native-reward PPO,
+   best non-collapsed Stage II genome, and ORCA/Linear controllers on the
+   same test protocol → `baselines.json` with paired deltas vs the winner.
 
-Outputs under `--output-dir`: `config.json`, `seed_reward.py`,
+**Stage II eval precision.** With 50 holdout episodes, most of the
+between-candidate fitness variance in a 16h CrowdNav run was evaluation
+noise. Prefer `--stage2-eval-episodes 200` (or more); evaluation is ~0.02 s
+per episode. `--stage2-eval-split {val,train}` chooses the holdout pool
+(default `val`; Stage III/final stay on val/test).
+
+Outputs under `--output-dir`: `config.json`, `config.resume_*.json` (on
+resume), `provenance.json`, `run_<UTC>.log`, `seed_reward.py`,
 `closed_loop/` (`epochs.jsonl`, `pop_epoch_*.json`, `REPORT.txt`,
 `stage1_rejections.jsonl`, `stage2_train/` PPO models),
 `stage2_population.json`, `stage3_train/`, `stage3_population.json`,
-`best_stage{1,2,3}.json`, `final_candidate.json`, `manifest.json`, and
-`plots/` (non-fast runs: metric plots plus `plots/viz/` with a GIF, frame
-strip and trajectory plot of the best policy on `test` scenarios).
+`best_stage{1,2,3}.json`, `final_candidate.json`, `manifest.json`,
+`baselines.json` (if `--baselines`), and `plots/` (non-fast runs: metric
+plots plus `plots/viz/` with a GIF, frame strip and trajectory plot of the
+best policy on `test` scenarios; stochastic by default).
 
 Robot / action options: `--robot-kinematics {holonomic,unicycle}`,
 `--action-mode {discrete,continuous}` (discrete = the 81 CADRL actions),
 `--env-config` (an upstream-format `env.config`).
+
+LLM: Groq default `max_tokens` is 3500 (gpt-oss reasoning tokens count);
+override with `--llm-max-tokens` / `--llm-reasoning-effort`.
 
 ## Tests
 

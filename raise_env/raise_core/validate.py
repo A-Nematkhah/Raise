@@ -24,7 +24,7 @@ from typing import Any, Dict, List, Optional, Sequence
 from raise_core import console
 from raise_core.candidate import RewardCandidate
 from raise_core.population_io import deserialize_population, load_candidate_dict
-from raise_core.refine import ProxyMetrics, _stable_code_hash
+from raise_core.refine import ProxyMetrics, stub_metrics_from_code
 from raise_core.sandbox import RewardValidator
 from raise_core.selection import (
     candidate_fitness,
@@ -163,19 +163,21 @@ class StubPolicyTrainer(PolicyTrainer):
         config: Stage3Config,
         **kwargs: Any,
     ) -> TrainEvalBundle:
-        base = (_stable_code_hash(candidate.code) % 100) / 100.0
-        jitter = 0.01 * (round_index % 3)
-        sr = min(1.0, max(0.0, 0.5 + 0.4 * base + jitter))
-        cr = min(1.0, max(0.0, 0.3 * (1.0 - base)))
-        tr = max(0.0, 1.0 - sr - cr)
-        metrics = ProxyMetrics(
-            sr=sr,
-            cr=cr,
-            tr=tr,
-            nt=12.0 + 4.0 * (1.0 - base),
-            pl=14.0 + 6.0 * (1.0 - base),
-            itr=4.0 + 15.0 * (1.0 - base),
-            sd=0.25 + 0.25 * base,
+        metrics = stub_metrics_from_code(
+            candidate.code,
+            round_index,
+            sr_offset=0.5,
+            sr_scale=0.4,
+            cr_scale=0.3,
+            jitter_mod=3,
+            nt_base=12.0,
+            nt_scale=4.0,
+            pl_base=14.0,
+            pl_scale=6.0,
+            itr_base=4.0,
+            itr_scale=15.0,
+            sd_base=0.25,
+            sd_scale=0.25,
         )
         return TrainEvalBundle(metrics=metrics, checkpoint_path=None)
 

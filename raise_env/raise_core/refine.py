@@ -93,6 +93,43 @@ def _stable_code_hash(code: str) -> int:
     return int(hashlib.md5(code.encode("utf-8")).hexdigest(), 16) % 10_000
 
 
+def stub_metrics_from_code(
+    code: str,
+    round_index: int,
+    *,
+    sr_offset: float,
+    sr_scale: float,
+    cr_scale: float,
+    jitter_mod: int,
+    nt_base: float,
+    nt_scale: float,
+    pl_base: float,
+    pl_scale: float,
+    itr_base: float,
+    itr_scale: float,
+    sd_base: float,
+    sd_scale: float,
+) -> ProxyMetrics:
+    """Shared hash→metrics mapping for Stage II / III stub trainers.
+
+    Parameterised so each stage keeps its historical numeric outputs.
+    """
+    base = (_stable_code_hash(code) % 100) / 100.0
+    jitter = 0.01 * (int(round_index) % int(jitter_mod))
+    sr = min(1.0, max(0.0, float(sr_offset) + float(sr_scale) * base + jitter))
+    cr = min(1.0, max(0.0, float(cr_scale) * (1.0 - base)))
+    tr = max(0.0, 1.0 - sr - cr)
+    return ProxyMetrics(
+        sr=sr,
+        cr=cr,
+        tr=tr,
+        nt=float(nt_base) + float(nt_scale) * (1.0 - base),
+        pl=float(pl_base) + float(pl_scale) * (1.0 - base),
+        itr=float(itr_base) + float(itr_scale) * (1.0 - base),
+        sd=float(sd_base) + float(sd_scale) * base,
+    )
+
+
 class PolicyTrainer(ABC):
     """Train + evaluate a policy under a candidate reward."""
 
@@ -136,17 +173,19 @@ class StubPolicyTrainer(PolicyTrainer):
 
     @staticmethod
     def _metrics(candidate: RewardCandidate, round_index: int) -> ProxyMetrics:
-        base = (_stable_code_hash(candidate.code) % 100) / 100.0
-        jitter = 0.01 * (round_index % 5)
-        sr = min(1.0, max(0.0, 0.4 + 0.5 * base + jitter))
-        cr = min(1.0, max(0.0, 0.4 * (1.0 - base)))
-        tr = max(0.0, 1.0 - sr - cr)
-        return ProxyMetrics(
-            sr=sr,
-            cr=cr,
-            tr=tr,
-            nt=10.0 + 5.0 * (1.0 - base),
-            pl=12.0 + 8.0 * (1.0 - base),
-            itr=5.0 + 20.0 * (1.0 - base),
-            sd=0.2 + 0.3 * base,
+        return stub_metrics_from_code(
+            candidate.code,
+            round_index,
+            sr_offset=0.4,
+            sr_scale=0.5,
+            cr_scale=0.4,
+            jitter_mod=5,
+            nt_base=10.0,
+            nt_scale=5.0,
+            pl_base=12.0,
+            pl_scale=8.0,
+            itr_base=5.0,
+            itr_scale=20.0,
+            sd_base=0.2,
+            sd_scale=0.3,
         )
