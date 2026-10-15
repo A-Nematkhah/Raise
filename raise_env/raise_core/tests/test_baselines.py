@@ -1,0 +1,245 @@
+"""P1-1 baselines script: selection helpers, schema, CLI hook (stub budgets)."""
+
+from __future__ import annotations
+
+import importlib.util
+import json
+import runpy
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+from domains.crowdnav.prompts import D5_SEED_FUNCTION
+from domains.crowdnav.reward_checks import make_crowdnav_validator
+from raise_core.candidate import RewardCandidate
+from raise_core.json_io import atomic_write_json
+
+_RAISE_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _load_baselines_mod():
+    path = _RAISE_ROOT / "scripts" / "run_baselines.py"
+    spec = importlib.util.spec_from_file_location("run_baselines_under_test", path)
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _cand(cid: str, fitness: float, cr: float) -> RewardCandidate:
+    code = "def compute_reward(state, memory):\n    return 0.0, {}\n"
+    fn, err = make_crowdnav_validator().try_validate(code)
+    assert fn is not None, err
+    return RewardCandidate(
+        candidate_id=cid,
+        code=code,
+        reward_fn=fn,
+        valid=True,
+        metadata={
+            "fitness": fitness,
+            "last_metrics": {
+                "fitness": fitness,
+                "holdout": {"CR": cr, "SR": 1.0 - cr, "TR": 0.0},
+                "CR": cr,
+            },
+        },
+    )
+
+
+def test_select_baseline_b_skips_collapsed_and_honours_extra_ids():
+    bas = _load_baselines_mod()
+    cands = {
+        "good": _cand("good", 0.5, cr=0.1),
+        "better_but_collapsed": _cand("better_but_collapsed", 0.9, cr=0.95),
+        "mid": _cand("mid", 0.3, cr=0.2),
+        "ini_0000": _cand("ini_0000", 0.1, cr=0.0),
+    }
+    ids = bas.select_baseline_b_ids(cands, collapse_cr=0.8, extra_ids=["ini_0000", "missing"])
+    assert ids[0] == "good"
+    assert "ini_0000" in ids
+    assert "better_but_collapsed" not in ids
+    assert "missing" not in ids
+
+
+def test_vs_final_paired_delta_and_z():
+    bas = _load_baselines_mod()
+    eps_b = [{"case": i, "task_return": 0.10} for i in range(10)]
+    eps_f = [{"case": i, "task_return": 0.20} for i in range(10)]
+    row = bas._vs_final(eps_b, eps_f, baseline_fitness=0.10, final_fitness=0.20)
+    assert row["method"] == "paired_task_return"
+    assert row["delta_fitness"] == pytest.approx(0.10)
+    assert row["paired_se"] == pytest.approx(0.0)
+    assert row["z"] is None or row["n"] == 10
+
+
+def test_baselines_cli_flag_default_off(monkeypatch, capsys):
+    script = _RAISE_ROOT / "scripts" / "run_raise.py"
+    monkeypatch.chdir(_RAISE_ROOT)
+    monkeypatch.setattr(sys, "argv", [str(script), "--print-config"])
+    try:
+        runpy.run_path(str(script), run_name="__main__")
+    except SystemExit as exc:
+        assert int(exc.code or 0) == 0
+    out = capsys.readouterr().out
+    assert "baselines=False" in out
+
+
+def _write_minimal_run(tmp_path: Path) -> Path:
+    run = tmp_path / "run"
+    cl = run / "closed_loop"
+    cl.mkdir(parents=True)
+    code = D5_SEED_FUNCTION
+    atomic_write_json(
+        str(run / "config.json"),
+        {
+            "seed": 7,
+            "stage3_train_steps": 8,
+            "final_eval_episodes": 2,
+            "n_envs": 1,
+            "device": "cpu",
+            "action_mode": "discrete",
+            "robot_kinematics": "holonomic",
+            "action_speed_samples": 5,
+            "action_rotation_samples": 16,
+            "eval_mode": "holdout_only",
+            "collapse_cr": 0.8,
+        },
+    )
+    eps = [{"case": i, "task_return": 0.05 * i} for i in range(2)]
+    atomic_write_json(
+        str(run / "final_candidate.json"),
+        {
+            "candidate_id": "winner",
+            "code": code,
+            "metadata": {
+                "fitness": 0.4,
+                "final_eval": {
+                    "status": "ok",
+                    "fitness": 0.42,
+                    "metrics": {
+                        "fitness": 0.42,
+                        "holdout_episodes": eps,
+                        "task_return": 0.42,
+                    },
+                },
+            },
+        },
+    )
+    atomic_write_json(
+        str(cl / "pop_epoch_000.json"),
+        {
+            "candidates": [
+                {
+                    "candidate_id": "ini_0000",
+                    "code": code,
+                    "fitness": 0.3,
+                    "last_metrics": {
+                        "fitness": 0.3,
+                        "holdout": {"CR": 0.1, "SR": 0.8, "TR": 0.1},
+                    },
+                },
+                {
+                    "candidate_id": "col_0001",
+                    "code": code,
+                    "fitness": 0.9,
+                    "last_metrics": {
+                        "fitness": 0.9,
+                        "holdout": {"CR": 0.95, "SR": 0.05, "TR": 0.0},
+                    },
+                },
+            ]
+        },
+    )
+    return run
+
+
+def test_run_baselines_writes_expected_schema(tmp_path, monkeypatch):
+    bas = _load_baselines_mod()
+    run = _write_minimal_run(tmp_path)
+
+    def _fake_train(self, candidate, *, round_index, config, **kw):
+        md = dict(candidate.metadata or {})
+        md["checkpoint_path"] = str(tmp_path / f"{candidate.candidate_id}.zip")
+        Path(md["checkpoint_path"]).write_bytes(b"x")
+        eps = [{"case": i, "task_return": 0.1 + 0.01 * i} for i in range(2)]
+        md["last_metrics"] = {
+            "fitness": 0.11,
+            "fitness_se": 0.01,
+            "SR": 0.5,
+            "CR": 0.25,
+            "TR": 0.25,
+            "task_return": 0.11,
+            "holdout_episodes": eps,
+            "holdout": {"SR": 0.5, "CR": 0.25, "TR": 0.25, "task_return": 0.11},
+        }
+        md["fitness"] = 0.11
+        candidate.metadata = md
+        return SimpleNamespace(metrics=SimpleNamespace(as_dict=lambda: md["last_metrics"]),
+                               checkpoint_path=md["checkpoint_path"])
+
+    def _fake_reeval(self, candidate, *, round_index, config):
+        return _fake_train(self, candidate, round_index=round_index, config=config)
+
+    def _fake_controller(behaviour, *, cases, run_cfg, collect_mod):
+        eps = [{"case": int(c), "task_return": 0.02} for c in cases]
+        return {
+            "controller": behaviour,
+            "fitness": 0.02,
+            "fitness_se": 0.0,
+            "SR": 0.0,
+            "CR": 0.0,
+            "TR": 1.0,
+            "holdout_episodes": eps,
+        }
+
+    monkeypatch.setattr(bas.CrowdNavPPOTrainer, "train_and_eval", _fake_train)
+    monkeypatch.setattr(bas.CrowdNavPPOTrainer, "reevaluate", _fake_reeval)
+    monkeypatch.setattr(bas, "_eval_controller", _fake_controller)
+
+    out = bas.run_baselines(
+        str(run),
+        seeds=1,
+        extra_ids=["ini_0000"],
+        eval_episodes=2,
+        train_steps=8,
+        skip_c=False,
+    )
+    path = run / "baselines.json"
+    assert path.is_file()
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert data["eval_split"] == "test"
+    assert data["eval_episodes"] == 2
+    assert data["eval_deterministic"] is False
+    assert "A_native_ppo" in data["baselines"]
+    assert "B_ini_0000" in data["baselines"]
+    assert "C_orca" in data["baselines"] and "C_linear" in data["baselines"]
+    assert "A_native_ppo" in data["comparisons"]
+    cmp_a = data["comparisons"]["A_native_ppo"]
+    assert "delta_fitness" in cmp_a and "paired_se" in cmp_a and "z" in cmp_a
+    assert out["final_candidate_id"] == "winner"
+    # Collapsed col_0001 must not be auto-selected as B.
+    assert "B_col_0001" not in data["baselines"]
+
+
+@pytest.mark.slow
+def test_run_baselines_tiny_real_ppo_smoke(tmp_path):
+    """Optional slow smoke: tiny K3 + 1 eval episode (needs CrowdNav deps)."""
+    pytest.importorskip("stable_baselines3")
+    pytest.importorskip("rvo2")
+    bas = _load_baselines_mod()
+    run = _write_minimal_run(tmp_path)
+    # Tiny real training; skip B/C to keep wall-clock short.
+    bas.run_baselines(
+        str(run),
+        seeds=1,
+        eval_episodes=1,
+        train_steps=8,
+        skip_b=True,
+        skip_c=True,
+    )
+    data = json.loads((run / "baselines.json").read_text(encoding="utf-8"))
+    assert "A_native_ppo" in data["baselines"]
+    fit = data["baselines"]["A_native_ppo"]["fitness"]
+    assert fit is not None and fit == fit  # not NaN

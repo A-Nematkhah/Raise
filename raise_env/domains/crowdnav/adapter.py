@@ -173,24 +173,14 @@ def _resolve_device(config: Any) -> str:
     return device_raw if device_raw.startswith("cuda") else "cpu"
 
 
-def _eval_metrics(
+def _eval_with_step(
     env: RewardInjectedCrowdNavEnv,
-    model: Any,
+    step_fn: Any,
     *,
     cases: Sequence[int],
-    deterministic: bool = True,
     record_components: bool = False,
 ) -> ProxyMetrics:
-    """
-    Evaluate a policy on fixed upstream scenarios (``cases`` of ``env.phase``).
-
-    Statistics follow upstream ``Explorer.run_k_episodes`` (see
-    ``domains.crowdnav.metrics``). One compact record per episode is kept on
-    ``metrics._crowdnav_episodes`` (outcome, steps, time, path length, min
-    separation, danger steps, candidate-reward return undiscounted and
-    PPO-discounted, the upstream discounted task return; with
-    ``record_components`` also per-episode sums of the reward components).
-    """
+    """Shared holdout rollout stats for PPO models and upstream controllers."""
     outcomes: List[str] = []
     nav_times: List[float] = []
     task_returns: List[float] = []
@@ -216,8 +206,7 @@ def _eval_metrics(
         ep_components: Dict[str, float] = {}
         info: Dict[str, Any] = {}
         while not done:
-            action, _ = model.predict(obs, deterministic=deterministic)
-            obs, reward, terminated, truncated, info = env.step(action)
+            obs, reward, terminated, truncated, info = step_fn(obs)
             native.append(float(info["raise_native_reward"]))
             ep_return += float(reward)
             ep_disc += discount * float(reward)
@@ -296,6 +285,51 @@ def _eval_metrics(
     }
     metrics._crowdnav_episodes = records  # type: ignore[attr-defined]
     return metrics
+
+
+def _eval_metrics(
+    env: RewardInjectedCrowdNavEnv,
+    model: Any,
+    *,
+    cases: Sequence[int],
+    deterministic: bool = True,
+    record_components: bool = False,
+) -> ProxyMetrics:
+    """
+    Evaluate a policy on fixed upstream scenarios (``cases`` of ``env.phase``).
+
+    Statistics follow upstream ``Explorer.run_k_episodes`` (see
+    ``domains.crowdnav.metrics``). One compact record per episode is kept on
+    ``metrics._crowdnav_episodes`` (outcome, steps, time, path length, min
+    separation, danger steps, candidate-reward return undiscounted and
+    PPO-discounted, the upstream discounted task return; with
+    ``record_components`` also per-episode sums of the reward components).
+    """
+
+    def _step(obs: Any) -> Any:
+        action, _ = model.predict(obs, deterministic=deterministic)
+        return env.step(action)
+
+    return _eval_with_step(
+        env, _step, cases=cases, record_components=record_components
+    )
+
+
+def eval_act_fn_metrics(
+    env: RewardInjectedCrowdNavEnv,
+    act_fn: Any,
+    *,
+    cases: Sequence[int],
+    record_components: bool = False,
+) -> ProxyMetrics:
+    """Same metrics as ``_eval_metrics``, but ``act_fn()`` returns an upstream action."""
+
+    def _step(_obs: Any) -> Any:
+        return env.step_upstream(act_fn())
+
+    return _eval_with_step(
+        env, _step, cases=cases, record_components=record_components
+    )
 
 
 def metrics_to_crowdnav_dict(metrics: ProxyMetrics) -> Dict[str, Any]:
