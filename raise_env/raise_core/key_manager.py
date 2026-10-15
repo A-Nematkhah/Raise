@@ -18,7 +18,7 @@ Usage::
     response = manager.chat_completion(
         model="openai/gpt-oss-120b",
         messages=[...],
-        max_tokens=1500,
+        max_tokens=3500,
         temperature=0.4,
     )
 """
@@ -277,6 +277,7 @@ class GroqKeyManager:
         self.max_wait_seconds = max(0.0, float(max_wait_seconds))
         # Requests sent by the latest ``chat_completion`` call (for call logs).
         self.last_attempts = 0
+        self.last_errors: list = []
         if keys is not None:
             self.keys = [k for k in keys if k and not _is_placeholder_key(k)]
         else:
@@ -353,6 +354,7 @@ class GroqKeyManager:
         failures = 0
         deadline = time.time() + self.max_wait_seconds
         self.last_attempts = 0
+        self.last_errors: list = []
         while True:
             wait = self._seconds_until_available()
             if wait > 0.0:
@@ -374,6 +376,9 @@ class GroqKeyManager:
                     return response
                 # Successful HTTP with empty body (proxy flake / content filter).
                 last_exception = EmptyCompletionError("Groq returned an empty completion.")
+                self.last_errors.append(
+                    {"attempt": self.last_attempts, "error": "EmptyCompletionError"}
+                )
                 failures += 1
                 if failures >= max_failures:
                     break
@@ -389,6 +394,14 @@ class GroqKeyManager:
                 self._advance()
             except Exception as exc:  # noqa: BLE001
                 last_exception = exc
+                status = getattr(exc, "status_code", None) or getattr(exc, "code", None)
+                self.last_errors.append(
+                    {
+                        "attempt": self.last_attempts,
+                        "error": type(exc).__name__,
+                        "status": status,
+                    }
+                )
                 if _is_non_retryable_client_error(exc):
                     raise
                 if _is_rate_limit_error(exc):

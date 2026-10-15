@@ -294,7 +294,8 @@ class StageIEvolver:
 
     @staticmethod
     def _batch_max_tokens(population_size: int) -> int:
-        return max(4000, int(population_size) * 500)
+        # Keep headroom above the Groq single-call default (3500) for N functions.
+        return max(7000, int(population_size) * 700)
 
     def _log_rejection(
         self,

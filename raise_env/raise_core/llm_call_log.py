@@ -18,10 +18,39 @@ CALLS_FILE = "llm_calls.jsonl"
 PROMPTS_DIR = "llm_prompts"
 
 
+def _max_serial_from_calls_file(path: str) -> int:
+    """Highest ``_NNNN_`` serial already present in ``llm_calls.jsonl`` (0 if none)."""
+    if not os.path.isfile(path):
+        return 0
+    highest = 0
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                call_id = str(row.get("call_id") or "")
+                # stamp_NNNN_type
+                parts = call_id.split("_")
+                if len(parts) >= 2 and parts[1].isdigit():
+                    highest = max(highest, int(parts[1]))
+    except OSError:
+        return 0
+    return highest
+
+
 class LLMCallLog:
     def __init__(self, directory: Optional[str]) -> None:
         self.directory = directory
-        self._n = 0
+        # Resume-safe: continue serials from existing llm_calls.jsonl.
+        existing = (
+            os.path.join(directory, CALLS_FILE) if directory else None
+        )
+        self._n = _max_serial_from_calls_file(existing) if existing else 0
 
     def next_call_id(self, call_type: str) -> str:
         self._n += 1

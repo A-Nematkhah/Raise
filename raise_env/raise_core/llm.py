@@ -75,16 +75,23 @@ def is_recoverable_llm_error(exc: BaseException) -> bool:
 
 
 def _usage_from_response(
-    response: Any, *, latency_s: float, attempts: int = 1
+    response: Any,
+    *,
+    latency_s: float,
+    attempts: int = 1,
+    attempt_errors: Optional[Sequence[Any]] = None,
 ) -> Dict[str, Any]:
     usage = getattr(response, "usage", None)
-    return {
+    out: Dict[str, Any] = {
         "prompt_tokens": getattr(usage, "prompt_tokens", None) if usage else None,
         "completion_tokens": getattr(usage, "completion_tokens", None) if usage else None,
         "finish_reason": finish_reason(response),
         "latency_s": round(float(latency_s), 3),
         "attempts": int(attempts),
     }
+    if attempt_errors:
+        out["attempt_errors"] = list(attempt_errors)
+    return out
 
 
 def _gpt_oss_model(model: str) -> bool:
@@ -139,7 +146,10 @@ class GroqLLMClient(LLMClient):
         *,
         model: str = DEFAULT_MODEL,
         temperature: float = 0.4,
-        max_tokens: int = 1500,
+        # gpt-oss reasoning tokens count against max_tokens; 1500 truncated
+        # ~26% of calls in crowdnav_16h. Override with --llm-max-tokens /
+        # --llm-reasoning-effort.
+        max_tokens: int = 3500,
         api_key: Optional[str] = None,
         system_prompt: Optional[str] = None,
         use_key_pool: bool = True,
@@ -186,6 +196,7 @@ class GroqLLMClient(LLMClient):
             response,
             latency_s=time.monotonic() - started,
             attempts=getattr(self._key_manager, "last_attempts", 1) or 1,
+            attempt_errors=getattr(self._key_manager, "last_errors", None) or None,
         )
         reason = self.last_usage.get("finish_reason")
         content = response.choices[0].message.content

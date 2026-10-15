@@ -96,7 +96,7 @@ class RaiseRunConfig:
     domain: str = DEFAULT_DOMAIN
     llm_provider: str = "seed"  # seed | groq | vllm | ollama | scripted
     llm_model: Optional[str] = None
-    # None → provider defaults (Groq/vLLM: 1500; Ollama: 4096).
+    # None → provider defaults (Groq: 3500; vLLM: 1500; Ollama: 4096).
     llm_max_tokens: Optional[int] = None
     # Groq gpt-oss only when set (e.g. low | medium | high); omitted otherwise.
     llm_reasoning_effort: Optional[str] = None
