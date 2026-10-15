@@ -30,6 +30,7 @@ from raise_core.feedback import FeedbackCardConfig
 from raise_core.llm import LLMClient, make_llm_client
 from raise_core.population_io import candidate_to_dict
 from raise_core.raise_loop import ClosedLoopConfig, ClosedLoopRunner
+from raise_core.json_io import read_json_dict, utc_now_z
 from raise_core.raise_loop.logging_io import write_json
 from raise_core.selection import candidate_fitness, pick_best_trained
 from raise_core.validate import (
@@ -39,6 +40,51 @@ from raise_core.validate import (
     Stage3Config,
     Stage3Runner,
 )
+
+
+def _persist_run_config(output_dir: str, cfg: RaiseRunConfig) -> Dict[str, Any]:
+    """Write ``config.json``; on resume keep the original and add a stamp file.
+
+    Returns the on-disk config dict that should be treated as the run's
+    canonical first-process config (used for ``manifest.config``).
+    """
+    path = os.path.join(output_dir, "config.json")
+    payload = asdict(cfg)
+    existing = read_json_dict(path) if bool(cfg.resume) else None
+    if isinstance(existing, dict) and existing:
+        stamp = utc_now_z().replace(":", "").replace("-", "")
+        write_json(os.path.join(output_dir, f"config.resume_{stamp}.json"), payload)
+        return existing
+    write_json(path, payload)
+    return payload
+
+
+def _manifest_start(
+    output_dir: str,
+    *,
+    pack: DomainPack,
+    cfg: RaiseRunConfig,
+    config_payload: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Build the run manifest, preserving ``created_utc`` across resumes."""
+    now = datetime.now(timezone.utc).isoformat()
+    prior = read_json_dict(os.path.join(output_dir, "manifest.json"))
+    resumes: List[Dict[str, Any]] = []
+    created = now
+    if bool(cfg.resume) and isinstance(prior, dict) and prior.get("created_utc"):
+        created = str(prior["created_utc"])
+        prior_resumes = prior.get("resumes")
+        if isinstance(prior_resumes, list):
+            resumes = [dict(r) for r in prior_resumes if isinstance(r, dict)]
+        resumes.append({"utc": now, "argv": list(sys.argv)})
+    return {
+        "algorithm": "RAISE",
+        "domain": pack.name,
+        "domain_display_name": pack.display_name,
+        "created_utc": created,
+        "resumes": resumes,
+        "config": config_payload,
+    }
 
 
 @dataclass
@@ -285,14 +331,10 @@ class RaisePipeline:
         llm = self._build_llm()
 
         seed_code = pack.seed_reward_source.strip() + "\n"
-        manifest: Dict[str, Any] = {
-            "algorithm": "RAISE",
-            "domain": pack.name,
-            "domain_display_name": pack.display_name,
-            "created_utc": datetime.now(timezone.utc).isoformat(),
-            "config": asdict(cfg),
-        }
-        write_json(os.path.join(cfg.output_dir, "config.json"), asdict(cfg))
+        config_payload = _persist_run_config(cfg.output_dir, cfg)
+        manifest = _manifest_start(
+            cfg.output_dir, pack=pack, cfg=cfg, config_payload=config_payload
+        )
         with open(os.path.join(cfg.output_dir, "seed_reward.py"), "w", encoding="utf-8") as f:
             f.write(seed_code)
 

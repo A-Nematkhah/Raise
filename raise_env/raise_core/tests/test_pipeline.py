@@ -140,3 +140,30 @@ def test_warm_start_off_by_default():
     assert RaiseRunConfig().stage3_warm_start is False
     assert Stage2Config().warm_start is False
     assert Stage3Config().warm_start is False
+
+
+def test_resume_preserves_original_config_and_created_utc(tmp_path):
+    out = tmp_path / "run_resume_cfg"
+    cfg1 = RaiseRunConfig(output_dir=str(out), seed=111)
+    cfg1.apply_fast_profile()
+    arts1 = RaisePipeline(cfg1).run()
+    created = arts1.manifest["created_utc"]
+    original = json.loads((out / "config.json").read_text(encoding="utf-8"))
+    assert original["seed"] == 111
+
+    cfg2 = RaiseRunConfig(output_dir=str(out), seed=222, resume=True)
+    cfg2.apply_fast_profile()
+    arts2 = RaisePipeline(cfg2).run()
+    kept = json.loads((out / "config.json").read_text(encoding="utf-8"))
+    assert kept["seed"] == 111
+    resumes = list(out.glob("config.resume_*.json"))
+    assert resumes, "resume should write a stamped config snapshot"
+    stamped = json.loads(resumes[0].read_text(encoding="utf-8"))
+    assert stamped["seed"] == 222
+
+    man = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
+    assert man["created_utc"] == created
+    assert man["config"]["seed"] == 111
+    assert isinstance(man.get("resumes"), list) and man["resumes"]
+    assert man["resumes"][-1]["argv"]
+    assert arts2.manifest["created_utc"] == created
