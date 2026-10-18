@@ -339,7 +339,7 @@ class ClosedLoopRunner:
             warm_start=bool(cfg.warm_start),
             eval_mode=str(cfg.eval_mode or "both"),
             eval_split=str(getattr(cfg, "stage2_eval_split", None) or "val"),
-            action_mode=str(cfg.action_mode or "discrete"),
+            action_mode=str(cfg.action_mode or "continuous"),
             robot_kinematics=str(cfg.robot_kinematics or "holonomic"),
             action_speed_samples=int(cfg.action_speed_samples),
             action_rotation_samples=int(cfg.action_rotation_samples),

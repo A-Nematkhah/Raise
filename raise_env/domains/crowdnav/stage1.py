@@ -16,6 +16,7 @@ from domains.crowdnav.state import (
     CrowdNavRewardState,
     HumanState,
     RobotState,
+    smoke_action,
     with_kinematics,
 )
 from raise_core.rules import (
@@ -28,7 +29,7 @@ from raise_core.scoring import Score1Result
 logger = logging.getLogger(__name__)
 
 DEFAULT_STAGE1_DATASET = "domains/crowdnav/data/stage1_dataset"
-STATE_SCHEMA_VERSION = 1
+STATE_SCHEMA_VERSION = 2
 
 
 @dataclass
@@ -70,6 +71,12 @@ def _state_to_dict(s: CrowdNavRewardState) -> Dict[str, Any]:
     return {
         "robot": asdict(s.robot),
         "humans": [asdict(h) for h in s.humans],
+        "danger": s.danger,
+        "success_reward": s.success_reward,
+        "collision_penalty": s.collision_penalty,
+        "discomfort_penalty_factor": s.discomfort_penalty_factor,
+        "potential_delta": s.potential_delta,
+        "potential_factor": s.potential_factor,
         "action": list(s.action),
         "collision": s.collision,
         "reached_goal": s.reached_goal,
@@ -87,9 +94,27 @@ def _state_to_dict(s: CrowdNavRewardState) -> Dict[str, Any]:
 def _state_from_dict(d: Dict[str, Any]) -> CrowdNavRewardState:
     r = d["robot"]
     return CrowdNavRewardState(
-        robot=RobotState(**{k: float(r[k]) for k in RobotState.__dataclass_fields__}),
+        robot=RobotState(
+            px=float(r["px"]),
+            py=float(r["py"]),
+            vx=float(r["vx"]),
+            vy=float(r["vy"]),
+            gx=float(r["gx"]),
+            gy=float(r["gy"]),
+            theta=float(r["theta"]),
+            radius=float(r["radius"]),
+            v_pref=float(r["v_pref"]),
+            kinematics=str(r.get("kinematics", "holonomic")),
+        ),
         humans=tuple(
-            HumanState(**{k: float(h[k]) for k in HumanState.__dataclass_fields__})
+            HumanState(
+                px=float(h["px"]),
+                py=float(h["py"]),
+                vx=float(h["vx"]),
+                vy=float(h["vy"]),
+                radius=float(h["radius"]),
+                visible=bool(h.get("visible", False)),
+            )
             for h in d.get("humans") or []
         ),
         action=(float(d["action"][0]), float(d["action"][1])),
@@ -103,6 +128,12 @@ def _state_from_dict(d: Dict[str, Any]) -> CrowdNavRewardState:
         time_step=float(d["time_step"]),
         global_time=float(d["global_time"]),
         time_limit=float(d["time_limit"]),
+        danger=bool(d.get("danger", False)),
+        success_reward=float(d.get("success_reward", 1.0)),
+        collision_penalty=float(d.get("collision_penalty", -0.25)),
+        discomfort_penalty_factor=float(d.get("discomfort_penalty_factor", 0.5)),
+        potential_delta=float(d.get("potential_delta", 0.0)),
+        potential_factor=float(d.get("potential_factor", 2.0)),
     )
 
 
@@ -367,6 +398,7 @@ def score_crowdnav_dataset(
 def _smoke_frame(
     i: int,
     *,
+    config: Any,
     py: float,
     vy: float,
     progress: float,
@@ -374,52 +406,127 @@ def _smoke_frame(
     collision: bool = False,
     reached: bool = False,
     timeout: bool = False,
+    global_time: Optional[float] = None,
 ) -> CrowdNavRewardState:
-    goal_y = 4.0
+    from domains.crowdnav.settings import get_settings
+
+    settings = get_settings()
+    goal_y = float(config.sim.circle_radius)
+    time_step = float(config.env.time_step)
+    time_limit = float(config.env.time_limit)
+    discomfort_dist = float(config.reward.discomfort_dist)
+    robot_radius = float(config.robot.radius)
+    human_radius = float(config.humans.radius)
+    v_pref = float(config.robot.v_pref)
     return CrowdNavRewardState(
-        robot=RobotState(px=0.0, py=py, vx=0.0, vy=vy, gx=0.0, gy=goal_y, theta=np.pi / 2, radius=0.3, v_pref=1.0),
-        humans=(HumanState(px=1.0, py=py + 1.0, vx=-0.5, vy=0.0, radius=0.3),),
-        action=(0.0, vy),
+        robot=RobotState(
+            px=0.0,
+            py=py,
+            vx=0.0,
+            vy=vy,
+            gx=0.0,
+            gy=goal_y,
+            theta=np.pi / 2,
+            radius=robot_radius,
+            v_pref=v_pref,
+            kinematics=settings.kinematics,
+        ),
+        humans=(
+            HumanState(
+                px=goal_y / 4.0,
+                py=py + goal_y / 8.0,
+                vx=-0.5,
+                vy=0.0,
+                radius=human_radius,
+                visible=True,
+            ),
+        ),
+        action=smoke_action(0.0, vy),
         collision=collision,
         reached_goal=reached,
         timeout=timeout,
         min_separation=min_sep,
-        discomfort_dist=0.2,
+        discomfort_dist=discomfort_dist,
         goal_distance=abs(goal_y - py),
         progress=progress,
-        time_step=0.25,
-        global_time=0.25 * (i + 1),
-        time_limit=25.0,
+        time_step=time_step,
+        global_time=time_step * (i + 1) if global_time is None else global_time,
+        time_limit=time_limit,
+        danger=min_sep < discomfort_dist,
+        success_reward=float(config.reward.success_reward),
+        collision_penalty=float(config.reward.collision_penalty),
+        discomfort_penalty_factor=float(config.reward.discomfort_penalty_factor),
+        potential_delta=float(progress),
+        potential_factor=3.0 if settings.kinematics == "unicycle" else 2.0,
     )
 
 
 def smoke_trajectories() -> List[CrowdNavTrajectoryRecord]:
     """Fixture trajectories behind :func:`make_smoke_score_fn`."""
+    from domains.crowdnav.env_wrapper import load_env_config
+
+    config = load_env_config(get_settings().env_config_source)
+    circle_radius = float(config.sim.circle_radius)
+    time_step = float(config.env.time_step)
+    time_limit = float(config.env.time_limit)
+    discomfort_dist = float(config.reward.discomfort_dist)
+    v_pref = float(config.robot.v_pref)
 
     def _traj(tid: str, label: str, frames: Sequence[CrowdNavRewardState]) -> CrowdNavTrajectoryRecord:
         return CrowdNavTrajectoryRecord(
             trajectory_id=tid, scenario_id="smoke", seed=0, states=tuple(frames), label=label, behavior="smoke"
         )
 
-    fast = [
-        _smoke_frame(i, py=-4.0 + 0.25 * (i + 1), vy=1.0, progress=0.25, min_sep=0.5 + 0.1 * i, reached=(i == 4))
-        for i in range(5)
-    ]
-    slow = [
-        _smoke_frame(i, py=-4.0 + 0.15 * (i + 1), vy=0.6, progress=0.15, min_sep=0.15 + 0.05 * i, reached=(i == 7))
-        for i in range(8)
-    ]
-    medium = [
-        _smoke_frame(i, py=-4.0 + 0.2 * (i + 1), vy=0.8, progress=0.2, min_sep=0.3, reached=(i == 5))
-        for i in range(6)
-    ]
+    def _arrival_frames(speed_fraction: float, clearance: float):
+        speed = v_pref * speed_fraction
+        steps = max(1, int(np.ceil(2.0 * circle_radius / (speed * time_step))))
+        frames = []
+        previous_distance = 2.0 * circle_radius
+        for i in range(steps):
+            py = min(circle_radius, -circle_radius + speed * time_step * (i + 1))
+            if i == steps - 1:
+                py = circle_radius
+            current_distance = abs(circle_radius - py)
+            frames.append(
+                _smoke_frame(
+                    i,
+                    config=config,
+                    py=py,
+                    vy=speed,
+                    progress=previous_distance - current_distance,
+                    min_sep=clearance,
+                    reached=i == steps - 1,
+                )
+            )
+            previous_distance = current_distance
+        return frames
+
+    fast = _arrival_frames(1.0, discomfort_dist * 2.0)
+    slow = _arrival_frames(0.6, discomfort_dist * 1.5)
+    medium = _arrival_frames(0.8, discomfort_dist * 1.75)
     crash = [
-        _smoke_frame(i, py=-4.0 + 0.25 * (i + 1), vy=1.0, progress=0.25, min_sep=0.1 - 0.1 * i, collision=(i == 2))
+        _smoke_frame(
+            i,
+            config=config,
+            py=-circle_radius + v_pref * time_step * (i + 1),
+            vy=v_pref,
+            progress=v_pref * time_step,
+            min_sep=discomfort_dist * (0.5 - 0.5 * i),
+            collision=(i == 2),
+        )
         for i in range(3)
     ]
     frozen = [
-        _smoke_frame(i, py=-4.0, vy=0.0, progress=0.0, min_sep=0.6 - 0.05 * i, timeout=(i == 3))
-        for i in range(4)
+        _smoke_frame(
+            0,
+            config=config,
+            py=-circle_radius,
+            vy=0.0,
+            progress=0.0,
+            min_sep=discomfort_dist * 2.0,
+            timeout=True,
+            global_time=max(0.0, time_limit - time_step),
+        )
     ]
     return [
         _traj("smoke_fast", "success", fast),

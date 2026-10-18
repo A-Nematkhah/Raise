@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+from pathlib import Path
 
 import pytest
 
@@ -25,11 +26,36 @@ def load_collector():
 
 
 @pytest.fixture(scope="session")
+def crowdnav_collector():
+    return load_collector()
+
+
+@pytest.fixture(scope="session")
 def dataset_dir(tmp_path_factory):
-    """Small real Stage I dataset (3 upstream train scenarios x 4 robot behaviours)."""
+    """Small real Stage I dataset (6 train scenarios x 5 robot behaviours)."""
     out = tmp_path_factory.mktemp("cn_stage1")
+    config_dir = tmp_path_factory.mktemp("cn_config")
+    config_path = config_dir / "config.py"
+    config_source = Path(load_collector().DEFAULT_ENV_CONFIG_PATH).read_text(encoding="utf-8")
+    if "    sim.human_num = 20\n" not in config_source:
+        raise RuntimeError("Unexpected CrowdNav++ default human_num config")
+    config_path.write_text(
+        config_source.replace("    sim.human_num = 20\n", "    sim.human_num = 1\n"),
+        encoding="utf-8",
+    )
     rc = load_collector().main(
-        ["--out", str(out), "--episodes", "3", "--seed", "7", "--behaviours", "orca,linear,stop,random"]
+        [
+            "--out",
+            str(out),
+            "--episodes",
+            "6",
+            "--seed",
+            "7",
+            "--env-config",
+            str(config_path),
+            "--behaviours",
+            "orca,linear,linear_slow,stop,random",
+        ]
     )
     assert rc == 0
     return str(out)

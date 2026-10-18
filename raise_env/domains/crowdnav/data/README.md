@@ -7,11 +7,21 @@ candidates on. Regenerate it with (about 10 s on CPU):
 python scripts/collect_crowdnav_stage1_dataset.py --out domains/crowdnav/data/stage1_dataset
 ```
 
-Defaults: 40 upstream `train` scenarios (seed 7) × 12 robot behaviours
+To collect with a different CrowdNav++ Python config, pass `--env-config`,
+for example:
+
+```bash
+python scripts/collect_crowdnav_stage1_dataset.py --env-config third_party/crowdnavpp/crowd_nav/configs/config.py --out domains/crowdnav/data/stage1_dataset_custom
+```
+
+Defaults: 40 CrowdNav++ `train` scenarios (seed 7) × 12 robot behaviours
 (ORCA at several `safety_space` / speed / `time_horizon` settings, plus
 Linear, slow Linear, stop and random), all rollouts of the vendored,
-unmodified `crowd_sim`. Labels are the upstream episode outcomes
-(`ReachGoal` → `success`, `Collision`, `Timeout`).
+unmodified `CrowdSimVarNum`. ORCA only receives humans visible in the current
+upstream FOV. Holonomic rollouts are the default; `--kinematics unicycle`
+collects unicycle rollouts when the supplied config satisfies the simulator's
+unicycle human-count constraints. Score1 can re-express holonomic actions for
+unicycle runs. Labels come from CrowdNav++'s native wrapper outcomes.
 
 Files:
 

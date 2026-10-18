@@ -1,22 +1,20 @@
 """
-CrowdNav evaluation metrics and the official selection fitness.
+CrowdNav++ evaluation metrics and the official selection fitness.
 
-Episode statistics follow upstream ``crowd_nav/utils/explorer.py``
-(``Explorer.run_k_episodes``):
+Episode statistics follow CrowdNav++ upstream ``rl/evaluation.py``
+(``evaluate``):
 
 * SR / CR / TR — success (``ReachGoal``), collision and timeout rates;
 * NT — mean navigation time of successful episodes (``time_limit`` if none);
-* total reward — mean over episodes of the upstream task reward discounted
-  as ``gamma ** (t * time_step * v_pref)`` with ``gamma = 0.9``;
+* task return — mean of per-episode sums of native rewards, with no extra
+  evaluation discount;
 * ITR — danger frequency: steps whose upstream info is ``Danger`` divided by
   all steps (upstream "frequency of being in danger");
 * SD — mean ``Danger.min_dist`` over those steps (upstream "average min
   separate distance in danger").
 
-Fitness (higher is better) is that upstream total reward on the holdout
-evaluation: ``+1`` per goal reached (discounted by arrival time), ``-0.25``
-per collision and the discomfort penalties, exactly as CrowdNav reports its
-RL objective. ``fitness_se`` is its standard error over episodes.
+Fitness (higher is better) is that upstream task return on the holdout
+evaluation. ``fitness_se`` is its standard error over episode returns.
 """
 
 from __future__ import annotations
@@ -30,6 +28,7 @@ __all__ = [
     "attach_fitness",
     "crowdnav_fitness",
     "discounted_task_return",
+    "episode_task_return",
     "episode_fields",
     "evidence_line",
     "fitness_components",
@@ -52,13 +51,18 @@ def _finite(x: Any, default: float = 0.0) -> float:
 def discounted_task_return(
     native_rewards: Sequence[float], *, gamma: float, time_step: float, v_pref: float
 ) -> float:
-    """``sum_t gamma ** (t * time_step * v_pref) * r_t`` (Explorer.run_k_episodes)."""
+    """Generic time-scaled discounted sum; not the CrowdNav++ fitness."""
     return float(
         sum(
             math.pow(gamma, t * float(time_step) * float(v_pref)) * float(r)
             for t, r in enumerate(native_rewards)
         )
     )
+
+
+def episode_task_return(native_rewards: Sequence[float]) -> float:
+    """CrowdNav++ evaluator's per-episode task return: the sum of native rewards."""
+    return float(sum(float(reward) for reward in native_rewards))
 
 
 def _metrics_for_fitness(metrics: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -69,7 +73,7 @@ def _metrics_for_fitness(metrics: Mapping[str, Any]) -> Mapping[str, Any]:
 
 
 def crowdnav_fitness(metrics: Optional[Mapping[str, Any]]) -> float:
-    """Mean discounted upstream task return of the (holdout) evaluation."""
+    """Mean upstream episode task return on the (holdout) evaluation."""
     if not metrics:
         return float("-inf")
     src = _metrics_for_fitness(metrics)
@@ -134,7 +138,7 @@ def episode_fields(
     *,
     time_limit: float,
 ) -> Dict[str, float]:
-    """Aggregate per-episode records into the Explorer statistics."""
+    """Aggregate per-episode records into CrowdNav++ evaluator statistics."""
     n = max(1, len(outcomes))
     success_times = [t for o, t in zip(outcomes, nav_times) if o == "success"]
     total_steps = sum(int(s) for s in steps)

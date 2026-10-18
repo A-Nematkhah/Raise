@@ -91,7 +91,7 @@ class Stage3Config:
     device: str = "cpu"
     # Crash-safe resume (``{run}/stage3/checkpoint.json``).
     resume: bool = True
-    action_mode: str = "discrete"
+    action_mode: str = "continuous"
     robot_kinematics: str = "holonomic"
     action_speed_samples: int = 5
     action_rotation_samples: int = 16

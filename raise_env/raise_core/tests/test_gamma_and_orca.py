@@ -90,8 +90,8 @@ def test_run_baselines_gamma_writes_separate_file(tmp_path, monkeypatch):
 def test_matched_gamma_and_parsing():
     sweep = _load_script("run_gamma_sweep")
     g = sweep.matched_gamma(None)
-    assert g == pytest.approx(0.9 ** 0.25)
-    assert sweep.parse_gammas("matched,0.99,0.99", matched=g) == [0.974, 0.99]
+    assert g == pytest.approx(1.0)
+    assert sweep.parse_gammas("matched,0.99,0.99", matched=g) == [1.0, 0.99]
     with pytest.raises(ValueError):
         sweep.parse_gammas("1.2", matched=g)
     with pytest.raises(ValueError):
@@ -112,18 +112,20 @@ def test_gamma_sweep_runs_pairs_and_resumes(tmp_path, monkeypatch):
         str(run), gammas="matched", rewards="native,final", seeds=2, train_steps=8, eval_episodes=2
     )
     # Reference gamma 0.99 is added automatically: 2 rewards x 2 gammas x 2 seeds.
-    assert out["gammas"] == [0.974, 0.99]
+    assert out["gammas"] == [1.0, 0.99]
+    assert out["evaluation_discount"] == pytest.approx(1.0)
     assert len(seen) == 8 and len(out["runs"]) == 8
     assert all(root.endswith("gamma_sweep_train") for _cid, _g, root in seen)
-    row = out["summary"]["native"]["0.974"]
+    row = out["summary"]["native"]["1"]
     assert row["n_seeds"] == 2
-    assert row["fitness_mean"] == pytest.approx(0.974)
+    assert row["fitness_mean"] == pytest.approx(1.0)
     pairs = row["vs_reference"]
     assert [p["seed_index"] for p in pairs] == [0, 1]
-    assert all(p["delta"] == pytest.approx(0.974 - 0.99) for p in pairs)
+    assert all(p["delta"] == pytest.approx(1.0 - 0.99) for p in pairs)
     assert "vs_reference" not in out["summary"]["native"]["0.99"]
     on_disk = json.loads((run / "gamma_sweep.json").read_text(encoding="utf-8"))
     assert set(on_disk["runs"]) == set(out["runs"])
+    assert on_disk["fitness_objective"] == "mean_native_episode_return"
 
     seen.clear()
     sweep.run_gamma_sweep(
@@ -131,6 +133,14 @@ def test_gamma_sweep_runs_pairs_and_resumes(tmp_path, monkeypatch):
     )
     assert seen == []
 
+    on_disk["fitness_objective"] = "legacy_discounted_return"
+    (run / "gamma_sweep.json").write_text(json.dumps(on_disk), encoding="utf-8")
+    sweep.run_gamma_sweep(
+        str(run), gammas="matched", rewards="native,final", seeds=2, train_steps=8, eval_episodes=2
+    )
+    assert len(seen) == 8
+
+    seen.clear()
     sweep.run_gamma_sweep(
         str(run), gammas="matched", rewards="native,final", seeds=2, train_steps=16, eval_episodes=2
     )
@@ -147,26 +157,20 @@ def test_gamma_sweep_rejects_unknown_reward(tmp_path):
         sweep.resolve_rewards(str(run), ["nope"], rb)
 
 
-def test_orca_compare_to_reference_flags_mismatch():
+def test_orca_report_parser_exposes_python_env_config():
     orca = _load_script("check_orca_reference")
-    good = {"SR": 0.426, "CR": 0.568, "nav_time": 10.86, "reward_terminal": 0.0539}
-    assert orca.compare_to_reference(good)["all_ok"] is True
-    bad = dict(good, SR=0.30)
-    rep = orca.compare_to_reference(bad)
-    assert rep["all_ok"] is False
-    assert rep["metrics"]["SR"]["ok"] is False and rep["metrics"]["CR"]["ok"] is True
-    assert orca.compare_to_reference(dict(good, nav_time=float("nan")))["all_ok"] is False
+    help_text = orca.build_parser().format_help()
+    assert "CrowdNav++ Python config" in help_text
 
 
 @pytest.mark.slow
-def test_orca_matches_published_reference():
-    """Full 500-case test split (~6 s): upstream config reproduces Chen et al. 2019 ORCA row."""
+def test_orca_report_uses_native_episode_returns():
     pytest.importorskip("rvo2")
     orca = _load_script("check_orca_reference")
-    measured = orca.run_orca_check()
-    assert measured["n_cases"] == 500
-    assert orca.compare_to_reference(measured)["all_ok"], measured
-    assert measured["reward_full"] < measured["reward_terminal"]
+    measured = orca.run_orca_check(n_cases=2)
+    assert measured["n_cases"] == 2
+    assert measured["reward_full"] == pytest.approx(measured["reward_undiscounted"])
+    assert measured["SR"] + measured["CR"] + measured["TR"] == pytest.approx(1.0)
 
 
 @pytest.mark.slow

@@ -22,6 +22,12 @@ CROWDNAV_STATE_ATTRIBUTES: Tuple[str, ...] = (
     "time_step",
     "global_time",
     "time_limit",
+    "danger",
+    "success_reward",
+    "collision_penalty",
+    "discomfort_penalty_factor",
+    "potential_delta",
+    "potential_factor",
     # RobotState + HumanState
     "px",
     "py",
@@ -32,6 +38,8 @@ CROWDNAV_STATE_ATTRIBUTES: Tuple[str, ...] = (
     "theta",
     "radius",
     "v_pref",
+    "kinematics",
+    "visible",
 )
 
 # Names LLMs commonly invent for this state (must stay OFF the allowlist).

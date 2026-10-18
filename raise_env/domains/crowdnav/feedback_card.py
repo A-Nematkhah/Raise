@@ -136,7 +136,15 @@ def _fmt(spec: MetricSpec, value: Optional[float]) -> str:
 
 
 def _ideal_nav_time(record: ArchiveRecord) -> Optional[float]:
-    return _finite(_context(record).get("ideal_nav_time_s"))
+    context = _context(record)
+    recorded = _finite(context.get("ideal_nav_time_s"))
+    if recorded is not None:
+        return recorded
+    circle_radius = _finite(context.get("circle_radius_m"))
+    preferred_speed = _finite(context.get("v_pref_mps"))
+    if circle_radius is None or preferred_speed is None or preferred_speed <= 0.0:
+        return None
+    return 2.0 * circle_radius / preferred_speed
 
 
 def behaviour(record: ArchiveRecord) -> str:
@@ -437,7 +445,7 @@ class FeedbackCard:
             head,
             "Eval: " + "; ".join(bits) + ".",
             values,
-            f"fitness {fit_txt} (selection objective: mean discounted CrowdNav task return)",
+            f"fitness {fit_txt} (selection objective: mean upstream episode task return)",
             f"Behaviour: {behaviour(rec)}",
         ]
 

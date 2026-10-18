@@ -156,7 +156,7 @@ class RaiseRunConfig:
     warm_start: bool = False
     eval_mode: str = "holdout_only"
     # Robot / action space (domains.crowdnav.settings).
-    action_mode: str = "discrete"
+    action_mode: str = "continuous"
     robot_kinematics: str = "holonomic"
     action_speed_samples: int = 5
     action_rotation_samples: int = 16

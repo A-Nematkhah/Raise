@@ -34,7 +34,7 @@ jobs:
           grep -vE '^(torch==|--extra-index-url)' requirements.txt > "$RUNNER_TEMP/requirements_ci.txt"
           pip install -r "$RUNNER_TEMP/requirements_ci.txt"
 
-      # Upstream CrowdNav's ORCA humans need Python-RVO2 (C++ library, built from source).
+      # CrowdNav++'s ORCA humans need Python-RVO2 (C++ library, built from source).
       - name: Build Python-RVO2
         run: |
           pip install Cython==0.29.36 cmake

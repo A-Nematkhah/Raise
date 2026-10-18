@@ -8,15 +8,6 @@ from typing import Tuple
 
 from domains.crowdnav.settings import CrowdNavSettings, get_settings
 
-# Upstream crowd_nav/configs/env.config defaults (smoke states only; the env
-# reads the live values from its config).
-SMOKE_TIME_STEP = 0.25
-SMOKE_TIME_LIMIT = 25.0
-SMOKE_DISCOMFORT_DIST = 0.2
-SMOKE_RADIUS = 0.3
-SMOKE_V_PREF = 1.0
-SMOKE_CIRCLE_RADIUS = 4.0
-
 
 @dataclass(frozen=True)
 class RobotState:
@@ -31,6 +22,7 @@ class RobotState:
     theta: float
     radius: float
     v_pref: float
+    kinematics: str = "holonomic"
 
 
 @dataclass(frozen=True)
@@ -42,6 +34,7 @@ class HumanState:
     vx: float
     vy: float
     radius: float
+    visible: bool = False
 
 
 @dataclass(frozen=True)
@@ -69,6 +62,12 @@ class CrowdNavRewardState:
     time_step: float
     global_time: float
     time_limit: float
+    danger: bool = False
+    success_reward: float = 1.0
+    collision_penalty: float = -0.25
+    discomfort_penalty_factor: float = 0.5
+    potential_delta: float = 0.0
+    potential_factor: float = 2.0
 
 
 def holonomic_to_unicycle(
@@ -99,7 +98,14 @@ def with_kinematics(
     theta = math.pi / 2.0
     for st in states:
         action, theta = holonomic_to_unicycle(st.action[0], st.action[1], theta)
-        out.append(replace(st, action=action, robot=replace(st.robot, theta=theta)))
+        out.append(
+            replace(
+                st,
+                action=action,
+                robot=replace(st.robot, theta=theta, kinematics="unicycle"),
+                potential_factor=3.0,
+            )
+        )
     return tuple(out)
 
 
@@ -113,21 +119,36 @@ def smoke_action(vx: float, vy: float) -> Tuple[float, float]:
 
 def default_smoke_states() -> Tuple[CrowdNavRewardState, ...]:
     """Deterministic snapshots for RewardValidator smoke tests."""
-    goal = (0.0, SMOKE_CIRCLE_RADIUS)
+    from domains.crowdnav.env_wrapper import load_env_config
+
+    config = load_env_config(get_settings().env_config_source)
+    circle_radius = float(config.sim.circle_radius)
+    time_step = float(config.env.time_step)
+    time_limit = float(config.env.time_limit)
+    discomfort_dist = float(config.reward.discomfort_dist)
+    robot_radius = float(config.robot.radius)
+    robot_v_pref = float(config.robot.v_pref)
+    human_radius = float(config.humans.radius)
+    human_v_pref = float(config.humans.v_pref)
+    safe_separation = robot_radius + human_radius + discomfort_dist + 0.5
+    goal = (0.0, circle_radius)
+    near_goal_y = circle_radius * 0.95
+    start_y = -circle_radius * 0.5
+    away_y = -circle_radius * 0.75
 
     def _state(
         *,
-        py: float = -2.0,
+        py: float = start_y,
         px: float = 0.0,
         vx: float = 0.0,
-        vy: float = 1.0,
+        vy: float = robot_v_pref,
         humans: Tuple[HumanState, ...] = (),
         collision: bool = False,
         reached_goal: bool = False,
         timeout: bool = False,
-        min_separation: float = 1.5,
-        progress: float = 0.25,
-        global_time: float = 2.0,
+        min_separation: float = safe_separation,
+        progress: float = time_step,
+        global_time: float = time_limit * 0.1,
     ) -> CrowdNavRewardState:
         dist = math.hypot(goal[0] - px, goal[1] - py)
         return CrowdNavRewardState(
@@ -139,8 +160,9 @@ def default_smoke_states() -> Tuple[CrowdNavRewardState, ...]:
                 gx=goal[0],
                 gy=goal[1],
                 theta=math.pi / 2.0,
-                radius=SMOKE_RADIUS,
-                v_pref=SMOKE_V_PREF,
+                radius=robot_radius,
+                v_pref=robot_v_pref,
+                kinematics=get_settings().kinematics,
             ),
             humans=humans,
             action=smoke_action(vx, vy),
@@ -148,37 +170,111 @@ def default_smoke_states() -> Tuple[CrowdNavRewardState, ...]:
             reached_goal=reached_goal,
             timeout=timeout,
             min_separation=min_separation,
-            discomfort_dist=SMOKE_DISCOMFORT_DIST,
+            discomfort_dist=discomfort_dist,
             goal_distance=dist,
             progress=progress,
-            time_step=SMOKE_TIME_STEP,
+            time_step=time_step,
             global_time=global_time,
-            time_limit=SMOKE_TIME_LIMIT,
+            time_limit=time_limit,
+            danger=min_separation < discomfort_dist,
+            discomfort_penalty_factor=float(config.reward.discomfort_penalty_factor),
+            success_reward=float(config.reward.success_reward),
+            collision_penalty=float(config.reward.collision_penalty),
+            potential_delta=float(progress),
+            potential_factor=3.0 if get_settings().kinematics == "unicycle" else 2.0,
         )
 
     crowd = (
-        HumanState(px=1.5, py=0.0, vx=-0.8, vy=0.3, radius=SMOKE_RADIUS),
-        HumanState(px=-2.0, py=1.0, vx=0.7, vy=-0.5, radius=SMOKE_RADIUS),
-        HumanState(px=0.5, py=3.0, vx=0.0, vy=-1.0, radius=SMOKE_RADIUS),
+        HumanState(
+            px=circle_radius * 0.375,
+            py=0.0,
+            vx=-0.8 * human_v_pref,
+            vy=0.3 * human_v_pref,
+            radius=human_radius,
+            visible=True,
+        ),
+        HumanState(
+            px=-circle_radius * 0.5,
+            py=circle_radius * 0.25,
+            vx=0.7 * human_v_pref,
+            vy=-0.5 * human_v_pref,
+            radius=human_radius,
+        ),
+        HumanState(
+            px=circle_radius * 0.125,
+            py=circle_radius * 0.75,
+            vx=0.0,
+            vy=-human_v_pref,
+            radius=human_radius,
+            visible=True,
+        ),
     )
-    close = (HumanState(px=0.4, py=-1.4, vx=-0.5, vy=0.0, radius=SMOKE_RADIUS),)
+    close = (
+        HumanState(
+            px=robot_radius + human_radius + discomfort_dist / 2.0,
+            py=start_y,
+            vx=-0.5 * human_v_pref,
+            vy=0.0,
+            radius=human_radius,
+            visible=True,
+        ),
+    )
     return (
         # Heading to the goal through a crowd
-        _state(humans=crowd),
+        _state(humans=crowd, min_separation=discomfort_dist * 2.0),
         # Terminal outcomes
-        _state(collision=True, min_separation=-0.05, humans=close, py=-1.0, global_time=3.0),
-        _state(reached_goal=True, py=3.8, progress=0.25, humans=crowd, global_time=9.0),
-        _state(timeout=True, vx=0.0, vy=0.0, progress=0.0, humans=crowd, global_time=24.0),
+        _state(
+            collision=True,
+            min_separation=-discomfort_dist / 4.0,
+            humans=close,
+            py=start_y / 2.0,
+            global_time=time_limit * 0.15,
+        ),
+        _state(
+            reached_goal=True,
+            py=near_goal_y,
+            progress=time_step,
+            humans=crowd,
+            global_time=time_limit * 0.4,
+        ),
+        _state(
+            timeout=True,
+            vx=0.0,
+            vy=0.0,
+            progress=0.0,
+            humans=crowd,
+            global_time=max(0.0, time_limit - time_step),
+        ),
         # Stopped (freezing robot)
-        _state(vx=0.0, vy=0.0, progress=0.0, humans=crowd, global_time=5.0),
+        _state(vx=0.0, vy=0.0, progress=0.0, humans=crowd, global_time=time_limit * 0.2),
         # Discomfort zone
-        _state(humans=close, min_separation=0.1, py=-1.6, global_time=2.5),
+        _state(
+            humans=close,
+            min_separation=discomfort_dist / 2.0,
+            py=start_y * 0.8,
+            global_time=time_limit * 0.1 + time_step,
+        ),
         # Moving away from the goal
-        _state(vx=0.0, vy=-1.0, progress=-0.25, py=-3.0, humans=crowd, global_time=1.0),
+        _state(
+            vx=0.0,
+            vy=-1.0,
+            progress=-time_step,
+            py=away_y,
+            humans=crowd,
+            global_time=time_step,
+        ),
         # Sideways dodge at speed
-        _state(vx=0.9, vy=0.2, progress=0.05, px=0.8, py=-0.5, humans=crowd, global_time=4.0),
+        _state(
+            vx=0.9 * robot_v_pref,
+            vy=0.2 * robot_v_pref,
+            progress=time_step / 5.0,
+            px=circle_radius * 0.1,
+            py=start_y * 0.25,
+            humans=crowd,
+            global_time=time_limit * 0.16,
+        ),
         # Start of an episode, empty surroundings
-        _state(py=-3.75, progress=0.25, global_time=0.25),
+        _state(py=-circle_radius * 0.95, progress=time_step, global_time=time_step),
     )
 
 

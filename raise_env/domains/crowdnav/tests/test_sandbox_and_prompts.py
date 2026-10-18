@@ -180,8 +180,63 @@ def test_prompts_describe_the_crowdnav_state_and_objective():
         assert word not in low, word
 
 
+def test_prompts_read_active_crowdnav_python_config():
+    from domains.crowdnav.env_wrapper import load_env_config
+    from domains.crowdnav.settings import get_settings, set_settings
+
+    original = get_settings()
+    config = load_env_config()
+    config.sim.human_num = 8
+    config.sim.human_num_range = 2
+    config.sim.circle_radius = 3.5
+    config.env.time_limit = 19.0
+    config.env.time_step = 0.15
+    config.robot.sensor_range = 2.5
+    config.robot.FOV = 0.5
+    config.reward.success_reward = 4.0
+    config.reward.collision_penalty = -8.0
+    config.reward.discomfort_dist = 0.12
+    active = CrowdNavSettings(
+        kinematics=original.kinematics,
+        action_mode=original.action_mode,
+        env_config_obj=config,
+    )
+    set_settings(active)
+    try:
+        prompt = format_d1_initial(include_seed=False)
+        system_prompt = prompts.D1_SYSTEM_PROMPT
+        external_knowledge = prompts.D4_EXTERNAL_KNOWLEDGE
+        for text in (prompt, external_knowledge):
+            assert "between 6 and 10" in text
+            assert "3.5 m circle radius" in text
+            assert "2.5 m" in text
+            assert "0.5π radians" in text
+            assert "19 s" in text
+        for text in (system_prompt, external_knowledge):
+            assert "4 for success, -8 for collision" in text
+            assert "0.12 m" in text
+    finally:
+        set_settings(original)
+
+
 def test_action_space_prompt_block_follows_kinematics():
     holo = action_space_prompt_block(CrowdNavSettings())
     uni = action_space_prompt_block(CrowdNavSettings(kinematics="unicycle", action_mode="continuous"))
-    assert "(vx, vy)" in holo and "81 discrete CADRL actions" in holo
+    assert "(vx, vy)" in holo and "continuous 2-D Box" in holo
     assert "(v, r)" in uni and "continuous" in uni
+
+
+def test_feedback_card_ideal_time_uses_configured_geometry():
+    from domains.crowdnav.feedback_card import _ideal_nav_time
+    from raise_core.feedback import ArchiveRecord
+
+    record = ArchiveRecord(
+        candidate_id="candidate",
+        generation=0,
+        metadata={
+            "last_metrics": {
+                "eval_context": {"circle_radius_m": 3.5, "v_pref_mps": 0.7}
+            }
+        },
+    )
+    assert _ideal_nav_time(record) == pytest.approx(10.0)

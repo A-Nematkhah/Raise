@@ -1,14 +1,14 @@
-# RAISE (CrowdNav)
+# RAISE (CrowdNav++)
 
 LLM-guided reward evolution for crowd-aware robot navigation in the
-[vita-epfl/CrowdNav](https://github.com/vita-epfl/CrowdNav) simulator with
-Stable-Baselines3 PPO.
+[variable-human CrowdNav++](https://github.com/Shuijing725/CrowdNav_Prediction_AttnGraph)
+`CrowdSimVarNum` simulator with Stable-Baselines3 PPO.
 
 | Package | Role |
 |---------|------|
 | `raise_core/` | LLM client, reward sandbox, evolution loop, Stage III |
-| `domains/crowdnav/` | CrowdNav pack (prompts, env wrapper, PPO trainer, Score1, viz) + `data/` |
-| `third_party/crowdnav/` | Upstream `crowd_sim` @ `20d6780`, unmodified (MIT) |
+| `domains/crowdnav/` | CrowdNav++ pack (prompts, env wrapper, PPO trainer, Score1, viz) + `data/` |
+| `third_party/crowdnavpp/` | CrowdNav++ `CrowdSimVarNum` @ `3907731`, unmodified (MIT) |
 | `raise_paths.py` | Puts `raise_env/` and the vendored simulator on `sys.path` |
 
 Repository layout map: [`../docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md).
@@ -76,8 +76,8 @@ candidate) and `stage3/checkpoint.json` (per Stage III candidate).
 1. Gen0: the LLM proposes N reward functions; each passes the sandbox
    (AST policy → spawned smoke test → compile).
 2. Each of G generations: Score1 on the Stage I dataset, PPO train + holdout
-   eval of every new candidate, rank by fitness (mean discounted upstream
-   task return on `val` scenarios), LLM crossover /
+   eval of every new candidate, rank by fitness (mean upstream episode task
+   return on `val` scenarios), LLM crossover /
    mutation (with the evaluation metrics in the prompt) / random restarts,
    elitism. Default next generation at N=6: 1 elite + 2 crossover + 2
    mutation + 1 random; `--n-crossover`, `--n-mutation`, `--n-random` and
@@ -123,27 +123,29 @@ trajectory plot of the best policy on `test` scenarios; stochastic by
 default).
 
 Robot / action options: `--robot-kinematics {holonomic,unicycle}`,
-`--action-mode {discrete,continuous}` (discrete = the 81 CADRL actions),
-`--env-config` (an upstream-format `env.config`).
+`--action-mode {discrete,continuous}` (discrete uses the configured wrapper
+action table; defaults to 81 actions), `--env-config` (a CrowdNav++ Python
+config file exposing `Config` or `config`).
 
 ## Sanity checks and ablations
 
 ```bash
-# ORCA robot on all 500 test cases vs Chen et al. 2019 Table I (~6 s; exit 1 on mismatch)
-python scripts/check_orca_reference.py --out results/orca_reference_check.json
+# CrowdNav++ ORCA baseline report on the test split
+python scripts/check_orca_reference.py --out results/orca_report.json
 # Baselines on a finished run; --seeds applies to native-reward PPO (A)
 python scripts/run_baselines.py --run-dir results/crowdnav_16h --seeds 3 --skip-b --skip-c
 # PPO discount sweep: fixed rewards and blind eval, K3 per (reward, gamma, seed)
 python scripts/run_gamma_sweep.py --run-dir results/crowdnav_16h --gammas matched,0.99,0.995 --rewards native,final --seeds 2
 ```
 
-The paper's ORCA reward (0.054) is the discounted success/collision reward
-only; the RAISE fitness also counts discomfort penalties (−0.022 for ORCA).
-PPO discounts 0.99 per 0.25 s step (~25 s horizon) while the fitness discounts
-0.9 per second (~0.974 per step, ~9.6 s horizon); `matched` uses the latter.
-`run_baselines.py --ppo-gamma G` writes `baselines_gamma<G>.json`; the sweep
-writes `gamma_sweep.json` (resumable, paired per-seed deltas vs 0.99). Score1
-keeps `PPO_GAMMA`, so these change training only, not Stage I ranking.
+CrowdNav++'s evaluator sums native rewards within each episode and reports the
+mean; RAISE uses that same undiscounted episode return for fitness. PPO's
+`PPO_GAMMA` discounts learned rewards during training and is independent of
+the selection metric. In the PPO discount sweep, `matched` means `1.0` (no
+extra evaluation discount). `run_baselines.py --ppo-gamma G` writes
+`baselines_gamma<G>.json`; the sweep writes `gamma_sweep.json` (resumable,
+paired per-seed deltas vs the reference gamma). Score1 continues to use
+`PPO_GAMMA` for its Stage I preference proxy.
 
 LLM: Groq default `max_tokens` is 3500 (gpt-oss reasoning tokens count);
 override with `--llm-max-tokens` / `--llm-reasoning-effort`.

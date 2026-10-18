@@ -1,13 +1,13 @@
 # raise_env
 
-RAISE experiment tree: LLM-guided reward evolution on the vita-epfl/CrowdNav
-simulator.
+RAISE experiment tree: LLM-guided reward evolution on the variable-human
+CrowdNav++ simulator (`CrowdSimVarNum`).
 
 | Area | Location |
 |------|----------|
 | RAISE core | `raise_core/` |
-| CrowdNav domain | `domains/crowdnav/` (spec: [`domains/crowdnav/spec.md`](domains/crowdnav/spec.md)) |
-| Vendored simulator | `third_party/crowdnav/` ([`UPSTREAM.md`](third_party/crowdnav/UPSTREAM.md)) |
+| CrowdNav++ domain | `domains/crowdnav/` (spec: [`domains/crowdnav/spec.md`](domains/crowdnav/spec.md)) |
+| Active simulator | `third_party/crowdnavpp/` ([`UPSTREAM.md`](third_party/crowdnavpp/UPSTREAM.md)) |
 | CLIs | `scripts/` |
 
 ```bash

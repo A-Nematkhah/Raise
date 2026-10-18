@@ -1,50 +1,47 @@
 """
-Gymnasium env around the upstream CrowdNav simulator with sandboxed rewards.
+Gymnasium adapter for CrowdNav++'s variable-human ``CrowdSimVarNum``.
 
-``RewardInjectedCrowdNavEnv`` owns one unmodified ``crowd_sim.envs.CrowdSim``
-(vita-epfl/CrowdNav @ 20d6780, configured from ``env.config``) and only
-translates at the boundary:
+The simulator is configured from the upstream Python ``Config`` object/file.
+CrowdNav++ seeds global NumPy in ``reset``; the wrapper serializes simulator
+RNG access and keeps a per-env RNG state so resets and later random events do
+not perturb or interleave with other consumers.
 
-* actions: discrete CADRL action index or continuous ``Box([-1, 1]^2)``
-  -> upstream ``ActionXY`` / ``ActionRot``;
-* observations: upstream joint state -> fixed-size robot-centric vector
-  (``CADRL.rotate`` per human, self features once);
-* episode end: upstream ``done`` + ``info`` -> gymnasium
-  ``terminated`` (``Collision`` / ``ReachGoal``) or ``truncated`` (``Timeout``);
-* reward: ``reward_fn.compute(CrowdNavRewardState)``; the upstream reward is
-  kept in ``info["raise_native_reward"]`` (and used when ``reward_fn`` is None).
-
-Scenario seeding. Upstream ``reset(phase, test_case)`` seeds the global numpy
-RNG with ``offset[phase] + case`` (val 0+, test 1000+, train 2000+) and draws
-the human start / goal positions. ``reset(seed=s)`` maps ``s`` to a case of
-the env's phase (identity modulo the phase size for ``val`` / ``test``, a
-hashed start for ``train``); without a seed the upstream case counter simply
-advances. The global numpy RNG state is restored after every reset, so the
-env does not perturb other consumers of ``np.random``. Stepping is
-deterministic (ORCA humans, no noise).
+The upstream variable-human ``step`` always requests future-danger scoring,
+but only computes ``human_future_traj`` while ``phase == 'test'``. For val
+cases the wrapper therefore resets with the real val phase (preserving its
+seed offset and case counter), then uses the test-time future-danger branch
+while stepping, identically to test evaluation. No upstream files are changed.
 """
 
 from __future__ import annotations
 
-import configparser
+import copy
+import hashlib
+import importlib.util
 import logging
 import math
-from typing import Any, Dict, List, Optional, Tuple
+import os
+import sys
+import threading
+import types
+from contextlib import contextmanager
+from typing import Any, Dict, Iterator, List, Optional, Sequence
 
 import gymnasium as gym
 import numpy as np
 
-import raise_paths  # noqa: F401 — vendored crowd_sim on sys.path
-from crowd_sim.envs.crowd_sim import CrowdSim
-from crowd_sim.envs.policy.policy import Policy
+import raise_paths  # noqa: F401 — active crowd_sim vendor on sys.path
+from crowd_sim.envs.crowd_sim_var_num import CrowdSimVarNum
 from crowd_sim.envs.utils.action import ActionRot, ActionXY
-from crowd_sim.envs.utils.info import Collision, Danger, ReachGoal, Timeout
-from crowd_sim.envs.utils.robot import Robot
-from crowd_sim.envs.utils.utils import point_to_segment_dist
+from crowd_sim.envs.utils.info import Collision, Danger, Nothing, ReachGoal, Timeout
+from crowd_nav.policy.srnn import SRNN
 
 from domains.crowdnav.render import render_frame
 from domains.crowdnav.settings import (
     CrowdNavSettings,
+    UNICYCLE_ROTATION_DELTA_MAX,
+    UNICYCLE_SPEED_DELTA_MAX,
+    UNICYCLE_SPEED_DELTA_MIN,
     continuous_to_velocity,
     discrete_action_table,
     get_settings,
@@ -53,90 +50,203 @@ from domains.crowdnav.settings import (
 from domains.crowdnav.state import CrowdNavRewardState, HumanState, RobotState
 from domains.crowdnav.watchdog import beat as watchdog_beat
 
+logger = logging.getLogger(__name__)
+
 PHASES = ("train", "val", "test")
-# dg, v_pref, theta, radius, vx, vy (robot) | px1, py1, vx1, vy1, radius1, da, radius_sum (per human)
-SELF_FEATURES = 6
-HUMAN_FEATURES = 7
+HUMAN_OBSERVATION_KEYS = (
+    "robot_node",
+    "temporal_edges",
+    "visible_masks",
+    "spatial_edges",
+    "detected_human_num",
+)
+_REQUIRED_CONFIG_SECTIONS = (
+    "env",
+    "reward",
+    "sim",
+    "humans",
+    "robot",
+    "action_space",
+    "orca",
+    "data",
+    "sim2real",
+)
+_UPSTREAM_RNG_LOCK = threading.RLock()
+_CONFIG_IMPORT_LOCK = threading.RLock()
 _EVAL_CASE_STRIDE = 97
-_REQUIRED_SECTIONS = ("env", "reward", "sim", "humans", "robot")
 
 
-def load_env_config(path: str) -> configparser.RawConfigParser:
-    """Parse an upstream-format ``env.config``."""
-    cfg = configparser.RawConfigParser()
-    if not cfg.read(path):
-        raise FileNotFoundError(f"CrowdNav env config not found: {path}")
-    missing = [s for s in _REQUIRED_SECTIONS if not cfg.has_section(s)]
+@contextmanager
+def _preserve_numpy_rng() -> Iterator[None]:
+    with _UPSTREAM_RNG_LOCK:
+        state = np.random.get_state()
+        try:
+            yield
+        finally:
+            np.random.set_state(state)
+
+
+def _configuration_candidate(module: types.ModuleType) -> Any:
+    candidate = getattr(module, "Config", None)
+    if candidate is None:
+        candidate = getattr(module, "config", None)
+    if candidate is None:
+        factory = getattr(module, "get_config", None)
+        if callable(factory):
+            candidate = factory()
+    if candidate is None:
+        raise ValueError(
+            f"Python env config {module.__file__!r} must expose Config, config, "
+            "or get_config()"
+        )
+    return candidate() if isinstance(candidate, type) else candidate
+
+
+def _clone_configuration(candidate: Any) -> Any:
+    if isinstance(candidate, types.ModuleType):
+        candidate = _configuration_candidate(candidate)
+    elif isinstance(candidate, type):
+        candidate = candidate()
+
+    cloned = copy.copy(candidate)
+    attributes: Dict[str, Any] = {}
+    for cls in reversed(type(candidate).__mro__):
+        attributes.update(
+            {
+                name: value
+                for name, value in vars(cls).items()
+                if not name.startswith("__") and not callable(value)
+            }
+        )
+    attributes.update(vars(candidate))
+    for name, value in attributes.items():
+        if not name.startswith("__") and not callable(value):
+            setattr(cloned, name, copy.deepcopy(value))
+    return cloned
+
+
+def _load_config_module(path: str) -> types.ModuleType:
+    resolved = os.path.abspath(os.fspath(path))
+    if not os.path.isfile(resolved):
+        raise FileNotFoundError(f"CrowdNav++ Python config not found: {resolved}")
+    if os.path.splitext(resolved)[1].lower() != ".py":
+        raise ValueError(f"CrowdNav++ env config must be a Python file: {resolved}")
+
+    name = "_raise_crowdnavpp_config_" + hashlib.sha1(
+        os.path.normcase(resolved).encode("utf-8")
+    ).hexdigest()
+    with _CONFIG_IMPORT_LOCK:
+        cached = sys.modules.get(name)
+        if isinstance(cached, types.ModuleType):
+            return cached
+        spec = importlib.util.spec_from_file_location(name, resolved)
+        if spec is None or spec.loader is None:
+            raise ImportError(f"Unable to load CrowdNav++ Python config: {resolved}")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        old_argv = sys.argv
+        sys.argv = [old_argv[0] if old_argv else resolved]
+        try:
+            spec.loader.exec_module(module)
+        except Exception:
+            sys.modules.pop(name, None)
+            raise
+        finally:
+            sys.argv = old_argv
+        return module
+
+
+def load_env_config(source: Any = None) -> Any:
+    """Load and isolate an upstream Python config object or ``.py`` file."""
+    if source is None:
+        source = get_settings().env_config_source
+    if isinstance(source, (str, os.PathLike)):
+        source = _configuration_candidate(_load_config_module(os.fspath(source)))
+    config = _clone_configuration(source)
+    missing = [name for name in _REQUIRED_CONFIG_SECTIONS if not hasattr(config, name)]
     if missing:
-        raise ValueError(f"CrowdNav env config {path} lacks sections {missing}")
-    return cfg
+        raise ValueError(f"CrowdNav++ Python config lacks sections {missing}")
+    return config
 
 
-class ExternalRobotPolicy(Policy):
-    """
-    Robot policy placeholder: actions come from the RAISE PPO policy via ``step``.
+class ExternalRobotPolicy(SRNN):
+    """Keep CrowdNav++'s action clipping while taking actions from the caller."""
 
-    Upstream ``reset`` reads ``robot.policy.multiagent_training`` (True: all
-    ``human_num`` humans in train/val, as for SARL) and sets
-    ``policy.time_step``; the robot's kinematics come from the policy.
-    """
-
-    def __init__(self, kinematics: str) -> None:
-        super().__init__()
-        self.name = "raise_ppo"
-        self.trainable = True
-        self.kinematics = str(kinematics)
-        self.multiagent_training = True
-
-    def configure(self, config: Any) -> None:
-        return None
+    def __init__(self, config: Any) -> None:
+        super().__init__(config)
+        self.name = "raise_external"
 
     def predict(self, state: Any) -> Any:
-        raise RuntimeError("the robot is driven through RewardInjectedCrowdNavEnv.step")
+        raise RuntimeError("The robot is controlled through RewardInjectedCrowdNavEnv.step")
 
 
-def make_crowd_sim(env_config: configparser.RawConfigParser, kinematics: str) -> CrowdSim:
-    """Configured upstream ``CrowdSim`` with an externally driven robot."""
-    sim = CrowdSim()
-    sim.configure(env_config)
-    for rule in (sim.train_val_sim, sim.test_sim):
-        if rule == "mixed":
-            # 'mixed' redraws the human count every episode; the policy
-            # observation has a fixed number of human slots.
-            raise ValueError("CrowdNav 'mixed' scenarios (variable human count) are not supported")
-    if int(sim.human_num) < 1:
-        raise ValueError("CrowdNav env needs human_num >= 1")
-    robot = Robot(env_config, "robot")
-    robot.set_policy(ExternalRobotPolicy(kinematics))
-    sim.set_robot(robot)
+def make_crowd_sim(
+    env_config: Any,
+    settings: CrowdNavSettings | str,
+) -> CrowdSimVarNum:
+    """Build the unmodified CrowdNav++ variable-human simulator."""
+    if isinstance(settings, str):
+        settings = CrowdNavSettings(kinematics=settings)
+    active = validate_settings(settings)
+    config = load_env_config(env_config)
+
+    if active.human_num_override is not None:
+        config.sim.human_num = active.human_num_override
+        config.sim.human_num_range = 0
+    human_num = int(config.sim.human_num)
+    human_num_range = int(config.sim.human_num_range)
+    if human_num < 1 or human_num_range < 0 or human_num_range >= human_num:
+        raise ValueError(
+            "CrowdNav++ requires human_num >= 1 and "
+            "0 <= human_num_range < human_num"
+        )
+    if active.kinematics == "unicycle" and human_num_range < human_num - 1:
+        raise ValueError(
+            "CrowdNav++ unicycle initialization samples 1..human_num+human_num_range, "
+            "but the simulator asserts human_num-human_num_range as its minimum; "
+            "set human_num_range >= human_num-1 or use holonomic kinematics"
+        )
+
+    config.action_space.kinematics = active.kinematics
+    config.robot.policy = "srnn"
+    config.sim.predict_method = "none"
+    config.env.use_wrapper = False
+
+    with _preserve_numpy_rng():
+        sim = CrowdSimVarNum()
+        sim.configure(config)
+        sim.robot.policy = ExternalRobotPolicy(config)
+    sim.thisSeed = 0
+    sim.nenv = 1
+    sim.phase = None
+    sim.test_case = None
     return sim
 
 
 def scenario_case(seed: int, phase: str, size: int) -> int:
-    """Upstream case index for ``reset(seed=...)`` in ``phase``."""
+    """Map wrapper seeds to deterministic upstream case indices."""
+    size = int(size)
+    if phase not in PHASES:
+        raise ValueError(f"phase must be one of {PHASES}, got {phase!r}")
+    if size < 1:
+        raise ValueError(f"phase case-set size must be >= 1, got {size}")
     if phase == "train":
-        # Hashed start: consecutive PPO env seeds (s, s+1, ...) must not
-        # replay overlapping case sequences.
         draw = np.random.SeedSequence(abs(int(seed))).generate_state(1, dtype=np.uint64)[0]
         return int(draw % np.uint64(size))
-    return int(seed) % int(size)
+    return int(seed) % size
 
 
 def eval_cases(seed_base: int, n_episodes: int, size: int) -> List[int]:
-    """Deterministic case indices for one evaluation.
-
-    Returns ``n_episodes`` indices in ``[0, size)``. When ``n_episodes <= size``
-    they are distinct (full cycle of a fixed stride). When ``n_episodes > size``
-    the sequence wraps and repeats cases; with a stochastic policy that still
-    gives independent rollouts on the same case, so callers should treat the
-    extras as additional samples rather than new scenarios.
-    """
-    size = max(1, int(size))
-    n_episodes = max(0, int(n_episodes))
+    """Return a reproducible case cycle, distinct until the case set is exhausted."""
+    size = int(size)
+    n_episodes = int(n_episodes)
+    if size < 1:
+        raise ValueError(f"phase case-set size must be >= 1, got {size}")
+    if n_episodes < 0:
+        raise ValueError(f"n_episodes must be >= 0, got {n_episodes}")
     if n_episodes > size:
-        logging.getLogger(__name__).warning(
-            "eval_cases: n_episodes=%d > case_set_size=%d; cases will cycle "
-            "(stochastic policies still see independent rollouts per repeat)",
+        logger.warning(
+            "eval_cases: n_episodes=%d > case_set_size=%d; cases will cycle",
             n_episodes,
             size,
         )
@@ -144,88 +254,93 @@ def eval_cases(seed_base: int, n_episodes: int, size: int) -> List[int]:
         np.random.SeedSequence(abs(int(seed_base))).generate_state(1, dtype=np.uint64)[0]
         % np.uint64(size)
     )
-    stride = _EVAL_CASE_STRIDE if math.gcd(_EVAL_CASE_STRIDE, int(size)) == 1 else 1
+    stride = _EVAL_CASE_STRIDE if math.gcd(_EVAL_CASE_STRIDE, size) == 1 else 1
     return [(start + i * stride) % size for i in range(n_episodes)]
 
 
-def step_min_separation(sim: CrowdSim, action: Any) -> float:
-    """
-    Upstream ``dmin`` of the coming step (``CrowdSim.step`` collision check).
+def step_min_separation(sim: CrowdSimVarNum, action: Any = None) -> float:
+    """Minimum boundary gap at the start of the step, using upstream's collision geometry.
 
-    Closest boundary distance between the robot and each human along this
-    step's relative motion; unlike upstream it does not stop at the first
-    colliding human, so a collision step reports the most negative value.
+    CrowdNav++ checks current robot-human positions before moving either agent;
+    it does not project relative motion along a segment. This diagnostic reports
+    the smallest gap over all humans, including negative gaps on collision.
     """
+    del action
     robot = sim.robot
-    dmin = float("inf")
-    for human in sim.humans:
-        px = human.px - robot.px
-        py = human.py - robot.py
-        if robot.kinematics == "holonomic":
-            vx = human.vx - action.vx
-            vy = human.vy - action.vy
-        else:
-            vx = human.vx - action.v * np.cos(action.r + robot.theta)
-            vy = human.vy - action.v * np.sin(action.r + robot.theta)
-        ex = px + vx * sim.time_step
-        ey = py + vy * sim.time_step
-        dist = point_to_segment_dist(px, py, ex, ey, 0, 0) - human.radius - robot.radius
-        dmin = min(dmin, float(dist))
-    return dmin
-
-
-def robot_centric_observation(sim: CrowdSim) -> np.ndarray:
-    """
-    ``CADRL.rotate`` applied to every (robot, human) pair; robot features once.
-
-    The x axis points from the robot to its goal. Layout:
-    ``[dg, v_pref, theta, radius, vx, vy]`` then per human
-    ``[px1, py1, vx1, vy1, radius1, da, radius_sum]``. ``theta`` is the robot
-    heading relative to the goal direction for unicycle robots, else 0
-    (as upstream), wrapped to [-pi, pi).
-    """
-    r = sim.robot
-    dx, dy = r.gx - r.px, r.gy - r.py
-    rot = math.atan2(dy, dx)
-    cos_r, sin_r = math.cos(rot), math.sin(rot)
-    theta = 0.0
-    if r.kinematics == "unicycle":
-        theta = (r.theta - rot + math.pi) % (2.0 * math.pi) - math.pi
-    out = [
-        math.hypot(dx, dy),
-        r.v_pref,
-        theta,
-        r.radius,
-        r.vx * cos_r + r.vy * sin_r,
-        r.vy * cos_r - r.vx * sin_r,
+    if robot is None:
+        raise RuntimeError("CrowdNav++ simulator has no robot")
+    distances = [
+        math.hypot(human.px - robot.px, human.py - robot.py)
+        - human.radius
+        - robot.radius
+        for human in sim.humans
     ]
-    for h in sim.humans:
-        rx, ry = h.px - r.px, h.py - r.py
-        out += [
-            rx * cos_r + ry * sin_r,
-            ry * cos_r - rx * sin_r,
-            h.vx * cos_r + h.vy * sin_r,
-            h.vy * cos_r - h.vx * sin_r,
-            h.radius,
-            math.hypot(rx, ry),
-            r.radius + h.radius,
-        ]
-    return np.asarray(out, dtype=np.float32)
+    return float(min(distances)) if distances else float("inf")
+
+
+def _observation_space(sim: CrowdSimVarNum) -> gym.spaces.Dict:
+    max_humans = int(sim.max_human_num)
+    if max_humans < 1:
+        raise ValueError("CrowdNav++ observation requires at least one human slot")
+    unbounded = np.inf
+    return gym.spaces.Dict(
+        {
+            "robot_node": gym.spaces.Box(
+                -unbounded, unbounded, shape=(7,), dtype=np.float32
+            ),
+            "temporal_edges": gym.spaces.Box(
+                -unbounded, unbounded, shape=(2,), dtype=np.float32
+            ),
+            "visible_masks": gym.spaces.Box(
+                np.zeros(max_humans, dtype=np.bool_),
+                np.ones(max_humans, dtype=np.bool_),
+                dtype=np.bool_,
+            ),
+            "spatial_edges": gym.spaces.Box(
+                -unbounded,
+                unbounded,
+                shape=(max_humans, 2),
+                dtype=np.float32,
+            ),
+            "detected_human_num": gym.spaces.Box(
+                0, max_humans, shape=(), dtype=np.int64
+            ),
+        }
+    )
+
+
+def _format_observation(observation: Dict[str, Any]) -> Dict[str, Any]:
+    missing = [key for key in HUMAN_OBSERVATION_KEYS if key not in observation]
+    if missing:
+        raise KeyError(f"CrowdNav++ observation is missing keys {missing}")
+    converted = {
+        "robot_node": np.asarray(observation["robot_node"], dtype=np.float32),
+        "temporal_edges": np.asarray(observation["temporal_edges"], dtype=np.float32),
+        "visible_masks": np.asarray(observation["visible_masks"], dtype=np.bool_),
+        "spatial_edges": np.asarray(observation["spatial_edges"], dtype=np.float32),
+        "detected_human_num": int(observation["detected_human_num"]),
+    }
+    for key, value in converted.items():
+        if not np.all(np.isfinite(value)):
+            raise ValueError(f"CrowdNav++ observation {key!r} contains non-finite values")
+    return converted
 
 
 def outcome_of(info: Any) -> Optional[str]:
-    """``success`` / ``collision`` / ``timeout`` for terminal upstream infos, else None."""
+    """Return the wrapper outcome for a CrowdNav++ terminal info object."""
     if isinstance(info, ReachGoal):
         return "success"
     if isinstance(info, Collision):
         return "collision"
     if isinstance(info, Timeout):
         return "timeout"
-    return None
+    if isinstance(info, (Nothing, Danger)):
+        return None
+    raise TypeError(f"Unsupported CrowdNav++ info type: {type(info).__name__}")
 
 
 class RewardInjectedCrowdNavEnv(gym.Env):
-    """Upstream CrowdSim whose reward is ``reward_fn.compute(CrowdNavRewardState)``."""
+    """CrowdNav++ variable-human env with optional RAISE reward injection."""
 
     metadata = {"render_modes": ["rgb_array"], "render_fps": 4}
 
@@ -244,38 +359,65 @@ class RewardInjectedCrowdNavEnv(gym.Env):
         if render_mode not in (None, "rgb_array"):
             raise ValueError(f"unsupported render_mode {render_mode!r}")
         self.settings = validate_settings(settings or get_settings())
-        self.env_config = load_env_config(self.settings.env_config)
-        self.sim = make_crowd_sim(self.env_config, self.settings.kinematics)
+        self.env_config = load_env_config(self.settings.env_config_source)
+        self.sim = make_crowd_sim(self.env_config, self.settings)
         self.reward_fn = reward_fn
         self.phase = phase
         self.render_mode = render_mode
         self._seed = seed
         self._seed_consumed = False
+        self._sim_rng_state = None
 
         robot = self.sim.robot
         self.time_step = float(self.sim.time_step)
         self.time_limit = float(self.sim.time_limit)
         self.discomfort_dist = float(self.sim.discomfort_dist)
-        self.human_num = int(self.sim.human_num)
+        self.human_num = int(self.sim.config.sim.human_num)
+        self.min_human_num = int(self.sim.min_human_num)
+        self.max_human_num = int(self.sim.max_human_num)
         self.v_pref = float(robot.v_pref)
         if self.settings.action_mode == "discrete":
             self.action_table = discrete_action_table(self.settings, self.v_pref)
             self.action_space = gym.spaces.Discrete(len(self.action_table))
         else:
             self.action_table = []
-            self.action_space = gym.spaces.Box(-1.0, 1.0, shape=(2,), dtype=np.float32)
-        dim = SELF_FEATURES + HUMAN_FEATURES * self.human_num
-        self.observation_space = gym.spaces.Box(-np.inf, np.inf, shape=(dim,), dtype=np.float32)
+            if self.settings.kinematics == "holonomic":
+                low = np.full(2, -self.v_pref, dtype=np.float32)
+                high = np.full(2, self.v_pref, dtype=np.float32)
+            else:
+                low = np.asarray(
+                    [UNICYCLE_SPEED_DELTA_MIN, -UNICYCLE_ROTATION_DELTA_MAX],
+                    dtype=np.float32,
+                )
+                high = np.asarray(
+                    [UNICYCLE_SPEED_DELTA_MAX, UNICYCLE_ROTATION_DELTA_MAX],
+                    dtype=np.float32,
+                )
+            self.action_space = gym.spaces.Box(
+                low=low,
+                high=high,
+                dtype=np.float32,
+            )
+        self.observation_space = _observation_space(self.sim)
 
         self.current_phase = phase
         self.case: Optional[int] = None
         self.last_state: Optional[CrowdNavRewardState] = None
         self._goal_distance = 0.0
-        self._trail: List[Tuple[float, float]] = []
+        self._trail: List[tuple[float, float]] = []
 
-    # ------------------------------------------------------------------ gym API
+    def _format_observation(self, observation: Dict[str, Any]) -> Dict[str, Any]:
+        formatted = _format_observation(observation)
+        if not self.observation_space.contains(formatted):
+            raise ValueError("CrowdNav++ observation is outside the declared Gymnasium space")
+        return formatted
 
-    def reset(self, *, seed: Optional[int] = None, options: Optional[Dict[str, Any]] = None):
+    def reset(
+        self,
+        *,
+        seed: Optional[int] = None,
+        options: Optional[Dict[str, Any]] = None,
+    ):
         super().reset(seed=seed)
         if hasattr(self.reward_fn, "reset"):
             self.reward_fn.reset()
@@ -284,6 +426,9 @@ class RewardInjectedCrowdNavEnv(gym.Env):
         if phase not in PHASES:
             raise ValueError(f"phase must be one of {PHASES}, got {phase!r}")
         size = int(self.sim.case_size[phase])
+        if size < 1:
+            raise ValueError(f"CrowdNav++ {phase} case set must contain at least one case")
+
         case: Optional[int] = None
         if opts.get("case") is not None:
             case = int(opts["case"]) % size
@@ -291,72 +436,138 @@ class RewardInjectedCrowdNavEnv(gym.Env):
             case = scenario_case(int(seed), phase, size)
             self._seed_consumed = True
         elif self._seed is not None and not self._seed_consumed:
-            # Construction seed applies once; later resets advance the upstream counter.
             case = scenario_case(int(self._seed), phase, size)
             self._seed_consumed = True
         used = int(case) if case is not None else int(self.sim.case_counter[phase])
 
-        rng_state = np.random.get_state()
-        try:
-            self.sim.reset(phase=phase, test_case=case)
-        finally:
-            np.random.set_state(rng_state)
+        with _UPSTREAM_RNG_LOCK:
+            global_rng_state = np.random.get_state()
+            try:
+                self.sim.phase = None
+                self.sim.test_case = None
+                self.sim.reset(phase=phase, test_case=case)
+                self._sim_rng_state = np.random.get_state()
+            finally:
+                np.random.set_state(global_rng_state)
 
-        robot = self.sim.robot
+        self.sim.phase = "test" if phase == "val" else phase
         self.current_phase = phase
         self.case = used
         self.last_state = None
+        robot = self.sim.robot
         self._goal_distance = math.hypot(robot.gx - robot.px, robot.gy - robot.py)
         self._trail = [(float(robot.px), float(robot.py))]
-        info = {"raise_phase": phase, "raise_case": used}
-        return robot_centric_observation(self.sim), info
+        return self._format_observation(self.sim.ob), {
+            "raise_phase": phase,
+            "raise_case": used,
+        }
 
     def step(self, action: Any):
         return self.step_upstream(self.to_upstream_action(action))
 
+    def close(self) -> None:
+        self.sim.close()
+
     def render(self) -> Optional[np.ndarray]:
         if self.render_mode != "rgb_array":
             return None
-        r = self.sim.robot
+        robot = self.sim.robot
         return render_frame(
-            robot_xy=(float(r.px), float(r.py)),
-            robot_radius=float(r.radius),
-            goal_xy=(float(r.gx), float(r.gy)),
-            humans=[(float(h.px), float(h.py), float(h.radius)) for h in self.sim.humans],
+            robot_xy=(float(robot.px), float(robot.py)),
+            robot_radius=float(robot.radius),
+            goal_xy=(float(robot.gx), float(robot.gy)),
+            humans=[
+                (float(human.px), float(human.py), float(human.radius))
+                for human in self.sim.humans
+            ],
             global_time=float(self.sim.global_time or 0.0),
             trail=self._trail,
         )
 
-    # ------------------------------------------------------------------ helpers
-
     def to_upstream_action(self, action: Any) -> Any:
-        """Policy action -> upstream ``ActionXY`` / ``ActionRot``."""
+        """Convert a policy action to an upstream ``ActionXY`` or ``ActionRot``."""
         if self.settings.action_mode == "discrete":
-            idx = int(np.asarray(action).reshape(-1)[0])
-            a, b = self.action_table[idx]
+            index = int(np.asarray(action).reshape(-1)[0])
+            if not 0 <= index < len(self.action_table):
+                raise ValueError(f"discrete action index {index} is out of range")
+            first, second = self.action_table[index]
         else:
-            a, b = continuous_to_velocity(action, self.settings, self.v_pref)
+            first, second = continuous_to_velocity(
+                action, self.settings, self.v_pref
+            )
         if self.settings.kinematics == "holonomic":
-            return ActionXY(float(a), float(b))
-        return ActionRot(float(a), float(b))
+            return ActionXY(float(first), float(second))
+        return ActionRot(float(first), float(second))
 
-    def step_upstream(self, up_action: Any):
-        """One upstream ``CrowdSim.step`` with an upstream action (collectors call this directly)."""
+    def _run_with_env_rng(self, operation: Any) -> Any:
+        with _UPSTREAM_RNG_LOCK:
+            global_rng_state = np.random.get_state()
+            if self._sim_rng_state is not None:
+                np.random.set_state(self._sim_rng_state)
+            try:
+                return operation()
+            finally:
+                self._sim_rng_state = np.random.get_state()
+                np.random.set_state(global_rng_state)
+
+    def _raw_action_and_executed(self, action: Any) -> tuple[np.ndarray, Any]:
+        if isinstance(action, (ActionXY, ActionRot)):
+            raw = np.asarray(action, dtype=np.float64)
+        else:
+            raw = np.asarray(action, dtype=np.float64).reshape(-1)
+        if raw.size != 2 or not np.all(np.isfinite(raw)):
+            raise ValueError("CrowdNav++ robot actions must contain two finite values")
+        raw = raw.copy()
+        executed = self.sim.robot.policy.clip_action(raw.copy(), self.v_pref)
+        return raw, executed
+
+    def step_upstream(self, upstream_action: Any):
+        """One native CrowdNav++ step, used by policies and Stage I collectors."""
         watchdog_beat()
-        sim = self.sim
-        dmin = step_min_separation(sim, up_action)
-        prev_dist = self._goal_distance
-        _ob, native_reward, _done, info_obj = sim.step(up_action)
+        raw_action, executed_action = self._raw_action_and_executed(upstream_action)
+        dmin = step_min_separation(self.sim, executed_action)
+        previous_goal_distance = self._goal_distance
+        robot_before = self.sim.robot
+        potential_cur = math.hypot(
+            robot_before.gx - robot_before.px,
+            robot_before.gy - robot_before.py,
+        )
+        potential_delta = -abs(potential_cur) - float(self.sim.potential)
+        reward_action = (float(executed_action[0]), float(executed_action[1]))
+        if robot_before.kinematics == "unicycle":
+            reward_action = (
+                float(
+                    np.clip(
+                        self.sim.desiredVelocity[0] + executed_action[0],
+                        -self.v_pref,
+                        self.v_pref,
+                    )
+                ),
+                float(executed_action[1]),
+            )
+        observation, native_reward, upstream_done, wrapped_info = self._run_with_env_rng(
+            lambda: self.sim.step(raw_action)
+        )
+        if not isinstance(wrapped_info, dict) or "info" not in wrapped_info:
+            raise TypeError("CrowdNav++ step info must contain the native 'info' object")
+        native_info = wrapped_info["info"]
+        outcome = outcome_of(native_info)
+        collision = isinstance(native_info, Collision)
+        reached_goal = isinstance(native_info, ReachGoal)
+        timeout = isinstance(native_info, Timeout)
+        danger = isinstance(native_info, Danger)
+        if bool(upstream_done) != bool(collision or reached_goal or timeout):
+            raise RuntimeError("CrowdNav++ done flag disagrees with its terminal info type")
 
-        timeout = isinstance(info_obj, Timeout)
-        collision = isinstance(info_obj, Collision)
-        reached = isinstance(info_obj, ReachGoal)
-        danger = isinstance(info_obj, Danger)
-        robot = sim.robot
-        goal_dist = math.hypot(robot.gx - robot.px, robot.gy - robot.py)
-        self._goal_distance = goal_dist
+        robot = self.sim.robot
+        visibility = self.sim.human_visibility
+        if len(visibility) != len(self.sim.humans):
+            raise RuntimeError(
+                "CrowdNav++ visibility flags do not match the current human population"
+            )
+        goal_distance = math.hypot(robot.gx - robot.px, robot.gy - robot.py)
+        self._goal_distance = goal_distance
         self._trail.append((float(robot.px), float(robot.py)))
-
         state = CrowdNavRewardState(
             robot=RobotState(
                 px=float(robot.px),
@@ -368,75 +579,89 @@ class RewardInjectedCrowdNavEnv(gym.Env):
                 theta=float(robot.theta),
                 radius=float(robot.radius),
                 v_pref=float(robot.v_pref),
+                kinematics=str(robot.kinematics),
             ),
             humans=tuple(
                 HumanState(
-                    px=float(h.px),
-                    py=float(h.py),
-                    vx=float(h.vx),
-                    vy=float(h.vy),
-                    radius=float(h.radius),
+                    px=float(human.px),
+                    py=float(human.py),
+                    vx=float(human.vx),
+                    vy=float(human.vy),
+                    radius=float(human.radius),
+                    visible=bool(visibility[index]),
                 )
-                for h in sim.humans
+                for index, human in enumerate(self.sim.humans)
             ),
-            action=(float(up_action[0]), float(up_action[1])),
+            action=reward_action,
             collision=collision,
-            reached_goal=reached,
+            reached_goal=reached_goal,
             timeout=timeout,
             min_separation=float(dmin),
             discomfort_dist=self.discomfort_dist,
-            goal_distance=float(goal_dist),
-            progress=float(prev_dist - goal_dist),
+            goal_distance=float(goal_distance),
+            progress=float(previous_goal_distance - goal_distance),
             time_step=self.time_step,
-            global_time=float(sim.global_time),
+            global_time=float(self.sim.global_time),
             time_limit=self.time_limit,
+            danger=danger,
+            success_reward=float(self.sim.success_reward),
+            collision_penalty=float(self.sim.collision_penalty),
+            discomfort_penalty_factor=float(self.sim.discomfort_penalty_factor),
+            potential_delta=float(potential_delta),
+            potential_factor=3.0 if robot.kinematics == "unicycle" else 2.0,
         )
         self.last_state = state
 
-        comps: Dict[str, float] = {}
+        components: Dict[str, float] = {}
         if self.reward_fn is None:
             reward = float(native_reward)
         else:
             reward = float(self.reward_fn.compute(state))
             getter = getattr(self.reward_fn, "last_reward_components", None)
             if callable(getter):
-                raw = getter()
-                if isinstance(raw, dict):
-                    comps = {str(k): float(v) for k, v in raw.items()}
+                raw_components = getter()
+                if isinstance(raw_components, dict):
+                    components = {
+                        str(key): float(value)
+                        for key, value in raw_components.items()
+                    }
 
+        danger_min_dist = float(native_info.min_dist) if danger else None
         info = {
-            "raise_outcome": outcome_of(info_obj),
+            "raise_outcome": outcome,
             "raise_collision": collision,
-            "raise_reached_goal": reached,
+            "raise_reached_goal": reached_goal,
             "raise_timeout": timeout,
             "raise_danger": danger,
-            "raise_danger_min_dist": float(info_obj.min_dist) if danger else None,
+            "raise_danger_min_dist": danger_min_dist,
             "raise_min_separation": float(dmin),
             "raise_native_reward": float(native_reward),
             "raise_progress": float(state.progress),
             "raise_speed": math.hypot(state.robot.vx, state.robot.vy),
-            "raise_goal_distance": float(goal_dist),
-            "raise_global_time": float(sim.global_time),
+            "raise_goal_distance": float(goal_distance),
+            "raise_global_time": float(self.sim.global_time),
             "raise_phase": self.current_phase,
             "raise_case": self.case,
-            "raise_reward_components": comps,
+            "raise_reward_components": components,
         }
-        terminated = bool(collision or reached)
-        truncated = bool(timeout)
-        return robot_centric_observation(sim), reward, terminated, truncated, info
+        return (
+            self._format_observation(observation),
+            reward,
+            bool(collision or reached_goal),
+            bool(timeout),
+            info,
+        )
 
 
 __all__ = [
-    "HUMAN_FEATURES",
+    "HUMAN_OBSERVATION_KEYS",
     "PHASES",
-    "SELF_FEATURES",
     "ExternalRobotPolicy",
     "RewardInjectedCrowdNavEnv",
     "eval_cases",
     "load_env_config",
     "make_crowd_sim",
     "outcome_of",
-    "robot_centric_observation",
     "scenario_case",
     "step_min_separation",
 ]

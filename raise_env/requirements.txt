@@ -1,4 +1,4 @@
-# RAISE (vita-epfl/CrowdNav crowd_sim, vendored in third_party/crowdnav) - verified on Windows, Python 3.10.
+# RAISE (CrowdNav++ CrowdSimVarNum, vendored in third_party/crowdnavpp) - verified on Windows, Python 3.10.
 # Adjust the cu1xx suffix to match your local CUDA driver (or use the CPU
 # wheel: pip install torch==2.11.0 --index-url https://download.pytorch.org/whl/cpu).
 
@@ -11,7 +11,7 @@ matplotlib==3.6.2
 Pillow==9.5.0
 tqdm==4.66.1
 
-# Upstream CrowdNav simulator dependencies (crowd_sim imports gym; ORCA humans use rvo2).
+# CrowdNav++ simulator dependencies (crowd_sim imports gym; ORCA humans use rvo2).
 gym==0.15.7
 # rvo2 (Python-RVO2) has no wheel and no pyproject.toml; its setup.py needs
 # Cython + CMake + a C++ compiler at build time, so it is installed separately:

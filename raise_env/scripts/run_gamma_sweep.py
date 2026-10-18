@@ -2,11 +2,10 @@
 """PPO training-discount sweep for a finished RAISE CrowdNav run.
 
 The reward function and the blind evaluation are held fixed; only the PPO
-discount changes. PPO discounts per policy step (dt = time_step), while the
-CrowdNav fitness weighs step t by CROWDNAV_EVAL_GAMMA ** (t * time_step * v_pref)
-(0.9 per second at v_pref = 1). The per-step gamma that matches the fitness is
-therefore CROWDNAV_EVAL_GAMMA ** (time_step * v_pref) (~0.974 for the upstream
-config); the pipeline default 0.99 corresponds to a ~2.6x longer horizon.
+training discount changes. CrowdNav++'s evaluator sums native rewards within
+each episode without discounting, so ``matched`` uses PPO gamma 1.0. Fitness
+is unchanged by the training gamma and remains the mean upstream episode
+task return.
 
 Every (reward, gamma, seed) run trains for K3 steps and is scored with the
 final-eval protocol (split=test, same cases, stochastic policy). Training seeds
@@ -39,12 +38,14 @@ import statistics  # noqa: E402
 from typing import Any, Dict, List, Optional, Sequence, Tuple  # noqa: E402
 
 from domains.crowdnav.adapter import CrowdNavPPOTrainer  # noqa: E402
-from domains.crowdnav.env_wrapper import load_env_config  # noqa: E402
 from domains.crowdnav.metrics import paired_difference  # noqa: E402
-from domains.crowdnav.objective_constants import CROWDNAV_EVAL_GAMMA, PPO_GAMMA  # noqa: E402
+from domains.crowdnav.objective_constants import (  # noqa: E402
+    CROWDNAV_EVAL_GAMMA,
+    CROWDNAV_FITNESS_OBJECTIVE,
+    PPO_GAMMA,
+)
 from domains.crowdnav.prompts import D5_SEED_FUNCTION  # noqa: E402
 from domains.crowdnav.reward_checks import make_crowdnav_validator  # noqa: E402
-from domains.crowdnav.settings import DEFAULT_ENV_CONFIG_PATH  # noqa: E402
 from raise_core.candidate import RewardCandidate  # noqa: E402
 from raise_core.console import ensure_utf8_stdio  # noqa: E402
 from raise_core.json_io import atomic_write_json, read_json_dict  # noqa: E402
@@ -68,11 +69,9 @@ def _load_baselines_module() -> Any:
 
 
 def matched_gamma(env_config_path: Optional[str]) -> float:
-    """Per-step PPO gamma equal to the fitness discount for this env config."""
-    cfg = load_env_config(env_config_path or DEFAULT_ENV_CONFIG_PATH)
-    time_step = cfg.getfloat("env", "time_step")
-    v_pref = cfg.getfloat("robot", "v_pref")
-    return float(CROWDNAV_EVAL_GAMMA ** (time_step * v_pref))
+    """Per-step PPO gamma matching the evaluator's undiscounted return."""
+    del env_config_path
+    return float(CROWDNAV_EVAL_GAMMA)
 
 
 def parse_gammas(text: str, *, matched: float) -> List[float]:
@@ -202,9 +201,10 @@ def run_gamma_sweep(
     out_path = os.path.join(run_dir, out_name)
     previous = read_json_dict(out_path) or {}
     runs: Dict[str, Dict[str, Any]] = dict(previous.get("runs") or {})
-    # Resumed runs only count when train budget and eval protocol match.
+    # Reuse results only when fitness, train budget, and evaluation protocol match.
     if previous and (
-        previous.get("train_steps_k3") != k3
+        previous.get("fitness_objective") != CROWDNAV_FITNESS_OBJECTIVE
+        or previous.get("train_steps_k3") != k3
         or previous.get("eval_episodes") != n_eval
         or previous.get("seed_base") != seed_base
     ):
@@ -223,7 +223,8 @@ def run_gamma_sweep(
         "eval_episodes": n_eval,
         "eval_deterministic": False,
         "train_steps_k3": k3,
-        "eval_gamma_per_second": CROWDNAV_EVAL_GAMMA,
+        "fitness_objective": CROWDNAV_FITNESS_OBJECTIVE,
+        "evaluation_discount": CROWDNAV_EVAL_GAMMA,
         "matched_gamma": g_match,
         "reference_gamma": ref,
         "gammas": gamma_list,

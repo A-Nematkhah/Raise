@@ -17,7 +17,7 @@ import domains.crowdnav.prompts as cn_prompts
 from domains.crowdnav import feedback_card as fc
 from domains.crowdnav.adapter import _eval_metrics
 from domains.crowdnav.metrics import attach_fitness
-from domains.crowdnav.objective_constants import CROWDNAV_EVAL_GAMMA, PPO_GAMMA
+from domains.crowdnav.objective_constants import PPO_GAMMA
 from domains.crowdnav.reward_checks import make_crowdnav_validator
 from domains.crowdnav.training_dynamics import TrainingDynamicsRecorder
 from raise_core.explore import RewardCandidate, StageIConfig, StageIEvolver
@@ -776,9 +776,9 @@ def test_eval_metrics_keeps_per_episode_records(record_components):
     assert ok["outcome"] == "success" and crash["outcome"] == "collision"
     assert ok["return"] == pytest.approx(3.0)
     assert ok["disc_return"] == pytest.approx(1 + PPO_GAMMA + PPO_GAMMA ** 2, abs=1e-4)
-    # Upstream Explorer discount: gamma ** (t * time_step * v_pref).
-    assert ok["task_return"] == pytest.approx(CROWDNAV_EVAL_GAMMA ** (2 * 0.25), abs=1e-4)
-    assert crash["task_return"] == pytest.approx(-0.25 * CROWDNAV_EVAL_GAMMA ** 0.25, abs=1e-4)
+    # CrowdNav++ fitness matches the evaluator's raw sum of native rewards.
+    assert ok["task_return"] == pytest.approx(1.0)
+    assert crash["task_return"] == pytest.approx(-0.25)
     assert crash["steps"] == 2 and ok["path_length"] == pytest.approx(3.0)
     assert ok["danger_steps"] == 1 and ok["time"] == pytest.approx(0.75)
     if record_components:

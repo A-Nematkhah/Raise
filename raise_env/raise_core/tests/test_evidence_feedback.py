@@ -125,13 +125,18 @@ def test_batch_candidates_do_not_store_shared_preamble_as_diagnosis(tmp_path):
 
     from raise_core.explore import StageIConfig
 
-    batch_body = (
-        "Below are six independent reward functions for CrowdNav.\n\n"
-        + "\n\n".join(
-            f"```python\n{D5_SEED_FUNCTION.replace('0.5', str(0.4 + 0.1 * i))}\n```"
-            for i in range(2)
+    potential_term = "potential_term = state.potential_factor * state.potential_delta"
+    variants = [
+        D5_SEED_FUNCTION.replace(
+            potential_term,
+            "potential_term = state.potential_factor * "
+            + str(0.4 + 0.1 * i)
+            + " * state.potential_delta",
         )
-    )
+        for i in range(2)
+    ]
+    batch_body = "Below are six independent reward functions for CrowdNav.\n\n"
+    batch_body += "\n\n".join(f"```python\n{code}\n```" for code in variants)
     evo = StageIEvolver(
         ScriptedLLMClient([batch_body]),
         score_fn=lambda *_a, **_k: type("R", (), {"score": 0.1, "rejected": False})(),

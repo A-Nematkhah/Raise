@@ -5,7 +5,7 @@ tests and data. RAISE currently has one domain:
 
 | Domain | Package | Role |
 |--------|---------|------|
-| `crowdnav` | `domains.crowdnav` | vita-epfl/CrowdNav `crowd_sim` (vendored) + SB3 PPO |
+| `crowdnav` | `domains.crowdnav` | CrowdNav++ `CrowdSimVarNum` (vendored) + SB3 PPO |
 
 Registry: `raise_core.domains` (`load_domain`, trainer / validator / Score1
 factories).

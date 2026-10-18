@@ -76,7 +76,7 @@ def _load_collect_module() -> Any:
 
 def _space_knobs(run_cfg: Dict[str, Any]) -> Dict[str, Any]:
     return {
-        "action_mode": str(run_cfg.get("action_mode") or "discrete"),
+        "action_mode": str(run_cfg.get("action_mode") or "continuous"),
         "robot_kinematics": str(run_cfg.get("robot_kinematics") or "holonomic"),
         "action_speed_samples": int(run_cfg.get("action_speed_samples") or 5),
         "action_rotation_samples": int(run_cfg.get("action_rotation_samples") or 16),

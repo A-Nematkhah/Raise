@@ -37,7 +37,7 @@ class Stage2Config:
     # and the final blind eval on test.
     eval_split: str = "val"
     # Robot / action space (domains.crowdnav.settings).
-    action_mode: str = "discrete"
+    action_mode: str = "continuous"
     robot_kinematics: str = "holonomic"
     action_speed_samples: int = 5
     action_rotation_samples: int = 16

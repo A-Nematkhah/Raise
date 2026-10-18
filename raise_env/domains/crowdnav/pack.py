@@ -1,4 +1,4 @@
-"""CrowdNav domain pack for RAISE (vita-epfl/CrowdNav simulator)."""
+"""CrowdNav++ domain pack for RAISE."""
 
 from __future__ import annotations
 
@@ -23,18 +23,18 @@ from domains.crowdnav.state import fingerprint_smoke_states
 
 _PACK_DIR = os.path.dirname(os.path.abspath(__file__))
 
-UPSTREAM_REPO = "https://github.com/vita-epfl/CrowdNav"
-UPSTREAM_COMMIT = "20d678085c06831e658a65b9e20c8bb6f6ecdc10"
+UPSTREAM_REPO = "https://github.com/Shuijing725/CrowdNav_Prediction_AttnGraph"
+UPSTREAM_COMMIT = "390773137be04ed14e27620dc5fd7c5e1a5b1f62"
 
 
 def get_pack(*, with_adapter: bool = True) -> DomainPack:
     adapter = CrowdNavAdapter() if with_adapter else None
     return DomainPack(
         name="crowdnav",
-        display_name="CrowdNav (vita-epfl)",
+        display_name="CrowdNav++ (variable-human)",
         description=(
-            "Crowd-aware robot navigation in the vita-epfl/CrowdNav simulator "
-            "(ORCA humans, circle crossing); SB3 PPO."
+            "Crowd-aware robot navigation in CrowdNav++ CrowdSimVarNum "
+            "(variable human population, ORCA humans); SB3 PPO."
         ),
         prompts=crowdnav_prompts,
         feedback_card=crowdnav_feedback_card,
@@ -54,18 +54,18 @@ def get_pack(*, with_adapter: bool = True) -> DomainPack:
         make_stage3_trainer=make_stage3_trainer if with_adapter else None,
         selection_scalar_name="crowdnav_task_return",
         metadata={
-            "simulator": "vita-epfl/CrowdNav crowd_sim (vendored, unmodified)",
+            "simulator": "Shuijing725/CrowdNav_Prediction_AttnGraph CrowdSimVarNum (vendored, unmodified)",
             "upstream_repo": UPSTREAM_REPO,
             "upstream_commit": UPSTREAM_COMMIT,
-            "env_config": "third_party/crowdnav/configs/env.config",
-            "policy": "sb3_ppo_mlp",
+            "env_config": "third_party/crowdnavpp/crowd_nav/configs/config.py",
+            "policy": "sb3_ppo_multiinput_masked_human_pool",
             "pipeline_profile": "crowdnav",
             "stage1": "crowdnav_outcome_preference",
             "fitness": "crowdnav_task_return",
             "selection_scalar": "crowdnav_task_return",
             "objective": (
-                "Official fitness = mean discounted upstream CrowdNav task return "
-                "(Explorer.run_k_episodes, gamma 0.9 per second) on holdout val "
+                "Official fitness = mean undiscounted sum of native upstream "
+                "CrowdNav++ rewards per episode (rl/evaluation.py) on holdout val "
                 "scenarios. Score1 is a Stage-I proxy only; PPO optimizes the LLM "
                 "compute_reward."
             ),

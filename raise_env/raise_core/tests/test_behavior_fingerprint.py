@@ -16,11 +16,14 @@ def test_behavior_fingerprint_collides_on_comment_only_diff():
     validator = make_crowdnav_validator()
     a = D5_SEED_FUNCTION
     b = D5_SEED_FUNCTION.replace(
-        '"""CrowdNav seed: the upstream CrowdSim reward (crowd_nav/configs/env.config)."""',
+        '"""Reproduce the configured CrowdNav++ CrowdSim reward."""',
         '"""Different comment only."""',
     )
     # float() cast changes the AST fingerprint but not the totals.
-    b2 = a.replace("discomfort_penalty_factor = 0.5", "discomfort_penalty_factor = float(0.5)")
+    b2 = a.replace(
+        "potential_term = state.potential_factor * state.potential_delta",
+        "potential_term = float(state.potential_factor) * state.potential_delta",
+    )
     fa, ea = validator.try_validate(a)
     fb, eb = validator.try_validate(b)
     fc, ec = validator.try_validate(b2)
@@ -35,7 +38,10 @@ def test_behavior_fingerprint_collides_on_comment_only_diff():
 def test_behavior_fingerprint_differs_for_constant_change():
     validator = make_crowdnav_validator()
     a = D5_SEED_FUNCTION
-    b = D5_SEED_FUNCTION.replace("success_reward = 1.0", "success_reward = 2.0")
+    b = D5_SEED_FUNCTION.replace(
+        "goal_reward = state.success_reward",
+        "goal_reward = state.success_reward + 1.0",
+    )
     fa, _ = validator.try_validate(a)
     fb, _ = validator.try_validate(b)
     assert fa and fb
@@ -54,7 +60,8 @@ def test_categorize_duplicate_behavior():
 def test_evolver_rejects_behavioral_duplicate(tmp_path):
     validator = make_crowdnav_validator()
     twin = D5_SEED_FUNCTION.replace(
-        "discomfort_penalty_factor = 0.5", "discomfort_penalty_factor = float(0.5)"
+        "potential_term = state.potential_factor * state.potential_delta",
+        "potential_term = float(state.potential_factor) * state.potential_delta",
     )
     assert genome_fingerprint(D5_SEED_FUNCTION) != genome_fingerprint(twin)
     evo = StageIEvolver(

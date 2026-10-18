@@ -17,11 +17,11 @@ raise_env/
 │   ├── pipeline.py             # RaisePipeline: closed loop → Stage III → artifacts
 │   └── domains/                # DomainPack + registry / factories
 ├── domains/
-│   └── crowdnav/               # CrowdNav pack (see domains/crowdnav/spec.md)
+│   └── crowdnav/               # CrowdNav++ pack (see domains/crowdnav/spec.md)
 │       ├── pack, prompts, adapter, env_wrapper, stage1, state, metrics, feedback_card, viz
 │       ├── tests/
 │       └── data/               # CrowdNav Stage I dataset (generated, gitignored)
-├── third_party/crowdnav/       # vita-epfl/CrowdNav crowd_sim @ 20d6780 (unmodified, MIT)
+├── third_party/crowdnavpp/     # CrowdNav++ CrowdSimVarNum @ 3907731 (unmodified, MIT)
 ├── scripts/                    # CLI entry points
 └── results/                    # generated outputs (gitignored)
 ```
@@ -31,8 +31,8 @@ raise_env/
 | Concern | Lives in |
 |---------|----------|
 | Evolution loop / Score1 math / LLM / sandbox / checkpoints | `raise_core` |
-| CrowdNav prompts, reward state, env wrapper, SB3 PPO trainer, fitness, viz | `domains.crowdnav` |
-| Simulator (humans, ORCA, collision / goal / timeout) | `third_party/crowdnav/crowd_sim` |
+| CrowdNav++ prompts, reward state, env wrapper, SB3 PPO trainer, fitness, viz | `domains.crowdnav` |
+| Simulator (variable humans, ORCA, collision / goal / timeout) | `third_party/crowdnavpp/crowd_sim` |
 | CrowdNav Stage I dataset | `domains/crowdnav/data/` |
 | CLI experiments | `scripts/` |
 
@@ -41,7 +41,7 @@ raise_env/
 ```text
 scripts/run_raise.py
   → RaiseRunConfig → raise_core.pipeline.RaisePipeline
-  → load_domain("crowdnav") → DomainPack (prompts, Score1, trainers, smoke states)
+  → load_domain("crowdnav") → CrowdNav++ DomainPack (prompts, Score1, trainers, smoke states)
   → ClosedLoopRunner: Gen0 → for each generation:
         Score1 → PPO train (train cases) + eval new candidates (val cases) → rank by fitness
         → archive → LLM crossover / mutation / random (+ elite), each prompt

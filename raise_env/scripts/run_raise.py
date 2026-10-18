@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-Single entry point for RAISE on CrowdNav (vita-epfl/CrowdNav crowd_sim).
+Single entry point for RAISE on CrowdNav++ CrowdSimVarNum.
 
   closed loop (G generations): Score1 → Stage II PPO train+eval → fitness
   rank → LLM crossover/mutation with evaluation feedback
@@ -285,15 +285,15 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("discrete", "continuous"),
         default=_DEFAULTS.action_mode,
         help=(
-            "Action space: discrete = upstream CADRL velocity set (stop + "
-            "speeds x rotations, default), continuous = Box([-1, 1]^2)"
+            "Action space: continuous = CrowdNav++ Box(2), clipped to physical "
+            "limits (default); discrete = optional wrapper-level action table"
         ),
     )
     parser.add_argument(
         "--robot-kinematics",
         choices=("holonomic", "unicycle"),
         default=_DEFAULTS.robot_kinematics,
-        help="Robot kinematics (upstream env.config robot.kinematics)",
+        help="Robot kinematics (holonomic or unicycle; used with the Python env config)",
     )
     parser.add_argument(
         "--action-speed-samples",
@@ -311,7 +311,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--env-config",
         type=str,
         default=_DEFAULTS.env_config_path,
-        help="CrowdNav env.config (default: vendored upstream config)",
+        help="CrowdNav++ Python config file (default: vendored upstream config.py)",
     )
     parser.add_argument(
         "--feedback-card",

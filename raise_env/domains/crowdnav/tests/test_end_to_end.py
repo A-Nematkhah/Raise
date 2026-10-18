@@ -12,6 +12,7 @@ import sys
 import pytest
 
 from domains.crowdnav.adapter import CrowdNavPPOTrainer
+from domains.crowdnav.env_wrapper import load_env_config
 from domains.crowdnav.tests.conftest import RAISE_ENV_ROOT
 from raise_core.candidate import RewardCandidate
 from raise_core.domains import load_domain, make_validator_for_domain
@@ -63,7 +64,10 @@ def test_run_writes_crowdnav_artifacts(run_dir):
     assert holdout["SR"] + holdout["CR"] + holdout["TR"] == pytest.approx(1.0)
     assert md["train_steps_per_second"] > 0.0
     ctx = metrics["eval_context"]
-    assert ctx["human_num"] == 5 and ctx["time_limit_s"] == 25.0 and ctx["scenario"] == "circle_crossing"
+    env_config = load_env_config()
+    assert ctx["human_num"] == env_config.sim.human_num
+    assert ctx["time_limit_s"] == env_config.env.time_limit
+    assert isinstance(ctx["scenario"], str) and ctx["scenario"]
 
 
 def test_run_writes_plots_and_policy_animation(run_dir):

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+from types import SimpleNamespace
 
 import pytest
 
@@ -11,15 +12,18 @@ from domains.crowdnav.metrics import (
     attach_fitness,
     crowdnav_fitness,
     discounted_task_return,
+    episode_task_return,
     episode_fields,
     evidence_line,
     fitness_standard_error,
 )
+from domains.crowdnav.adapter import _eval_with_step
 from domains.crowdnav.prompts import D5_SEED_FUNCTION
 from domains.crowdnav.reward_checks import make_crowdnav_validator
 from domains.crowdnav.sandbox_fields import crowdnav_sandbox_config
 from domains.crowdnav.score1_worker import Score1TimeoutWorker
 from domains.crowdnav.settings import CrowdNavSettings
+from domains.crowdnav.env_wrapper import load_env_config
 from domains.crowdnav.stage1 import (
     load_crowdnav_dataset,
     make_smoke_score_fn,
@@ -42,21 +46,67 @@ def _validated(code: str):
 # ------------------------------------------------------------------ metrics
 
 
-def test_discounted_task_return_matches_upstream_explorer():
-    # Explorer: sum_t gamma ** (t * time_step * v_pref) * r_t
-    got = discounted_task_return([0.0, -0.01, 1.0], gamma=0.9, time_step=0.25, v_pref=1.0)
-    assert got == pytest.approx(-0.01 * 0.9 ** 0.25 + 0.9 ** 0.5)
+def test_discounted_task_return_helper_and_upstream_episode_return():
+    got = discounted_task_return(
+        [0.0, -0.01, 1.0], gamma=0.9, time_step=0.25, v_pref=1.0
+    )
+    assert got == pytest.approx(-0.01 * 0.9**0.25 + 0.9**0.5)
+    assert episode_task_return([2.0, -0.5, 3.0]) == pytest.approx(4.5)
+
+
+def test_evaluation_fitness_uses_undiscounted_native_episode_sum():
+    class FakeEnv:
+        time_step = 0.25
+        v_pref = 1.0
+        time_limit = 1.0
+
+        def __init__(self):
+            self.sim = SimpleNamespace(robot=SimpleNamespace(px=0.0, py=0.0))
+            self.last_state = None
+            self.index = 0
+
+        def reset(self, *, options):
+            del options
+            self.index = 0
+            return {}, {}
+
+    env = FakeEnv()
+    native_rewards = [2.0, -0.5]
+    candidate_rewards = [5.0, 6.0]
+
+    def step_fn(_obs):
+        index = env.index
+        env.index += 1
+        env.last_state = SimpleNamespace(
+            robot=SimpleNamespace(px=float(index + 1), py=0.0)
+        )
+        info = {
+            "raise_native_reward": native_rewards[index],
+            "raise_min_separation": 1.0,
+            "raise_danger": False,
+            "raise_outcome": "success" if index == 1 else None,
+            "raise_global_time": 0.25 * (index + 1),
+        }
+        return {}, candidate_rewards[index], index == 1, False, info
+
+    metrics = _eval_with_step(env, step_fn, cases=[4])
+    assert metrics._crowdnav_extras["task_return"] == pytest.approx(1.5)
+    episode = metrics._crowdnav_episodes[0]
+    assert episode["task_return"] == pytest.approx(1.5)
+    assert episode["return"] == pytest.approx(11.0)
+    assert episode["disc_return"] == pytest.approx(10.94)
 
 
 def test_episode_fields_and_fitness():
+    time_limit = float(load_env_config().env.time_limit)
     f = episode_fields(
         ["success", "collision", "timeout", "success"],
-        [10.0, 3.0, 25.0, 12.0],
+        [10.0, 3.0, time_limit, 12.0],
         [0.5, -0.25, 0.0, 0.4],
         [2, 0, 0, 1],
         [40, 12, 100, 48],
         [0.1, 0.15],
-        time_limit=25.0,
+        time_limit=time_limit,
     )
     assert (f["SR"], f["CR"], f["TR"]) == (0.5, 0.25, 0.25)
     assert f["NT"] == pytest.approx(11.0)
@@ -64,7 +114,9 @@ def test_episode_fields_and_fitness():
     assert f["ITR"] == pytest.approx(3 / 200)
     assert f["SD"] == pytest.approx(0.125)
     # No success: nav time is the time limit (upstream reports it the same way).
-    assert episode_fields(["timeout"], [25.0], [0.0], [0], [100], [], time_limit=25.0)["NT"] == 25.0
+    assert episode_fields(
+        ["timeout"], [time_limit], [0.0], [0], [100], [], time_limit=time_limit
+    )["NT"] == time_limit
 
     m = attach_fitness({"task_return": 0.1, "holdout": {"task_return": 0.3}})
     assert m["fitness"] == m["selection_scalar"] == pytest.approx(0.3) and m["domain"] == "crowdnav"
@@ -84,17 +136,21 @@ def test_evidence_line_reports_crowdnav_metrics():
 
 
 def test_collected_dataset_is_real_upstream_rollouts(dataset_dir):
+    config = load_env_config()
     manifest = read_dataset_manifest(dataset_dir)
-    assert manifest["domain"] == "crowdnav" and manifest["n_trajectories"] == 12
-    assert manifest["upstream_commit"].startswith("20d6780")
+    assert manifest["domain"] == "crowdnav" and manifest["n_trajectories"] == 30
+    assert manifest["simulator"].endswith("CrowdSimVarNum")
+    assert manifest["upstream_commit"].startswith("3907731")
     trajs = load_crowdnav_dataset(dataset_dir)
     labels = {t.behavior: {t2.label for t2 in trajs if t2.behavior == t.behavior} for t in trajs}
-    assert labels["stop"] == {"timeout"}
+    assert "timeout" in labels["stop"]
     assert "success" in labels["orca"]
+    assert "linear_slow" in labels
     for t in trajs:
         last = t.states[-1]
         assert {"success": last.reached_goal, "collision": last.collision, "timeout": last.timeout}[t.label]
-        assert last.time_limit == 25.0 and last.time_step == 0.25
+        assert last.time_limit == config.env.time_limit
+        assert last.time_step == config.env.time_step
         # Same scenario across behaviours (train-phase case per episode).
         assert t.scenario_id.startswith("train_case_")
 
@@ -133,7 +189,12 @@ def test_seed_reward_scores_positive_on_real_rollouts(dataset_dir):
 
 def test_score1_rejects_failure_seeking_and_constant_rewards(dataset_dir):
     trajs = load_crowdnav_dataset(dataset_dir)
-    crash = _validated(_FN + "    if state.collision:\n        return 1.0\n    return -0.01\n")
+    crash = _validated(
+        _FN
+        + "    if state.collision or state.timeout:\n        return 1.0\n"
+        "    if state.reached_goal:\n        return -1.0\n"
+        "    return 0.0\n"
+    )
     assert score_crowdnav_dataset(crash, trajs).reject_reason == "prefers_failure"
     const = _validated(_FN + "    return 0.0\n")
     assert score_crowdnav_dataset(const, trajs).reject_reason == "no_signal"

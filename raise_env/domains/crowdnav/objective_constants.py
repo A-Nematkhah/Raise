@@ -1,12 +1,14 @@
-"""Single source of truth for CrowdNav selection / training discount constants."""
+"""Single source of truth for CrowdNav++ fitness and PPO discount constants."""
 
 from __future__ import annotations
 
-# PPO discount (per policy step, dt = 0.25 s). Stage I Score1 ranks dataset
-# trajectories by the same discounted return, so the two must not diverge.
-PPO_GAMMA = 0.99
+# Upstream fitness is the mean sum of native rewards per evaluation episode.
+CROWDNAV_FITNESS_OBJECTIVE = "mean_native_episode_return"
 
-# Upstream evaluation discount: crowd_nav/configs/policy.config [rl] gamma.
-# Explorer.run_k_episodes weighs step t's reward by
-# gamma ** (t * time_step * v_pref) (discount per metre at preferred speed).
-CROWDNAV_EVAL_GAMMA = 0.9
+# The upstream evaluator sums native rewards per episode without discounting;
+# 1.0 is a neutral factor kept for tools that express this as a gamma.
+CROWDNAV_EVAL_GAMMA = 1.0
+
+# PPO discount per policy step is a training parameter, independent of the
+# official mean upstream episode-return selection objective.
+PPO_GAMMA = 0.99

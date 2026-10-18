@@ -2,14 +2,15 @@
 """Collect the Stage I trajectory dataset for the CrowdNav domain pack.
 
 Every trajectory is a genuine rollout of the vendored upstream simulator
-(vita-epfl/CrowdNav ``CrowdSim``, unmodified ``env.config``) on upstream
-``train``-phase scenarios; labels are the upstream episode outcomes
-(``ReachGoal`` -> success, ``Collision``, ``Timeout``). Every behaviour runs
-the same scenarios, so the scenario does not separate the labels.
+(Shuijing725/CrowdNav++ ``CrowdSimVarNum``) on ``train``-phase scenarios; by
+default it uses the vendored Python config. An alternative CrowdNav++ Python
+config can be supplied with ``--env-config``. Labels are the native wrapper
+outcomes (``success``, ``collision``, ``timeout``). Every behaviour runs the
+same scenarios, so the scenario does not separate the labels.
 
-Robot behaviours (holonomic; Score1 re-expresses actions for unicycle runs):
+Robot behaviours:
 
-- ``orca``            upstream ORCA (``safety_space`` 0)
+- ``orca``            upstream CrowdNav++ ORCA (``safety_space`` 0)
 - ``orca_ss005``      ORCA with ``safety_space`` 0.05 m
 - ``orca_ss010``      ORCA with ``safety_space`` 0.10 m
 - ``orca_cautious``   ORCA with ``safety_space`` 0.15 m
@@ -20,7 +21,7 @@ Robot behaviours (holonomic; Score1 re-expresses actions for unicycle runs):
 - ``linear``          straight to the goal at ``v_pref``
 - ``linear_slow``     straight to the goal at 0.3 ``v_pref``
 - ``stop``            stands still (the "freezing robot")
-- ``random``          uniformly random CADRL action each step (seeded)
+- ``random``          uniformly sampled valid control each step (seeded)
 """
 
 from __future__ import annotations
@@ -33,27 +34,33 @@ if _ROOT not in _sys.path:
     _sys.path.insert(0, _ROOT)
 import raise_paths  # noqa: E402,F401
 import argparse  # noqa: E402
+import copy  # noqa: E402
 import math  # noqa: E402
 import sys  # noqa: E402
 from collections import Counter  # noqa: E402
 from typing import Any, Callable, Dict, List, Tuple  # noqa: E402
 
 import numpy as np  # noqa: E402
-from crowd_sim.envs.policy.linear import Linear  # noqa: E402
-from crowd_sim.envs.policy.orca import ORCA  # noqa: E402
-from crowd_sim.envs.utils.action import ActionXY  # noqa: E402
-from crowd_sim.envs.utils.state import JointState  # noqa: E402
 
 from domains.crowdnav.env_wrapper import RewardInjectedCrowdNavEnv, eval_cases  # noqa: E402
-from domains.crowdnav.settings import CrowdNavSettings  # noqa: E402
+from domains.crowdnav.settings import (  # noqa: E402
+    DEFAULT_ENV_CONFIG_PATH,
+    CrowdNavSettings,
+    UNICYCLE_ROTATION_DELTA_MAX,
+    UNICYCLE_SPEED_DELTA_MAX,
+    UNICYCLE_SPEED_DELTA_MIN,
+)
 from domains.crowdnav.stage1 import (  # noqa: E402
     DEFAULT_STAGE1_DATASET,
     CrowdNavTrajectoryRecord,
     save_crowdnav_dataset,
 )
 from raise_core.console import ensure_utf8_stdio  # noqa: E402
+from crowd_nav.policy.orca import ORCA  # noqa: E402
+from crowd_sim.envs.utils.action import ActionRot, ActionXY  # noqa: E402
+from crowd_sim.envs.utils.state import JointState  # noqa: E402
 
-UPSTREAM_COMMIT = "20d678085c06831e658a65b9e20c8bb6f6ecdc10"
+UPSTREAM_COMMIT = "390773137be04ed14e27620dc5fd7c5e1a5b1f62"
 # (safety_space m, speed scale, time_horizon s). None time_horizon -> ORCA default (5 s).
 _ORCA_SPECS: Dict[str, Tuple[float, float, float | None]] = {
     "orca": (0.0, 1.0, None),
@@ -70,8 +77,43 @@ _SLOW_FRACTION = 0.3
 
 
 def _joint_state(env: RewardInjectedCrowdNavEnv) -> JointState:
+    visibility = env.sim.human_visibility
+    if len(visibility) != len(env.sim.humans):
+        raise RuntimeError("CrowdNav++ visibility flags do not match its human population")
     return JointState(
-        env.sim.robot.get_full_state(), [h.get_observable_state() for h in env.sim.humans]
+        env.sim.robot.get_full_state(),
+        [
+            human.get_observable_state()
+            for human, visible in zip(env.sim.humans, visibility)
+            if visible
+        ],
+    )
+
+
+def _velocity_action(
+    env: RewardInjectedCrowdNavEnv, vx: float, vy: float
+) -> Any:
+    if env.settings.kinematics == "holonomic":
+        return ActionXY(float(vx), float(vy))
+
+    robot = env.sim.robot
+    speed = min(math.hypot(vx, vy), float(robot.v_pref))
+    target_heading = math.atan2(vy, vx) if speed > 0.0 else float(robot.theta)
+    heading_delta = (target_heading - float(robot.theta) + math.pi) % (2.0 * math.pi) - math.pi
+    speed_delta = speed - float(env.sim.desiredVelocity[0])
+    return ActionRot(
+        float(np.clip(speed_delta, UNICYCLE_SPEED_DELTA_MIN, UNICYCLE_SPEED_DELTA_MAX)),
+        float(np.clip(heading_delta, -UNICYCLE_ROTATION_DELTA_MAX, UNICYCLE_ROTATION_DELTA_MAX)),
+    )
+
+
+def _stop_action(env: RewardInjectedCrowdNavEnv) -> Any:
+    if env.settings.kinematics == "holonomic":
+        return ActionXY(0.0, 0.0)
+    speed = float(env.sim.desiredVelocity[0])
+    return ActionRot(
+        float(np.clip(-speed, UNICYCLE_SPEED_DELTA_MIN, UNICYCLE_SPEED_DELTA_MAX)),
+        0.0,
     )
 
 
@@ -81,38 +123,61 @@ def _make_controller(
     """Per-step upstream action for ``behaviour`` (called after ``env.reset``)."""
     if behaviour in _ORCA_SPECS:
         safety, speed_scale, time_horizon = _ORCA_SPECS[behaviour]
-        policy = ORCA()
+        config = copy.deepcopy(env.env_config)
+        config.orca.safety_space = float(safety)
+        if time_horizon is not None:
+            config.orca.time_horizon = float(time_horizon)
+        policy = ORCA(config)
         policy.time_step = env.time_step
         policy.safety_space = float(safety)
-        if time_horizon is not None:
-            policy.time_horizon = float(time_horizon)
 
         def _orca() -> Any:
-            a = policy.predict(_joint_state(env))
-            if speed_scale == 1.0:
-                return a
-            return ActionXY(a.vx * speed_scale, a.vy * speed_scale)
+            desired = policy.predict(_joint_state(env))
+            return _velocity_action(
+                env, desired.vx * speed_scale, desired.vy * speed_scale
+            )
 
         return _orca
     if behaviour in ("linear", "linear_slow"):
-        policy = Linear()
         scale = 1.0 if behaviour == "linear" else _SLOW_FRACTION
 
         def _linear() -> Any:
-            a = policy.predict(_joint_state(env))
-            return ActionXY(a.vx * scale, a.vy * scale)
+            robot = env.sim.robot
+            dx = float(robot.gx - robot.px)
+            dy = float(robot.gy - robot.py)
+            distance = math.hypot(dx, dy)
+            speed = float(robot.v_pref) * scale
+            if distance == 0.0:
+                return _stop_action(env)
+            return _velocity_action(env, dx * speed / distance, dy * speed / distance)
 
         return _linear
     if behaviour == "stop":
-        return lambda: ActionXY(0.0, 0.0)
+        return lambda: _stop_action(env)
     if behaviour == "random":
-        table = env.action_table
-        return lambda: ActionXY(*table[int(rng.integers(len(table)))])
+        if env.settings.kinematics == "holonomic":
+            table = env.action_table
+            return lambda: ActionXY(*table[int(rng.integers(len(table)))])
+        return lambda: ActionRot(
+            float(rng.uniform(UNICYCLE_SPEED_DELTA_MIN, UNICYCLE_SPEED_DELTA_MAX)),
+            float(rng.uniform(-UNICYCLE_ROTATION_DELTA_MAX, UNICYCLE_ROTATION_DELTA_MAX)),
+        )
     raise ValueError(f"unknown behaviour {behaviour!r}")
 
 
-def collect(*, episodes: int, seed: int, behaviours: List[str]) -> List[CrowdNavTrajectoryRecord]:
-    settings = CrowdNavSettings(kinematics="holonomic", action_mode="discrete")
+def collect(
+    *,
+    episodes: int,
+    seed: int,
+    behaviours: List[str],
+    env_config_path: str | None = None,
+    kinematics: str = "holonomic",
+) -> List[CrowdNavTrajectoryRecord]:
+    settings = CrowdNavSettings(
+        kinematics=kinematics,
+        action_mode="discrete" if kinematics == "holonomic" else "continuous",
+        env_config_path=env_config_path,
+    )
     env = RewardInjectedCrowdNavEnv(None, phase="train", settings=settings)
     cases = eval_cases(int(seed), int(episodes), int(env.sim.case_size["train"]))
     rng = np.random.default_rng(int(seed))
@@ -164,6 +229,17 @@ def main(argv: List[str] | None = None) -> int:
     parser.add_argument("--episodes", type=int, default=40, help="episodes per behaviour")
     parser.add_argument("--seed", type=int, default=7, help="scenario selection seed")
     parser.add_argument(
+        "--env-config",
+        default=None,
+        help="CrowdNav++ Python config file (default: vendored config.py)",
+    )
+    parser.add_argument(
+        "--kinematics",
+        choices=("holonomic", "unicycle"),
+        default="holonomic",
+        help="robot kinematics for collected rollouts (default: holonomic)",
+    )
+    parser.add_argument(
         "--behaviours", default=",".join(BEHAVIOURS), help=f"comma list from {BEHAVIOURS}"
     )
     args = parser.parse_args(argv)
@@ -172,16 +248,22 @@ def main(argv: List[str] | None = None) -> int:
     if unknown:
         parser.error(f"unknown behaviours {unknown}")
 
-    trajs = collect(episodes=int(args.episodes), seed=int(args.seed), behaviours=behaviours)
+    trajs = collect(
+        episodes=int(args.episodes),
+        seed=int(args.seed),
+        behaviours=behaviours,
+        env_config_path=args.env_config,
+        kinematics=args.kinematics,
+    )
     save_crowdnav_dataset(
         args.out,
         trajs,
         extra_manifest={
-            "simulator": "vita-epfl/CrowdNav crowd_sim",
+            "simulator": "Shuijing725/CrowdNav_Prediction_AttnGraph CrowdSimVarNum",
             "upstream_commit": UPSTREAM_COMMIT,
-            "env_config": "third_party/crowdnav/configs/env.config",
+            "env_config": args.env_config or _os.path.relpath(DEFAULT_ENV_CONFIG_PATH, _ROOT),
             "phase": "train",
-            "kinematics": "holonomic",
+            "kinematics": args.kinematics,
             "seed": int(args.seed),
             "episodes_per_behaviour": int(args.episodes),
             "behaviours": behaviours,

@@ -24,27 +24,97 @@ _MATH_RULE = (
     + ". Any other math.* is rejected."
 )
 
-_TASK = (
-    "CrowdNav (vita-epfl/CrowdNav simulator): a robot (radius 0.3 m, preferred "
-    "speed v_pref = 1 m/s) starts at (0, -4) and must reach its goal at (0, 4) "
-    "through 5 humans that cross a 4 m circle under ORCA. The robot is "
-    "invisible to the humans: they do not yield to it. Each step lasts 0.25 s; "
-    "an episode ends on reaching the goal, on a collision, or at the time limit "
-    "(about 24 s)."
-)
 
-_SELECTION_OBJECTIVE = (
-    "Your reward function is judged by training a PPO policy with it and "
-    "evaluating that policy on held-out CrowdNav validation scenarios. "
-    "Candidates are ranked by one holdout fitness (higher is better): the mean "
-    "discounted task return of the original CrowdNav evaluation - reaching the "
-    "goal earns +1 discounted by 0.9 per second of navigation time, a collision "
-    "costs -0.25, reaching the time limit earns 0, and every step closer than "
-    "the 0.2 m discomfort distance to a human costs a small penalty. Fast, "
-    "collision-free arrivals score highest; freezing until the time limit "
-    "scores about zero; collisions score below that. Reason about these "
-    "trade-offs directly from the evidence given to you."
-)
+def _configured_env():
+    from domains.crowdnav.env_wrapper import load_env_config
+    from domains.crowdnav.settings import get_settings
+
+    settings = get_settings()
+    return load_env_config(settings.env_config_source), settings
+
+
+def _task_description() -> str:
+    config, settings = _configured_env()
+    minimum = max(1, int(config.sim.human_num) - int(config.sim.human_num_range))
+    maximum = int(config.sim.human_num) + int(config.sim.human_num_range)
+    fov_pi = float(config.robot.FOV)
+    population_change = (
+        "and may change during an episode"
+        if int(config.sim.human_num_range) > 0
+        else "and remains fixed during an episode"
+    )
+    return (
+        "CrowdNav++ variable-human CrowdSim: a robot "
+        f"(radius {float(config.robot.radius):g} m, preferred speed "
+        f"{float(config.robot.v_pref):g} m/s, {settings.kinematics} kinematics) "
+        "must reach the goal in the configured scenario. Human population starts "
+        f"between {minimum} and {maximum} {population_change}; "
+        f"humans use {config.humans.policy}. Human placement uses the configured "
+        f"{float(config.sim.circle_radius):g} m circle radius. The robot's sensor "
+        f"range is {float(config.robot.sensor_range):g} m and its field of view is "
+        f"{fov_pi:g}π radians. The robot is "
+        f"{'visible' if config.robot.visible else 'invisible'} to humans. Each step "
+        f"lasts {float(config.env.time_step):g} s; the episode time limit is "
+        f"{float(config.env.time_limit):g} s."
+    )
+
+
+def _selection_objective() -> str:
+    config, _ = _configured_env()
+    return (
+        "Your reward function is judged by training a PPO policy with it and "
+        "evaluating it on held-out CrowdNav++ validation scenarios. Candidates "
+        "are ranked by mean upstream episode task return: the sum of native "
+        "CrowdNav++ rewards in each episode, averaged across evaluation episodes "
+        "with no extra evaluation discount (higher is better). "
+        f"The configured native reward assigns {float(config.reward.success_reward):g} "
+        f"for success, {float(config.reward.collision_penalty):g} for collision, "
+        "and applies its configured discomfort penalty and potential-based goal "
+        "shaping to nonterminal steps. A timeout has zero base reward. "
+        f"The discomfort distance is {float(config.reward.discomfort_dist):g} m; "
+        f"episodes end at the configured {float(config.env.time_limit):g} s limit. "
+        "Fast, collision-free arrivals score highest; freezing until timeout "
+        "scores about zero; collisions score below that. Reason about these "
+        "trade-offs directly from the evidence given to you."
+    )
+
+
+def _system_prompt() -> str:
+    return (
+        "You are an expert in reinforcement learning and crowd-aware robot navigation. "
+        "Your goal is to design reward functions for the CrowdNav++ simulator. "
+        + _selection_objective()
+        + " "
+        + _RETURN_CONTRACT
+        + " "
+        + "Put the code in exactly one ```python fenced block; any explanation must "
+        "come before the fence. The code must be fully executable."
+    )
+
+
+def _external_knowledge() -> str:
+    return (
+        "# External Knowledge — CrowdNav++\n"
+        "## Task\n- "
+        + _task_description()
+        + "\n## Selection objective (not the reward itself)\n"
+        + _selection_objective()
+        + "\n## Metrics (as in the CrowdNav++ evaluation)\n"
+        "- SR: success rate (goal reached); CR: collision rate; TR: timeout rate\n"
+        "- nav_time: mean navigation time of successful episodes (s); "
+        "path_length: mean path length of successful episodes (m)\n"
+        "- danger_freq: fraction of steps in danger; "
+        "min_dist_in_danger: upstream mean distance during those steps (m)"
+    )
+
+
+def __getattr__(name: str) -> str:
+    if name == "D1_SYSTEM_PROMPT":
+        return _system_prompt()
+    if name == "D4_EXTERNAL_KNOWLEDGE":
+        return _external_knowledge()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 _DIAGNOSIS_BEFORE_CODE = (
     "Before writing code:\n"
@@ -83,31 +153,22 @@ _RETURN_CONTRACT = (
     "``total_reward`` already encodes."
 )
 
-D1_SYSTEM_PROMPT = (
-    "You are an expert in reinforcement learning and crowd-aware robot navigation. "
-    "Your goal is to design reward functions for the CrowdNav simulator. "
-    + _SELECTION_OBJECTIVE
-    + " "
-    + _RETURN_CONTRACT
-    + " "
-    + "Put the code in exactly one ```python fenced block; any explanation must "
-    "come before the fence. The code must be fully executable."
-)
-
 _STATE_FIELDS = """\
   - state: a CrowdNavRewardState snapshot taken AFTER the step, with ONLY these fields:
-    - state.robot.px, state.robot.py, state.robot.vx, state.robot.vy, state.robot.gx, state.robot.gy, state.robot.theta, state.robot.radius, state.robot.v_pref
-    - state.humans: tuple of humans; iterate `for h in state.humans:` then h.px, h.py, h.vx, h.vy, h.radius
+    - state.robot.px, state.robot.py, state.robot.vx, state.robot.vy, state.robot.gx, state.robot.gy, state.robot.theta, state.robot.radius, state.robot.v_pref, state.robot.kinematics
+    - state.humans: tuple of all humans; iterate `for h in state.humans:` then h.px, h.py, h.vx, h.vy, h.radius, h.visible
     - FRAMES: every position and velocity is in the WORLD frame (metres, m/s); (state.robot.gx, state.robot.gy) is the goal. Distances to humans must be computed, e.g. ((h.px - state.robot.px) ** 2 + (h.py - state.robot.py) ** 2) ** 0.5 is centre-to-centre; subtract h.radius + state.robot.radius for the gap between bodies.
-    - state.collision, state.reached_goal, state.timeout: bool (environment-owned outcome of THIS step, mutually exclusive; each ends the episode). state.timeout marks a failed episode that ran out of time.
-    - state.min_separation: float, the smallest gap between the robot's and any human's body during this step (negative on collision); state.discomfort_dist: float (0.2 m), the comfort threshold for that gap.
+    - state.collision, state.reached_goal, state.timeout, state.danger: bool flags from upstream CrowdNav++.
+    - state.min_separation: float, the smallest current robot-human body gap; state.discomfort_dist is the configured comfort threshold.
     - state.goal_distance: float, robot-centre distance to the goal after the step; state.progress: float, decrease of goal_distance during this step (negative when moving away).
     - state.action (see the action space below), state.time_step (s), state.global_time (s since reset), state.time_limit (s)
+    - state.success_reward, state.collision_penalty, state.discomfort_penalty_factor: configured upstream reward parameters.
+    - state.potential_delta, state.potential_factor: upstream potential-shaping delta and its kinematics-dependent factor for this step.
   - memory: plain mutable dict cleared at every episode reset(); use for shaping (e.g. memory['prev_speed'])."""
 
-D1_USER_PROMPT = """Please write a Python function named {func_name} for crowd-aware robot navigation (CrowdNav).
+D1_USER_PROMPT = """Please write a Python function named {func_name} for crowd-aware robot navigation (CrowdNav++).
 Task Description:
-- """ + _TASK + """
+- {task_description}
 - Output ``(total_reward, reward_components)`` for the robot's current step so a policy learns to reach the goal quickly without collisions or intrusions under the selection objective above (total_reward trains RL; reward_components are for reflection only).
 Function Interface (EXACT FIELD STRUCTURE):
 - Inputs:
@@ -166,12 +227,14 @@ PROMPT_MEMORY_EXAMPLE = '''def compute_reward(state, memory):
 
 _REWARD_STATE_ACCESS = """\
 CrowdNavRewardState access (dot notation only — never getattr/hasattr/__import__); snapshot AFTER the step:
-- state.robot.px, .py, .vx, .vy, .gx, .gy, .theta, .radius, .v_pref (world frame; (gx, gy) is the goal)
-- state.humans — loop `for h in state.humans:` then h.px, h.py, h.vx, h.vy, h.radius (world frame)
-- state.collision, state.reached_goal, state.timeout (outcome of this step, mutually exclusive; timeout = ran out of time = failure)
-- state.min_separation (smallest robot-human body gap during this step; negative on collision), state.discomfort_dist (0.2 m)
+- state.robot.px, .py, .vx, .vy, .gx, .gy, .theta, .radius, .v_pref, .kinematics (world frame; (gx, gy) is the goal)
+- state.humans — loop `for h in state.humans:` then h.px, h.py, h.vx, h.vy, h.radius, h.visible (world frame; includes all humans)
+- state.collision, state.reached_goal, state.timeout (mutually exclusive outcome flags), state.danger (upstream danger classification)
+- state.min_separation (smallest current robot-human body gap; negative on collision), state.discomfort_dist (configured)
 - state.goal_distance (after the step), state.progress (decrease of goal_distance this step)
 - state.action, state.time_step, state.global_time, state.time_limit
+- state.success_reward, state.collision_penalty, state.discomfort_penalty_factor
+- state.potential_delta, state.potential_factor (upstream potential-based shaping)
 - memory: plain dict for episode-local state; cleared on reset
 - FORBIDDEN (rejected by AST): self_state, human_states, position, velocity, dmin, distance, speed, history
 - """ + _MATH_RULE + """
@@ -224,39 +287,43 @@ Mutation Task:
 {diagnosis}
 """
 
-D4_EXTERNAL_KNOWLEDGE = f"""# External Knowledge — CrowdNav
-## Task
-- {_TASK}
-## Selection objective (not the reward itself)
-{_SELECTION_OBJECTIVE}
-## Metrics (as in the CrowdNav evaluation)
-- SR: success rate (goal reached); CR: collision rate; TR: timeout rate
-- nav_time: mean navigation time of successful episodes (s); path_length: mean path length of successful episodes (m)
-- danger_freq: fraction of steps inside the discomfort distance; min_dist_in_danger: mean gap during those steps (m)
-"""
-
 D5_SEED_FUNCTION = '''def compute_reward(state, memory):
-    """CrowdNav seed: the upstream CrowdSim reward (crowd_nav/configs/env.config)."""
-    success_reward = 1.0
-    collision_penalty = -0.25
-    discomfort_penalty_factor = 0.5
+    """Reproduce the configured CrowdNav++ CrowdSim reward."""
     goal_reward = 0.0
     collision_term = 0.0
     discomfort_term = 0.0
-    # Upstream priority: timeout (reward 0) > collision > goal > discomfort.
+    potential_term = 0.0
+    spin_term = 0.0
+    backwards_term = 0.0
     if not state.timeout:
         if state.collision:
-            collision_term = collision_penalty
+            collision_term = state.collision_penalty
         elif state.reached_goal:
-            goal_reward = success_reward
-        elif state.min_separation < state.discomfort_dist:
+            goal_reward = state.success_reward
+        elif state.danger:
             gap = state.min_separation - state.discomfort_dist
-            discomfort_term = gap * discomfort_penalty_factor * state.time_step
-    total = float(goal_reward + collision_term + discomfort_term)
+            discomfort_term = gap * state.discomfort_penalty_factor * state.time_step
+        else:
+            potential_term = state.potential_factor * state.potential_delta
+    if state.robot.kinematics == "unicycle":
+        spin_term = -4.5 * state.action[1] ** 2
+        if state.action[0] < 0.0:
+            backwards_term = -2.0 * abs(state.action[0])
+    total = float(
+        goal_reward
+        + collision_term
+        + discomfort_term
+        + potential_term
+        + spin_term
+        + backwards_term
+    )
     return total, {
         "goal_reward": float(goal_reward),
         "collision_penalty": float(collision_term),
         "discomfort_penalty": float(discomfort_term),
+        "potential_shaping": float(potential_term),
+        "unicycle_spin_penalty": float(spin_term),
+        "unicycle_backwards_penalty": float(backwards_term),
     }
 '''
 
@@ -286,9 +353,10 @@ def format_d1_initial(
         )
     external_block = ""
     if include_external_knowledge and not compact:
-        external_block = f"External knowledge:\n{D4_EXTERNAL_KNOWLEDGE}\n"
+        external_block = f"External knowledge:\n{_external_knowledge()}\n"
     return D1_USER_PROMPT.format(
         func_name=func_name,
+        task_description=_task_description(),
         action_space_block=action_space_prompt_block(),
         seed_block=seed_block,
         reflection_block=reflection_block,
@@ -314,8 +382,8 @@ Sandbox rules (CRITICAL — invalid code is discarded):
 - """ + _MAGNITUDE_RULE + """
 """
 
-D1_BATCH_USER_PROMPT = """Please write **{n} diverse** Python reward functions for crowd-aware robot navigation (CrowdNav).
-Task: """ + _TASK + """
+D1_BATCH_USER_PROMPT = """Please write **{n} diverse** Python reward functions for crowd-aware robot navigation (CrowdNav++).
+Task: {task_description}
 Each function: def {func_name}_vK(state, memory) for K=1..{n}, returning (finite float, dict[str, float]).
 {sandbox_rules}
 {action_space_block}
@@ -348,10 +416,11 @@ def format_d1_initial_batch(
         reflection_block = f"Reflection / evidence:\n{reflection.strip()}\n"
     external_block = ""
     if include_external_knowledge and not compact:
-        external_block = f"External knowledge:\n{D4_EXTERNAL_KNOWLEDGE}\n"
+        external_block = f"External knowledge:\n{_external_knowledge()}\n"
     return D1_BATCH_USER_PROMPT.format(
         n=int(n),
         func_name=func_name,
+        task_description=_task_description(),
         sandbox_rules=_D1_BATCH_SANDBOX_RULES.format(
             n=int(n),
             func_name=func_name,

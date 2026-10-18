@@ -108,7 +108,7 @@ def test_checkpoint_path_stored_as_posix(monkeypatch, tmp_path):
 
     monkeypatch.setattr(adapter_mod, "PPO", _OkPPO)
 
-    holdout = SimpleNamespace(sr=0.0, cr=0.0, tr=1.0, nt=25.0, pl=0.0, itr=0.0, sd=0.0)
+    holdout = SimpleNamespace(sr=0.0, cr=0.0, tr=1.0, nt=1.0, pl=0.0, itr=0.0, sd=0.0)
 
     def _fake_evaluate(self, model, candidate, *, config, seed, settings, stage_tag):
         return holdout, {"fitness": 0.0, "holdout": {"fitness": 0.0, "SR": 0.0}}

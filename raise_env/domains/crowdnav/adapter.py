@@ -18,14 +18,15 @@ from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv
 
 from domains.crowdnav.env_wrapper import RewardInjectedCrowdNavEnv, eval_cases
+from domains.crowdnav.features import CrowdNavFeaturesExtractor
 from domains.crowdnav.metrics import (
     attach_fitness,
-    discounted_task_return,
+    episode_task_return,
     episode_fields,
     fitness_standard_error,
     format_crowdnav_metrics_line,
 )
-from domains.crowdnav.objective_constants import CROWDNAV_EVAL_GAMMA, PPO_GAMMA
+from domains.crowdnav.objective_constants import PPO_GAMMA
 from domains.crowdnav.settings import settings_from_config, set_settings, spaces_compatible
 from domains.crowdnav.training_dynamics import TrainingDynamicsRecorder
 from domains.crowdnav.watchdog import StallWatchdog, stall_seconds_from_config
@@ -191,8 +192,6 @@ def _eval_with_step(
     min_seps: List[float] = []
     returns: List[float] = []
     records: List[Dict[str, Any]] = []
-    time_step, v_pref = float(env.time_step), float(env.v_pref)
-
     for case in cases:
         obs, _info = env.reset(options={"case": int(case)})
         prev_xy = (float(env.sim.robot.px), float(env.sim.robot.py))
@@ -227,9 +226,7 @@ def _eval_with_step(
 
         outcome = str(info.get("raise_outcome") or "timeout")
         ep_time = float(info.get("raise_global_time", 0.0))
-        task_ret = discounted_task_return(
-            native, gamma=CROWDNAV_EVAL_GAMMA, time_step=time_step, v_pref=v_pref
-        )
+        task_ret = episode_task_return(native)
         outcomes.append(outcome)
         nav_times.append(ep_time)
         task_returns.append(task_ret)
@@ -298,11 +295,11 @@ def _eval_metrics(
     """
     Evaluate a policy on fixed upstream scenarios (``cases`` of ``env.phase``).
 
-    Statistics follow upstream ``Explorer.run_k_episodes`` (see
-    ``domains.crowdnav.metrics``). One compact record per episode is kept on
+    Statistics follow CrowdNav++ upstream ``rl/evaluation.py`` and
+    ``domains.crowdnav.metrics``. One compact record per episode is kept on
     ``metrics._crowdnav_episodes`` (outcome, steps, time, path length, min
     separation, danger steps, candidate-reward return undiscounted and
-    PPO-discounted, the upstream discounted task return; with
+    PPO-discounted, and the upstream native task-return sum; with
     ``record_components`` also per-episode sums of the reward components).
     """
 
@@ -447,6 +444,14 @@ def _resolve_warm_start_path(candidate: Any) -> Optional[str]:
     return None
 
 
+def _crowdnav_policy_kwargs() -> Dict[str, Any]:
+    return {
+        "features_extractor_class": CrowdNavFeaturesExtractor,
+        "features_extractor_kwargs": {"features_dim": 128},
+        "net_arch": {"pi": [64, 64], "vf": [64, 64]},
+    }
+
+
 def _ppo_progress_callback(
     total_timesteps: int,
     desc: str,
@@ -566,13 +571,14 @@ class CrowdNavPPOTrainer:
             # PPO.load + mutating n_steps leaves a stale RolloutBuffer (IndexError).
             # Warm-start copies policy weights only (new model → _last_obs is None,
             # so SB3 resets the env regardless of reset_num_timesteps).
-            # MlpPolicy: Discrete → Categorical; Box → Gaussian (read from env).
+            # MultiInputPolicy uses the domain extractor for padded human observations.
             model = PPO(
-                "MlpPolicy",
+                "MultiInputPolicy",
                 train_env,
                 verbose=0,
                 seed=seed,
                 device=device,
+                policy_kwargs=_crowdnav_policy_kwargs(),
                 n_steps=n_steps,
                 batch_size=batch_size,
                 n_epochs=n_epochs,
@@ -582,7 +588,11 @@ class CrowdNavPPOTrainer:
             )
             if warm_path:
                 try:
-                    donor = PPO.load(warm_path, device=device)
+                    donor = PPO.load(
+                        warm_path,
+                        device=device,
+                        policy_kwargs=_crowdnav_policy_kwargs(),
+                    )
                     if not spaces_compatible(donor.action_space, model.action_space) or not (
                         spaces_compatible(donor.observation_space, model.observation_space)
                     ):
@@ -678,7 +688,11 @@ class CrowdNavPPOTrainer:
                     f"{candidate.candidate_id}: no saved policy to re-evaluate ({ckpt!r})"
                 )
             settings = set_settings(settings_from_config(config))
-            model = PPO.load(str(ckpt), device=_resolve_device(config))
+            model = PPO.load(
+                str(ckpt),
+                device=_resolve_device(config),
+                policy_kwargs=_crowdnav_policy_kwargs(),
+            )
             holdout_metrics, _ = self._evaluate(
                 model,
                 candidate,
@@ -765,12 +779,11 @@ class CrowdNavPPOTrainer:
                 "case_set_size": int(holdout_env.sim.case_size[split]),
                 "cases": [int(c) for c in holdout_cases],
                 "human_num": int(holdout_env.human_num),
-                "scenario": str(
-                    holdout_env.sim.test_sim if split == "test" else holdout_env.sim.train_val_sim
-                ),
+                "scenario": split,
                 "time_limit_s": float(holdout_env.time_limit),
                 "time_step_s": float(holdout_env.time_step),
-                # Straight start-to-goal line at v_pref (upstream start/goal on the circle).
+                "circle_radius_m": float(holdout_env.sim.circle_radius),
+                "v_pref_mps": float(holdout_env.v_pref),
                 "ideal_nav_time_s": 2.0 * float(holdout_env.sim.circle_radius) / float(holdout_env.v_pref),
                 "kinematics": settings.kinematics,
                 "action_mode": settings.action_mode,
