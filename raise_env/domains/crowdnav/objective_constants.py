@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-# Upstream fitness is the mean sum of native rewards per evaluation episode.
-CROWDNAV_FITNESS_OBJECTIVE = "mean_native_episode_return"
+# Selection fitness is the mean of +1 success, -1 collision, and -0.5 timeout.
+CROWDNAV_FITNESS_OBJECTIVE = "mean_outcome_score"
 
-# The upstream evaluator sums native rewards per episode without discounting;
-# 1.0 is a neutral factor kept for tools that express this as a gamma.
+# Outcome scores are not discounted.
 CROWDNAV_EVAL_GAMMA = 1.0
 
 # PPO discount per policy step is a training parameter, independent of the
-# official mean upstream episode-return selection objective.
+# official outcome-score selection objective.
 PPO_GAMMA = 0.99

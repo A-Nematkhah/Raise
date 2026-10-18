@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 
+import pytest
+
 from domains.crowdnav.adapter import EVAL_SPLITS, _eval_split
 from domains.crowdnav.env_wrapper import eval_cases
 from raise_core.raise_loop.config import ClosedLoopConfig
@@ -25,10 +27,12 @@ def test_eval_cases_cycles_with_warning(caplog):
     assert any("cycle" in r.message for r in caplog.records)
 
 
-def test_eval_split_accepts_train_val_test():
-    assert EVAL_SPLITS == ("val", "test", "train")
-    assert _eval_split(type("C", (), {"eval_split": "train"})()) == "train"
+def test_eval_split_accepts_only_holdout_splits():
+    assert EVAL_SPLITS == ("val", "test")
     assert _eval_split(type("C", (), {"eval_split": "val"})()) == "val"
+    assert _eval_split(type("C", (), {"eval_split": "test"})()) == "test"
+    with pytest.raises(ValueError, match="must be one of"):
+        _eval_split(type("C", (), {"eval_split": "train"})())
 
 
 def test_stage2_eval_split_in_resume_keys_and_defaults():

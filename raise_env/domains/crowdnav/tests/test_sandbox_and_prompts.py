@@ -197,30 +197,27 @@ def test_prompts_read_active_crowdnav_python_config():
     config.reward.collision_penalty = -8.0
     config.reward.discomfort_dist = 0.12
     active = CrowdNavSettings(
-        kinematics=original.kinematics,
+        kinematics="unicycle",
         action_mode=original.action_mode,
         env_config_obj=config,
     )
     set_settings(active)
     try:
         prompt = format_d1_initial(include_seed=False)
-        system_prompt = prompts.D1_SYSTEM_PROMPT
         external_knowledge = prompts.D4_EXTERNAL_KNOWLEDGE
         for text in (prompt, external_knowledge):
-            assert "between 6 and 10" in text
+            assert "between 1 and 15" in text
             assert "3.5 m circle radius" in text
             assert "2.5 m" in text
             assert "0.5π radians" in text
             assert "19 s" in text
-        for text in (system_prompt, external_knowledge):
-            assert "4 for success, -8 for collision" in text
-            assert "0.12 m" in text
+        assert "+1 for success, -1 for collision, and -0.5 for timeout" in external_knowledge
     finally:
         set_settings(original)
 
 
 def test_action_space_prompt_block_follows_kinematics():
-    holo = action_space_prompt_block(CrowdNavSettings())
+    holo = action_space_prompt_block(CrowdNavSettings(kinematics="holonomic"))
     uni = action_space_prompt_block(CrowdNavSettings(kinematics="unicycle", action_mode="continuous"))
     assert "(vx, vy)" in holo and "continuous 2-D Box" in holo
     assert "(v, r)" in uni and "continuous" in uni

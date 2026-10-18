@@ -26,7 +26,7 @@ DEFAULT_ENV_CONFIG_PATH = os.path.join(
 
 @dataclass(frozen=True)
 class CrowdNavSettings:
-    kinematics: str = "holonomic"
+    kinematics: str = "unicycle"
     action_mode: str = "continuous"
     speed_samples: int = 5
     rotation_samples: int = 16

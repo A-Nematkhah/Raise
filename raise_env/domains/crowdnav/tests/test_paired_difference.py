@@ -10,12 +10,17 @@ from raise_core.selection import statistical_ties
 
 def test_paired_se_tighter_than_independent():
     # Shared case effects: independent SE overstates uncertainty.
-    eps_a = [{"case": i, "task_return": 0.10 + 0.05 * (i % 3)} for i in range(20)]
+    eps_a = [
+        {"case": i, "selection_score": 0.10 + 0.05 * (i % 3)} for i in range(20)
+    ]
     eps_b = [
-        {"case": i, "task_return": row["task_return"] + 0.02 + 0.001 * (i % 2)}
+        {
+            "case": i,
+            "selection_score": row["selection_score"] + 0.02 + 0.001 * (i % 2),
+        }
         for i, row in enumerate(eps_a)
     ]
-    paired = paired_difference(eps_a, eps_b, key="task_return")
+    paired = paired_difference(eps_a, eps_b)
     assert paired is not None
     assert paired["n"] == 20
     assert paired["mean"] > 0
@@ -24,15 +29,21 @@ def test_paired_se_tighter_than_independent():
 
     import numpy as np
 
-    a = np.asarray([e["task_return"] for e in eps_a], dtype=float)
-    b = np.asarray([e["task_return"] for e in eps_b], dtype=float)
+    a = np.asarray([e["selection_score"] for e in eps_a], dtype=float)
+    b = np.asarray([e["selection_score"] for e in eps_b], dtype=float)
     se_ind = math.hypot(a.std(ddof=1) / math.sqrt(len(a)), b.std(ddof=1) / math.sqrt(len(b)))
     assert paired["se"] < se_ind
 
 
 def test_paired_difference_fallback_when_cases_differ():
-    eps_a = [{"case": 0, "task_return": 0.1}, {"case": 1, "task_return": 0.2}]
-    eps_b = [{"case": 0, "task_return": 0.3}, {"case": 9, "task_return": 0.4}]
+    eps_a = [
+        {"case": 0, "selection_score": 0.1},
+        {"case": 1, "selection_score": 0.2},
+    ]
+    eps_b = [
+        {"case": 0, "selection_score": 0.3},
+        {"case": 9, "selection_score": 0.4},
+    ]
     assert paired_difference(eps_a, eps_b) is None
 
 
@@ -45,7 +56,10 @@ def test_statistical_ties_uses_paired_band_when_episodes_match():
     shared = [0.1 * ((i * 7) % 5) for i in cases]
 
     def _from_returns(cid: str, returns, se: float) -> RewardCandidate:
-        eps = [{"case": c, "task_return": float(v)} for c, v in zip(cases, returns)]
+        eps = [
+            {"case": c, "selection_score": float(v)}
+            for c, v in zip(cases, returns)
+        ]
         fit = sum(returns) / len(returns)
         return RewardCandidate(
             candidate_id=cid,

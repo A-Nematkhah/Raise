@@ -76,8 +76,8 @@ candidate) and `stage3/checkpoint.json` (per Stage III candidate).
 1. Gen0: the LLM proposes N reward functions; each passes the sandbox
    (AST policy → spawned smoke test → compile).
 2. Each of G generations: Score1 on the Stage I dataset, PPO train + holdout
-   eval of every new candidate, rank by fitness (mean upstream episode task
-   return on `val` scenarios), LLM crossover /
+   eval of every new candidate, rank by mean outcome score (+1 success,
+   -1 collision, -0.5 timeout) on held-out `val` scenarios, LLM crossover /
    mutation (with the evaluation metrics in the prompt) / random restarts,
    elitism. Default next generation at N=6: 1 elite + 2 crossover + 2
    mutation + 1 random; `--n-crossover`, `--n-mutation`, `--n-random` and
@@ -104,8 +104,8 @@ candidate) and `stage3/checkpoint.json` (per Stage III candidate).
 **Stage II eval precision.** With 50 holdout episodes, most of the
 between-candidate fitness variance in a 16h CrowdNav run was evaluation
 noise. Prefer `--stage2-eval-episodes 200` (or more); evaluation is ~0.02 s
-per episode. `--stage2-eval-split {val,train}` chooses the holdout pool
-(default `val`; Stage III/final stay on val/test).
+per episode. Stage II selection always uses the held-out `val` pool; training scenarios
+cannot be selected as holdout fitness.
 `--stage2-successive-halving` (off by default) trains all at K2/3 then
 continues the top half from their own checkpoints for the remaining 2K2/3.
 `--mutation-exclude-collapsed` (off by default) drops CR≥`--collapse-cr`
@@ -124,8 +124,9 @@ default).
 
 Robot / action options: `--robot-kinematics {holonomic,unicycle}`,
 `--action-mode {discrete,continuous}` (discrete uses the configured wrapper
-action table; defaults to 81 actions), `--env-config` (a CrowdNav++ Python
-config file exposing `Config` or `config`).
+action table; defaults are unicycle kinematics and continuous actions),
+`--env-config` (a CrowdNav++ Python config file exposing `Config` or
+`config`). The included hard setup is `configs/crowdnav_hard.py`.
 
 ## Sanity checks and ablations
 
@@ -138,11 +139,11 @@ python scripts/run_baselines.py --run-dir results/crowdnav_16h --seeds 3 --skip-
 python scripts/run_gamma_sweep.py --run-dir results/crowdnav_16h --gammas matched,0.99,0.995 --rewards native,final --seeds 2
 ```
 
-CrowdNav++'s evaluator sums native rewards within each episode and reports the
-mean; RAISE uses that same undiscounted episode return for fitness. PPO's
-`PPO_GAMMA` discounts learned rewards during training and is independent of
-the selection metric. In the PPO discount sweep, `matched` means `1.0` (no
-extra evaluation discount). `run_baselines.py --ppo-gamma G` writes
+CrowdNav++ native episode return is retained as a diagnostic. RAISE selection
+fitness is the mean outcome score (+1 success, -1 collision, -0.5 timeout);
+PPO's `PPO_GAMMA` discounts learned rewards during training and is independent
+of selection. In the PPO discount sweep, `matched` means `1.0` (no extra
+evaluation discount). `run_baselines.py --ppo-gamma G` writes
 `baselines_gamma<G>.json`; the sweep writes `gamma_sweep.json` (resumable,
 paired per-seed deltas vs the reference gamma). Score1 continues to use
 `PPO_GAMMA` for its Stage I preference proxy.

@@ -40,7 +40,7 @@ def _cand(cid: str, fitness: float, cr: float, code_i: int = 0) -> RewardCandida
                 "holdout": {"CR": cr, "SR": max(0.0, 1.0 - cr), "TR": 0.0},
                 "CR": cr,
                 "holdout_episodes": [
-                    {"case": i, "task_return": fitness} for i in range(4)
+                    {"case": i, "selection_score": fitness} for i in range(4)
                 ],
             },
         },

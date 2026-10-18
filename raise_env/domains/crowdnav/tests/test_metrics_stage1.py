@@ -12,6 +12,7 @@ from domains.crowdnav.metrics import (
     attach_fitness,
     crowdnav_fitness,
     discounted_task_return,
+    episode_selection_score,
     episode_task_return,
     episode_fields,
     evidence_line,
@@ -93,6 +94,8 @@ def test_evaluation_fitness_uses_undiscounted_native_episode_sum():
     assert metrics._crowdnav_extras["task_return"] == pytest.approx(1.5)
     episode = metrics._crowdnav_episodes[0]
     assert episode["task_return"] == pytest.approx(1.5)
+    assert episode["selection_score"] == 1.0
+    assert metrics._crowdnav_extras["fitness_se"] == 0.0
     assert episode["return"] == pytest.approx(11.0)
     assert episode["disc_return"] == pytest.approx(10.94)
 
@@ -103,6 +106,7 @@ def test_episode_fields_and_fitness():
         ["success", "collision", "timeout", "success"],
         [10.0, 3.0, time_limit, 12.0],
         [0.5, -0.25, 0.0, 0.4],
+        [1.0, -1.0, -0.5, 1.0],
         [2, 0, 0, 1],
         [40, 12, 100, 48],
         [0.1, 0.15],
@@ -114,12 +118,21 @@ def test_episode_fields_and_fitness():
     assert f["ITR"] == pytest.approx(3 / 200)
     assert f["SD"] == pytest.approx(0.125)
     # No success: nav time is the time limit (upstream reports it the same way).
-    assert episode_fields(
-        ["timeout"], [time_limit], [0.0], [0], [100], [], time_limit=time_limit
-    )["NT"] == time_limit
+    timeout_fields = episode_fields(
+        ["timeout"], [time_limit], [0.0], [-0.5], [0], [100], [],
+        time_limit=time_limit,
+    )
+    assert timeout_fields["NT"] == time_limit
+    assert timeout_fields["selection_score"] == -0.5
 
-    m = attach_fitness({"task_return": 0.1, "holdout": {"task_return": 0.3}})
+    assert f["selection_score"] == pytest.approx(0.125)
+    m = attach_fitness(
+        {"task_return": 100.0, "holdout": {"selection_score": 0.3}}
+    )
     assert m["fitness"] == m["selection_scalar"] == pytest.approx(0.3) and m["domain"] == "crowdnav"
+    assert episode_selection_score("success") == 1.0
+    assert episode_selection_score("collision") == -1.0
+    assert episode_selection_score("timeout") == -0.5
     assert crowdnav_fitness(None) == float("-inf") and crowdnav_fitness({"SR": 1.0}) == float("-inf")
     assert fitness_standard_error([1.0]) == 0.0
     assert fitness_standard_error([0.0, 1.0, 2.0]) == pytest.approx(1.0 / math.sqrt(3))
@@ -130,6 +143,18 @@ def test_evidence_line_reports_crowdnav_metrics():
                                       "ITR": 0.05, "SD": 0.12, "n_eval_episodes": 20}})
     assert line.startswith("Holdout eval (20 episodes): SR=0.80 CR=0.10 TR=0.10 nav_time=11.20s")
     assert "path_length=9.10m" in line and "danger_freq=0.050" in line and "min_dist_in_danger=0.120m" in line
+
+    no_success = evidence_line(
+        {"SR": 0.0, "CR": 0.5, "TR": 0.5, "NT": 50.0, "n_eval_episodes": 2}
+    )
+    assert "nav_time=n/a" in no_success
+
+
+def test_outcome_fitness_uses_success_collision_timeout_rates():
+    assert crowdnav_fitness({"SR": 0.5, "CR": 0.25, "TR": 0.25}) == pytest.approx(
+        0.125
+    )
+    assert crowdnav_fitness({"task_return": 100.0}) == float("-inf")
 
 
 # ------------------------------------------------------------------ dataset
@@ -176,6 +201,9 @@ def test_unicycle_view_of_holonomic_actions(dataset_dir):
     for holo, st in zip(traj.states, uni.states):
         assert st.action[0] == pytest.approx(math.hypot(*holo.action))
         assert -math.pi <= st.action[1] <= math.pi
+    assert with_settings(
+        [uni], CrowdNavSettings(kinematics="unicycle", action_mode="continuous")
+    )[0].states == uni.states
 
 
 # ------------------------------------------------------------------ Score1
@@ -206,9 +234,12 @@ def test_smoke_score_never_rejects():
 
 
 def test_score1_worker_matches_in_process_and_times_out(dataset_dir):
-    trajs = load_crowdnav_dataset(dataset_dir)
+    settings = CrowdNavSettings(kinematics="unicycle")
+    trajs = with_settings(load_crowdnav_dataset(dataset_dir), settings)
     seed = _validated(D5_SEED_FUNCTION)
-    worker = Score1TimeoutWorker(dataset_dir, trajs, timeout_seconds=30.0)
+    worker = Score1TimeoutWorker(
+        dataset_dir, trajs, timeout_seconds=30.0, settings=settings
+    )
     try:
         assert worker(seed).score == pytest.approx(score_crowdnav_dataset(seed, trajs).score)
         slow_code = _FN + (

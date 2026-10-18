@@ -77,7 +77,7 @@ def _load_collect_module() -> Any:
 def _space_knobs(run_cfg: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "action_mode": str(run_cfg.get("action_mode") or "continuous"),
-        "robot_kinematics": str(run_cfg.get("robot_kinematics") or "holonomic"),
+        "robot_kinematics": str(run_cfg.get("robot_kinematics") or "unicycle"),
         "action_speed_samples": int(run_cfg.get("action_speed_samples") or 5),
         "action_rotation_samples": int(run_cfg.get("action_rotation_samples") or 16),
         "env_config_path": run_cfg.get("env_config_path"),
@@ -162,9 +162,7 @@ def _vs_final(
     }
     if baseline_eps is None or final_eps is None:
         return row
-    paired = paired_difference(baseline_eps, final_eps, key="task_return")
-    if paired is None:
-        paired = paired_difference(baseline_eps, final_eps, key="disc_return")
+    paired = paired_difference(baseline_eps, final_eps, key="selection_score")
     if paired is None:
         return row
     mean = float(paired["mean"])
@@ -174,7 +172,7 @@ def _vs_final(
         paired_se=se,
         z=(mean / se) if se > 0.0 and math.isfinite(se) else None,
         n=int(paired["n"]),
-        method="paired_task_return",
+        method="paired_outcome_score",
     )
     return row
 
@@ -278,6 +276,11 @@ def _summarize_metrics(metrics: Dict[str, Any]) -> Dict[str, Any]:
         "SR": holdout.get("SR") if isinstance(holdout, dict) else metrics.get("SR"),
         "CR": holdout.get("CR") if isinstance(holdout, dict) else metrics.get("CR"),
         "TR": holdout.get("TR") if isinstance(holdout, dict) else metrics.get("TR"),
+        "selection_score": (
+            holdout.get("selection_score")
+            if isinstance(holdout, dict)
+            else metrics.get("selection_score")
+        ),
         "task_return": (
             holdout.get("task_return") if isinstance(holdout, dict) else metrics.get("task_return")
         ),
@@ -370,7 +373,11 @@ def _eval_controller(
 
 def _merge_proxy_metrics(parts: Sequence[Any], *, time_limit: float) -> Any:
     """Concatenate per-case ProxyMetrics into one (same schema as ``_eval_metrics``)."""
-    from domains.crowdnav.metrics import episode_fields, fitness_standard_error
+    from domains.crowdnav.metrics import (
+        episode_fields,
+        episode_selection_score,
+        fitness_standard_error,
+    )
     from raise_core.refine import ProxyMetrics
 
     records: List[Dict[str, Any]] = []
@@ -379,6 +386,9 @@ def _merge_proxy_metrics(parts: Sequence[Any], *, time_limit: float) -> Any:
     outcomes = [str(r.get("outcome") or "timeout") for r in records]
     nav_times = [float(r.get("time") or 0.0) for r in records]
     task_returns = [float(r.get("task_return") or 0.0) for r in records]
+    selection_scores = [
+        episode_selection_score(str(r.get("outcome") or "timeout")) for r in records
+    ]
     danger_counts = [int(r.get("danger_steps") or 0) for r in records]
     step_counts = [int(r.get("steps") or 0) for r in records]
     returns = [float(r.get("return") or 0.0) for r in records]
@@ -389,9 +399,7 @@ def _merge_proxy_metrics(parts: Sequence[Any], *, time_limit: float) -> Any:
         if r.get("outcome") == "success"
     ]
     fields = episode_fields(
-        outcomes,
-        nav_times,
-        task_returns,
+        outcomes, nav_times, task_returns, selection_scores,
         danger_counts,
         step_counts,
         [],
@@ -408,7 +416,8 @@ def _merge_proxy_metrics(parts: Sequence[Any], *, time_limit: float) -> Any:
     )
     metrics._crowdnav_extras = {  # type: ignore[attr-defined]
         "task_return": fields["task_return"],
-        "fitness_se": fitness_standard_error(task_returns),
+        "selection_score": fields["selection_score"],
+        "fitness_se": fitness_standard_error(selection_scores),
         "mean_return": float(np.mean(returns)) if returns else 0.0,
         "mean_min_separation": float(np.mean(min_seps)) if min_seps else 0.0,
         "n_success": sum(1 for o in outcomes if o == "success"),

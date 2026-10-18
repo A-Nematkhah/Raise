@@ -23,6 +23,7 @@ from domains.crowdnav.metrics import (
     attach_fitness,
     episode_task_return,
     episode_fields,
+    episode_selection_score,
     fitness_standard_error,
     format_crowdnav_metrics_line,
 )
@@ -46,7 +47,7 @@ warnings.filterwarnings(
     category=UserWarning,
 )
 
-EVAL_SPLITS = ("val", "test", "train")
+EVAL_SPLITS = ("val", "test")
 # Seed offsets of the training-scenario eval (``eval_mode=both``) and of the
 # stochastic-policy action sampling, relative to the eval seed base.
 TRAIN_EVAL_SEED_OFFSET = 10_003
@@ -185,6 +186,7 @@ def _eval_with_step(
     outcomes: List[str] = []
     nav_times: List[float] = []
     task_returns: List[float] = []
+    selection_scores: List[float] = []
     danger_counts: List[int] = []
     step_counts: List[int] = []
     danger_dists: List[float] = []
@@ -227,9 +229,11 @@ def _eval_with_step(
         outcome = str(info.get("raise_outcome") or "timeout")
         ep_time = float(info.get("raise_global_time", 0.0))
         task_ret = episode_task_return(native)
+        selection_score = episode_selection_score(outcome)
         outcomes.append(outcome)
         nav_times.append(ep_time)
         task_returns.append(task_ret)
+        selection_scores.append(selection_score)
         danger_counts.append(ep_danger)
         step_counts.append(len(native))
         min_seps.append(ep_min_sep)
@@ -247,6 +251,7 @@ def _eval_with_step(
             "return": round(ep_return, 4),
             "disc_return": round(ep_disc, 4),
             "task_return": round(task_ret, 4),
+            "selection_score": selection_score,
         }
         if record_components:
             record["components"] = {k: round(v, 4) for k, v in ep_components.items()}
@@ -256,6 +261,7 @@ def _eval_with_step(
         outcomes,
         nav_times,
         task_returns,
+        selection_scores,
         danger_counts,
         step_counts,
         danger_dists,
@@ -272,7 +278,8 @@ def _eval_with_step(
     )
     metrics._crowdnav_extras = {  # type: ignore[attr-defined]
         "task_return": fields["task_return"],
-        "fitness_se": fitness_standard_error(task_returns),
+        "selection_score": fields["selection_score"],
+        "fitness_se": fitness_standard_error(selection_scores),
         "mean_return": float(np.mean(returns)) if returns else 0.0,
         "mean_min_separation": float(np.mean(min_seps)) if min_seps else 0.0,
         "n_success": sum(1 for o in outcomes if o == "success"),

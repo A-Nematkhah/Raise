@@ -46,12 +46,11 @@ class ClosedLoopConfig:
     # their own checkpoints for the remaining 2K2/3 (total still K2 steps).
     stage2_successive_halving: bool = False
     eval_mode: str = "holdout_only"  # both | holdout_only
-    # Stage II holdout pool: val (default) | train (fresh train-split cases).
-    # Stage III / final eval stay on val / test regardless of this setting.
+    # Stage II selection pool is held-out val; Stage III/final use val/test.
     stage2_eval_split: str = "val"
     # Robot / action space (domains.crowdnav.settings).
     action_mode: str = "continuous"
-    robot_kinematics: str = "holonomic"
+    robot_kinematics: str = "unicycle"
     action_speed_samples: int = 5
     action_rotation_samples: int = 16
     env_config_path: Optional[str] = None

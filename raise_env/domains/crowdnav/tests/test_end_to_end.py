@@ -48,7 +48,7 @@ def _load(run_dir, name):
 def test_run_writes_crowdnav_artifacts(run_dir):
     manifest = _load(run_dir, "manifest.json")
     assert manifest["domain"] == "crowdnav"
-    assert manifest["config"]["robot_kinematics"] == "holonomic"
+    assert manifest["config"]["robot_kinematics"] == "unicycle"
     for name in ("config.json", "seed_reward.py", "best_stage1.json", "stage2_population.json",
                  "best_stage2.json", "stage3_population.json", "best_stage3.json", "final_candidate.json"):
         assert os.path.isfile(os.path.join(run_dir, name)), name

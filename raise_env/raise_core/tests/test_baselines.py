@@ -65,11 +65,11 @@ def test_select_baseline_b_skips_collapsed_and_honours_extra_ids():
 
 def test_vs_final_paired_delta_and_z():
     bas = _load_baselines_mod()
-    eps_b = [{"case": i, "task_return": 0.10} for i in range(10)]
-    eps_f = [{"case": i, "task_return": 0.20} for i in range(10)]
-    row = bas._vs_final(eps_b, eps_f, baseline_fitness=0.10, final_fitness=0.20)
-    assert row["method"] == "paired_task_return"
-    assert row["delta_fitness"] == pytest.approx(0.10)
+    eps_b = [{"case": i, "outcome": "timeout"} for i in range(10)]
+    eps_f = [{"case": i, "outcome": "success"} for i in range(10)]
+    row = bas._vs_final(eps_b, eps_f, baseline_fitness=-0.5, final_fitness=1.0)
+    assert row["method"] == "paired_outcome_score"
+    assert row["delta_fitness"] == pytest.approx(1.5)
     assert row["paired_se"] == pytest.approx(0.0)
     assert row["z"] is None or row["n"] == 10
 

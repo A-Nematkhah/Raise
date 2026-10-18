@@ -1,20 +1,19 @@
-"""
-CrowdNav++ evaluation metrics and the official selection fitness.
+"""CrowdNav++ evaluation metrics and the official outcome-score fitness.
 
 Episode statistics follow CrowdNav++ upstream ``rl/evaluation.py``
 (``evaluate``):
 
 * SR / CR / TR — success (``ReachGoal``), collision and timeout rates;
 * NT — mean navigation time of successful episodes (``time_limit`` if none);
-* task return — mean of per-episode sums of native rewards, with no extra
-  evaluation discount;
+* task return — mean per-episode sum of native rewards (diagnostic only);
 * ITR — danger frequency: steps whose upstream info is ``Danger`` divided by
   all steps (upstream "frequency of being in danger");
 * SD — mean ``Danger.min_dist`` over those steps (upstream "average min
   separate distance in danger").
 
-Fitness (higher is better) is that upstream task return on the holdout
-evaluation. ``fitness_se`` is its standard error over episode returns.
+Fitness (higher is better) is the mean outcome score on held-out validation
+episodes: +1 for success, -1 for collision, and -0.5 for timeout.
+``fitness_se`` is its standard error over per-episode outcome scores.
 """
 
 from __future__ import annotations
@@ -38,6 +37,7 @@ __all__ = [
 ]
 
 OUTCOMES = ("success", "collision", "timeout")
+OUTCOME_SCORES = {"success": 1.0, "collision": -1.0, "timeout": -0.5}
 
 
 def _finite(x: Any, default: float = 0.0) -> float:
@@ -65,6 +65,14 @@ def episode_task_return(native_rewards: Sequence[float]) -> float:
     return float(sum(float(reward) for reward in native_rewards))
 
 
+def episode_selection_score(outcome: str) -> float:
+    """Score a terminal outcome according to the CrowdNav selection objective."""
+    try:
+        return OUTCOME_SCORES[str(outcome)]
+    except KeyError as exc:
+        raise ValueError(f"Unsupported CrowdNav episode outcome: {outcome!r}") from exc
+
+
 def _metrics_for_fitness(metrics: Mapping[str, Any]) -> Mapping[str, Any]:
     holdout = metrics.get("holdout")
     if isinstance(holdout, Mapping) and holdout:
@@ -73,29 +81,35 @@ def _metrics_for_fitness(metrics: Mapping[str, Any]) -> Mapping[str, Any]:
 
 
 def crowdnav_fitness(metrics: Optional[Mapping[str, Any]]) -> float:
-    """Mean upstream episode task return on the (holdout) evaluation."""
+    """Mean outcome score on the (holdout) evaluation."""
     if not metrics:
         return float("-inf")
     src = _metrics_for_fitness(metrics)
-    value = src.get("task_return")
+    value = src.get("selection_score")
+    if value is None and all(key in src for key in ("SR", "CR", "TR")):
+        value = (
+            _finite(src.get("SR"))
+            - _finite(src.get("CR"))
+            - 0.5 * _finite(src.get("TR"))
+        )
     if value is None:
         return float("-inf")
     return _finite(value, float("-inf"))
 
 
-def fitness_standard_error(task_returns: Sequence[float]) -> float:
-    """Standard error of the mean task return (0.0 for fewer than two episodes)."""
-    n = len(task_returns)
+def fitness_standard_error(selection_scores: Sequence[float]) -> float:
+    """Standard error of the mean outcome score (0.0 for fewer than two episodes)."""
+    n = len(selection_scores)
     if n < 2:
         return 0.0
-    return float(np.std(np.asarray(task_returns, dtype=float), ddof=1) / math.sqrt(n))
+    return float(np.std(np.asarray(selection_scores, dtype=float), ddof=1) / math.sqrt(n))
 
 
 def paired_difference(
     eps_a: Sequence[Mapping[str, Any]],
     eps_b: Sequence[Mapping[str, Any]],
     *,
-    key: str = "task_return",
+    key: str = "selection_score",
 ) -> Optional[Dict[str, float]]:
     """Mean per-case difference and its SE when both lists share the same cases.
 
@@ -105,13 +119,18 @@ def paired_difference(
     def _by_case(eps: Sequence[Mapping[str, Any]]) -> Optional[Dict[Any, float]]:
         out: Dict[Any, float] = {}
         for row in eps:
-            if not isinstance(row, Mapping) or "case" not in row or key not in row:
+            if not isinstance(row, Mapping) or "case" not in row:
                 return None
             case = row["case"]
             if case in out:
                 return None
             try:
-                out[case] = float(row[key])
+                value = row.get(key)
+                if value is None and key == "selection_score":
+                    value = episode_selection_score(str(row.get("outcome", "")))
+                if value is None:
+                    return None
+                out[case] = float(value)
             except (TypeError, ValueError):
                 return None
         return out
@@ -132,6 +151,7 @@ def episode_fields(
     outcomes: Sequence[str],
     nav_times: Sequence[float],
     task_returns: Sequence[float],
+    selection_scores: Sequence[float],
     danger_steps: Sequence[int],
     steps: Sequence[int],
     danger_min_dists: Sequence[float],
@@ -148,6 +168,9 @@ def episode_fields(
         "TR": sum(1 for o in outcomes if o == "timeout") / n,
         "NT": float(np.mean(success_times)) if success_times else float(time_limit),
         "task_return": float(np.mean(task_returns)) if len(task_returns) else 0.0,
+        "selection_score": (
+            float(np.mean(selection_scores)) if len(selection_scores) else float("-inf")
+        ),
         "ITR": float(sum(int(d) for d in danger_steps)) / float(max(1, total_steps)),
         "SD": float(np.mean(danger_min_dists)) if len(danger_min_dists) else 0.0,
     }
@@ -185,7 +208,7 @@ def format_crowdnav_metrics_line(metrics: Mapping[str, Any]) -> str:
         )
     return (
         f"{tag}SR={_finite(src.get('SR')):.2f} CR={_finite(src.get('CR')):.2f} "
-        f"TR={_finite(src.get('TR')):.2f} nav_time={_finite(src.get('NT')):.2f}s "
+        f"TR={_finite(src.get('TR')):.2f} nav_time={_nav_time_text(src)} "
         f"path={_finite(src.get('PL')):.2f}m danger_freq={_finite(src.get('ITR')):.3f} "
         f"min_dist_in_danger={_finite(src.get('SD')):.3f}m "
         f"fitness={crowdnav_fitness(metrics):.3f}{se_txt}{counts}"
@@ -206,10 +229,16 @@ def evidence_line(metrics: Mapping[str, Any]) -> str:
     return (
         f"Holdout eval ({n_ep_s} episodes): "
         f"SR={_finite(src.get('SR')):.2f} CR={_finite(src.get('CR')):.2f} "
-        f"TR={_finite(src.get('TR')):.2f} nav_time={_finite(src.get('NT')):.2f}s "
+        f"TR={_finite(src.get('TR')):.2f} nav_time={_nav_time_text(src)} "
         f"path_length={_finite(src.get('PL')):.2f}m danger_freq={_finite(src.get('ITR')):.3f} "
         f"min_dist_in_danger={_finite(src.get('SD')):.3f}m"
     )
+
+
+def _nav_time_text(metrics: Mapping[str, Any]) -> str:
+    if _finite(metrics.get("SR")) <= 0.0:
+        return "n/a"
+    return f"{_finite(metrics.get('NT')):.2f}s"
 
 
 def attach_fitness(metrics: Dict[str, Any]) -> Dict[str, Any]:

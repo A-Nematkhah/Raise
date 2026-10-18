@@ -8,9 +8,14 @@ Python `Config` object or a Python config file. Environment dimensions,
 population, robot/human properties, sensor range/FOV, time limits and native
 reward parameters come from that config. For example, the upstream default
 Python config uses 20 humans with no initial count range, a 12 m square arena,
-holonomic kinematics, a 5 m sensor range, and full-circle FOV. A fixed
+holonomic simulator configuration, a 5 m sensor range, and full-circle FOV.
+RAISE defaults to unicycle kinematics and continuous control. A fixed
 `human_num_override` can be supplied for tests and smoke runs; it sets the
-human range to zero for that run. Otherwise `sim.human_num` and
+configured human range to zero before unicycle compatibility adjustment.
+Unicycle reset in upstream samples from 1 through `human_num +
+human_num_range`, but checks the lower bound `human_num - human_num_range`;
+the wrapper expands a too-small unicycle range to `human_num - 1` so these
+invariants agree. Otherwise `sim.human_num` and
 `sim.human_num_range` control population bounds and changes.
 
 The upstream simulator resets global NumPy state. The wrapper serializes
@@ -84,8 +89,8 @@ native value in `info["raise_native_reward"]`; the seed function reproduces it.
   `robot_node`, `temporal_edges`, `visible_masks`, `spatial_edges`, and
   `detected_human_num`. Human arrays are padded to the configured maximum
   population.
-- Kinematics and action mode follow the active settings; the default is
-  holonomic with continuous control. The action-space prompt describes the
+- Kinematics and action mode follow the active settings; RAISE defaults to
+  unicycle with continuous control. The action-space prompt describes the
   active controls.
 - PPO uses `MultiInputPolicy` with a CrowdNav-specific feature extractor: robot
   state and velocity form the context features, while a shared human encoder
@@ -101,21 +106,19 @@ native value in `info["raise_native_reward"]`; the seed function reproduces it.
 
 ## Fitness
 
-Official fitness = the mean per-episode sum of native CrowdNav++ rewards on
-the evaluation split, reported with its standard error. This matches the
-upstream `rl/evaluation.py` evaluator, which adds each step reward to
-`episode_rew` and reports the mean episode reward without an additional
-evaluation discount. PPO's training discount is separate. Also recorded:
+Official fitness = the mean per-episode outcome score on held-out validation
+scenarios: +1 for success, -1 for collision, and -0.5 for timeout, reported
+with its standard error. Native CrowdNav++ task return remains a diagnostic,
+not the selection objective. PPO's training discount is separate. Also recorded:
 SR / CR / TR (success / collision / timeout rates), NT (navigation time of
 successes), PL (path length of successes), ITR (danger frequency), SD (mean
 minimum distance in danger).
 
 SB3 2.9.0 treats a time-limit truncation as an episode boundary for PPO and
 bootstraps the training target with `gamma * V(terminal_observation)`. Fitness
-evaluation instead uses the observed episode reward sequence; an upstream
-timeout contributes its native timeout reward without value-function
-bootstrapping. This is an intentional difference between PPO's training target
-and the reported task fitness.
+evaluation instead uses the observed episode outcome; a timeout receives -0.5
+for fitness regardless of its native reward. This is an intentional difference
+between PPO's training target and the reported outcome-score fitness.
 
 ## Stage I (Score1)
 
@@ -124,7 +127,8 @@ Score1 is a cheap sanity filter over a dataset of real CrowdNav++ rollouts
 clearance / speed / reaction settings, Linear, slow Linear, stop and random
 robots on the same `train` scenarios). The collector supports holonomic and
 unicycle kinematics; unicycle runs must satisfy CrowdNav++'s human-count
-initialization constraint. Score1 returns are discounted with PPO's γ.
+initialization follows the simulator's configured variable-human rules.
+Score1 returns are discounted with PPO's γ.
 
 ```
 safety  = 2·AUC − 1 of success ≻ timeout ≻ collision on discounted returns

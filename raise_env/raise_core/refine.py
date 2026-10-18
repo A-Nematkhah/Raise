@@ -32,13 +32,11 @@ class Stage2Config:
     n_envs: int = 1
     warm_start: bool = False
     eval_mode: str = "both"
-    # Upstream scenario split for the selection eval (val | train | test).
-    # Stage II may use train via --stage2-eval-split; Stage III stays on val
-    # and the final blind eval on test.
+    # Upstream scenario split for selection / held-out evaluation.
     eval_split: str = "val"
     # Robot / action space (domains.crowdnav.settings).
     action_mode: str = "continuous"
-    robot_kinematics: str = "holonomic"
+    robot_kinematics: str = "unicycle"
     action_speed_samples: int = 5
     action_rotation_samples: int = 16
     env_config_path: Optional[str] = None

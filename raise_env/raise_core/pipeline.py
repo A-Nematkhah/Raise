@@ -109,7 +109,7 @@ class RaiseRunConfig:
     generations: int = 4
     stage2_train_steps: int = 12_000
     stage2_eval_episodes: int = 30
-    # Stage II holdout pool: val (default) | train. Stage III/final stay val/test.
+    # Stage II selection uses the held-out val scenarios.
     stage2_eval_split: str = "val"
 
     # Stage III: long PPO on the final population.
@@ -157,7 +157,7 @@ class RaiseRunConfig:
     eval_mode: str = "holdout_only"
     # Robot / action space (domains.crowdnav.settings).
     action_mode: str = "continuous"
-    robot_kinematics: str = "holonomic"
+    robot_kinematics: str = "unicycle"
     action_speed_samples: int = 5
     action_rotation_samples: int = 16
     env_config_path: Optional[str] = None
@@ -391,7 +391,7 @@ class RaisePipeline:
         cfg = self.config
         return {
             "action_mode": str(cfg.action_mode or "discrete"),
-            "robot_kinematics": str(cfg.robot_kinematics or "holonomic"),
+            "robot_kinematics": str(cfg.robot_kinematics or "unicycle"),
             "action_speed_samples": int(cfg.action_speed_samples),
             "action_rotation_samples": int(cfg.action_rotation_samples),
             "env_config_path": cfg.env_config_path,

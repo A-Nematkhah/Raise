@@ -200,12 +200,9 @@ def make_crowd_sim(
             "CrowdNav++ requires human_num >= 1 and "
             "0 <= human_num_range < human_num"
         )
-    if active.kinematics == "unicycle" and human_num_range < human_num - 1:
-        raise ValueError(
-            "CrowdNav++ unicycle initialization samples 1..human_num+human_num_range, "
-            "but the simulator asserts human_num-human_num_range as its minimum; "
-            "set human_num_range >= human_num-1 or use holonomic kinematics"
-        )
+    if active.kinematics == "unicycle":
+        human_num_range = max(human_num_range, human_num - 1)
+        config.sim.human_num_range = human_num_range
 
     config.action_space.kinematics = active.kinematics
     config.robot.policy = "srnn"
@@ -340,7 +337,12 @@ def outcome_of(info: Any) -> Optional[str]:
 
 
 class RewardInjectedCrowdNavEnv(gym.Env):
-    """CrowdNav++ variable-human env with optional RAISE reward injection."""
+    """CrowdNav++ variable-human env with optional RAISE reward injection.
+
+    CrowdNav++'s unicycle reset samples 1..human_num+human_num_range, while
+    its invariant checks human_num-human_num_range..human_num+human_num_range.
+    Expand too-small ranges to human_num-1 so every sampled count is valid.
+    """
 
     metadata = {"render_modes": ["rgb_array"], "render_fps": 4}
 

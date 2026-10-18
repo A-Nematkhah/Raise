@@ -35,12 +35,24 @@ def _configured_env():
 
 def _task_description() -> str:
     config, settings = _configured_env()
-    minimum = max(1, int(config.sim.human_num) - int(config.sim.human_num_range))
-    maximum = int(config.sim.human_num) + int(config.sim.human_num_range)
+    human_num = (
+        int(settings.human_num_override)
+        if settings.human_num_override is not None
+        else int(config.sim.human_num)
+    )
+    human_num_range = (
+        0
+        if settings.human_num_override is not None
+        else int(config.sim.human_num_range)
+    )
+    if settings.kinematics == "unicycle":
+        human_num_range = max(human_num_range, human_num - 1)
+    minimum = max(1, human_num - human_num_range)
+    maximum = human_num + human_num_range
     fov_pi = float(config.robot.FOV)
     population_change = (
         "and may change during an episode"
-        if int(config.sim.human_num_range) > 0
+        if human_num_range > 0
         else "and remains fixed during an episode"
     )
     return (
@@ -64,18 +76,11 @@ def _selection_objective() -> str:
     return (
         "Your reward function is judged by training a PPO policy with it and "
         "evaluating it on held-out CrowdNav++ validation scenarios. Candidates "
-        "are ranked by mean upstream episode task return: the sum of native "
-        "CrowdNav++ rewards in each episode, averaged across evaluation episodes "
-        "with no extra evaluation discount (higher is better). "
-        f"The configured native reward assigns {float(config.reward.success_reward):g} "
-        f"for success, {float(config.reward.collision_penalty):g} for collision, "
-        "and applies its configured discomfort penalty and potential-based goal "
-        "shaping to nonterminal steps. A timeout has zero base reward. "
-        f"The discomfort distance is {float(config.reward.discomfort_dist):g} m; "
-        f"episodes end at the configured {float(config.env.time_limit):g} s limit. "
-        "Fast, collision-free arrivals score highest; freezing until timeout "
-        "scores about zero; collisions score below that. Reason about these "
-        "trade-offs directly from the evidence given to you."
+        "by mean per-episode outcome score: +1 for success, -1 for collision, "
+        "and -0.5 for timeout (higher is better). Native CrowdNav++ reward and "
+        "the reward function you write affect PPO training, but native task "
+        "return is not the selection fitness. Prefer policies that reach the "
+        "goal without collision rather than timing out."
     )
 
 

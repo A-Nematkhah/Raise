@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import warnings
+from pathlib import Path
 
 import gymnasium as gym
 import numpy as np
@@ -127,7 +128,7 @@ def _danger_scene(env):
     sim.generate_ob(reset=True, sort=False)
 
 
-def test_upstream_python_config_and_explicit_fixed_human_override():
+def test_upstream_python_config_and_human_override():
     upstream = load_env_config(DEFAULT_ENV_CONFIG_PATH)
     assert upstream.env.time_limit == 50
     assert upstream.env.time_step == 0.25
@@ -136,18 +137,50 @@ def test_upstream_python_config_and_explicit_fixed_human_override():
     assert upstream.sim.arena_size == 6
     assert upstream.robot.sensor_range == 5
     assert upstream.action_space.kinematics == "holonomic"
+    assert CrowdNavSettings().kinematics == "unicycle"
 
-    default_env = RewardInjectedCrowdNavEnv()
-    assert default_env.max_human_num == 20
-    assert default_env.observation_space["spatial_edges"].shape == (20, 2)
+    default_env = RewardInjectedCrowdNavEnv(settings=CrowdNavSettings())
+    assert default_env.max_human_num == 39
+    assert default_env.observation_space["spatial_edges"].shape == (39, 2)
 
     env = _env(human_num=2)
     obs, _ = env.reset(options={"case": 0})
     expected_human_num = env.settings.human_num_override
-    assert len(env.sim.humans) == env.human_num == expected_human_num
+    assert env.human_num == expected_human_num
+    assert len(env.sim.humans) == expected_human_num
     assert env.sim.max_human_num == expected_human_num
     assert env.observation_space["spatial_edges"].shape == (expected_human_num, 2)
     assert env.observation_space.contains(obs)
+
+
+def test_hard_config_is_loadable_python_config():
+    config_path = Path(__file__).resolve().parents[3] / "configs" / "crowdnav_hard.py"
+    config = load_env_config(str(config_path))
+    assert config.env.time_limit == 25
+    assert config.reward.success_reward == 1.0
+    assert config.reward.collision_penalty == -0.25
+    assert config.sim.circle_radius == 6
+    assert config.sim.human_num == 10
+    assert config.sim.human_num_range == 0
+
+
+def test_unicycle_uses_upstream_variable_human_initialization():
+    settings = CrowdNavSettings(
+        kinematics="unicycle",
+        action_mode="continuous",
+        env_config_obj=_config(human_num=3),
+        human_num_override=3,
+    )
+    env = RewardInjectedCrowdNavEnv(settings=settings)
+    try:
+        for case in range(5):
+            obs, _ = env.reset(options={"case": case})
+            assert 1 <= len(env.sim.humans) <= 5
+            assert env.sim.human_num_range == 2
+            assert env.observation_space.contains(obs)
+            env.step(np.zeros(2, dtype=np.float32))
+    finally:
+        env.close()
 
 
 def test_dict_observation_space_matches_upstream_observations():
@@ -191,7 +224,7 @@ def test_continuous_action_space_has_finite_kinematic_bounds():
 def test_variable_human_range_is_read_from_python_config():
     config = _config(human_num=10)
     config.sim.human_num_range = 2
-    settings = CrowdNavSettings(env_config_obj=config)
+    settings = CrowdNavSettings(kinematics="holonomic", env_config_obj=config)
     env = _env(settings=settings)
     counts = set()
     for case in range(20):

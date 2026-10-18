@@ -72,7 +72,8 @@ def _episodes(n_success: int, n_collision: int, *, components: bool = True) -> l
         e = {
             "outcome": "success", "steps": 40 + i, "time": 10.0 + 0.25 * i,
             "path_length": 8.5, "min_separation": 0.15, "danger_steps": 1,
-            "return": 1.6 + 0.01 * i, "disc_return": 1.2 + 0.01 * i, "task_return": 0.4,
+            "return": 1.6 + 0.01 * i, "disc_return": 1.2 + 0.01 * i,
+            "task_return": 0.4, "selection_score": 1.0,
         }
         if components:
             e["components"] = {"progress_term": 0.6 + 0.01 * i, "reach_term": 1.0, "collision_penalty": 0.0}
@@ -81,7 +82,8 @@ def _episodes(n_success: int, n_collision: int, *, components: bool = True) -> l
         e = {
             "outcome": "collision", "steps": 12 + i, "time": 3.0 + 0.25 * i,
             "path_length": 3.0, "min_separation": -0.05, "danger_steps": 4,
-            "return": -19.8 + 0.01 * i, "disc_return": -17.0 + 0.01 * i, "task_return": -0.25,
+            "return": -19.8 + 0.01 * i, "disc_return": -17.0 + 0.01 * i,
+            "task_return": -0.25, "selection_score": -1.0,
         }
         if components:
             e["components"] = {"progress_term": 0.2 + 0.01 * i, "reach_term": 0.0, "collision_penalty": -20.0}
@@ -94,6 +96,7 @@ def _metrics(sr, cr, *, tr=0.0, nt=10.0, pl=8.5, itr=0.05, sd=0.12, n=30,
     hold = {
         "SR": sr, "CR": cr, "TR": tr, "NT": nt, "PL": pl, "ITR": itr, "SD": sd,
         "n_eval_episodes": n, "fitness_se": se, "task_return": 0.4 * sr - 0.25 * cr,
+        "selection_score": sr - cr - 0.5 * tr,
     }
     m = {**hold, "holdout": dict(hold), "eval_profile": "holdout"}
     m["eval_context"] = {
@@ -368,7 +371,7 @@ def test_large_change_with_many_episodes_is_not_noise():
     assert "SR 0.40->0.63 (+0.23 better)" in text
     assert "CR 0.60->0.37 (-0.23 better)" in text
     # Only fitness names its SE mode; no per-case episodes here, so independent.
-    assert "fitness 0.010->0.160 (+0.149 better, independent)" in text
+    assert "fitness -0.200->0.260 (+0.460 better, independent)" in text
     # Danger frequency is not a rate with a binomial SE: no noise verdict.
     assert "danger_freq 0.080->0.030 (-0.050 better)" in text
 
@@ -776,9 +779,10 @@ def test_eval_metrics_keeps_per_episode_records(record_components):
     assert ok["outcome"] == "success" and crash["outcome"] == "collision"
     assert ok["return"] == pytest.approx(3.0)
     assert ok["disc_return"] == pytest.approx(1 + PPO_GAMMA + PPO_GAMMA ** 2, abs=1e-4)
-    # CrowdNav++ fitness matches the evaluator's raw sum of native rewards.
+    # Native task return stays diagnostic; selection uses terminal outcomes.
     assert ok["task_return"] == pytest.approx(1.0)
     assert crash["task_return"] == pytest.approx(-0.25)
+    assert ok["selection_score"] == 1.0 and crash["selection_score"] == -1.0
     assert crash["steps"] == 2 and ok["path_length"] == pytest.approx(3.0)
     assert ok["danger_steps"] == 1 and ok["time"] == pytest.approx(0.75)
     if record_components:

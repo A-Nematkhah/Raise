@@ -87,7 +87,7 @@ def statistical_ties(
     """Ids whose fitness is within ``z`` SE of ``best``.
 
     When both candidates carry ``holdout_episodes`` with identical ``case``
-    lists, the band is the paired SE of the per-case task-return difference
+    lists, the band is the paired SE of the per-case outcome-score difference
     (tighter). Otherwise falls back to ``z * max(se_best, se_i)`` with
     independent SEs.
     """
@@ -110,9 +110,9 @@ def statistical_ties(
                 except ImportError:  # pragma: no cover - domain optional in unit stubs
                     paired_difference = None  # type: ignore[assignment]
                 if paired_difference is not None:
-                    paired = paired_difference(other_eps, best_eps, key="task_return")
-                    if paired is None:
-                        paired = paired_difference(other_eps, best_eps, key="disc_return")
+                    paired = paired_difference(
+                        other_eps, best_eps, key="selection_score"
+                    )
                     if paired is not None:
                         band = z * float(paired["se"])
                         # Paired mean may differ slightly from cached fitness gap;

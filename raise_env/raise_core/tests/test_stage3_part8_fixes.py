@@ -104,6 +104,25 @@ def test_stage3_and_final_eval_use_unseen_seed_families(tmp_path, monkeypatch):
     assert sel["eval_seed_base"] == stage3_base
 
 
+def test_stage3_population_skips_duplicate_genomes():
+    runner = Stage3Runner(
+        StubPolicyTrainer(),
+        validator=make_crowdnav_validator(),
+        config=Stage3Config(resume=False),
+    )
+    first = _cand("aa")
+    duplicate = _cand("bb")
+    distinct = _cand("ccc")
+
+    prepared = runner._prepare_population([first, duplicate, distinct])
+
+    assert [candidate.candidate_id for candidate in prepared] == ["aa", "ccc"]
+    skipped = [row for row in runner.history if row.status == "skipped_duplicate"]
+    assert len(skipped) == 1
+    assert skipped[0].candidate_id == "bb"
+    assert skipped[0].metrics["duplicate_of"] == "aa"
+
+
 def test_final_eval_keeps_the_selection_score(tmp_path, monkeypatch):
     _, arts, _, _, _ = _run_fast(tmp_path, monkeypatch)
     md = arts.best_stage3.metadata

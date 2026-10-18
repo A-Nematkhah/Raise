@@ -41,23 +41,34 @@ def test_ppo_gamma_defaults_to_domain_constant():
 
 
 def _fake_trainer(seen):
-    """Stub train/reeval: per-case task_return grows with the training gamma."""
+    """Stub train/reeval: episode outcomes improve at the reference gamma."""
 
     def _train(self, candidate, *, round_index, config, **kw):
         gamma = config.ppo_gamma if config.ppo_gamma is not None else 0.99
         seen.append((candidate.candidate_id, gamma, config.output_root))
         n = max(2, int(config.eval_episodes))
-        eps = [{"case": i, "task_return": gamma + 0.01 * i} for i in range(n)]
+        outcome = "success" if gamma == 1.0 else "timeout"
+        selection_score = 1.0 if outcome == "success" else -0.5
+        eps = [
+            {"case": i, "outcome": outcome, "selection_score": selection_score}
+            for i in range(n)
+        ]
         md = dict(candidate.metadata or {})
         md["ppo_gamma"] = gamma
         md["checkpoint_path"] = "ckpt.zip"
         md["last_metrics"] = {
-            "fitness": gamma,
+            "fitness": selection_score,
+            "selection_score": selection_score,
             "SR": 0.5,
             "CR": 0.25,
             "TR": 0.25,
             "holdout_episodes": eps,
-            "holdout": {"SR": 0.5, "CR": 0.25, "TR": 0.25},
+            "holdout": {
+                "SR": 1.0 if outcome == "success" else 0.0,
+                "CR": 0.0,
+                "TR": 0.0 if outcome == "success" else 1.0,
+                "selection_score": selection_score,
+            },
         }
         candidate.metadata = md
         return SimpleNamespace(checkpoint_path="ckpt.zip")
@@ -121,11 +132,11 @@ def test_gamma_sweep_runs_pairs_and_resumes(tmp_path, monkeypatch):
     assert row["fitness_mean"] == pytest.approx(1.0)
     pairs = row["vs_reference"]
     assert [p["seed_index"] for p in pairs] == [0, 1]
-    assert all(p["delta"] == pytest.approx(1.0 - 0.99) for p in pairs)
+    assert all(p["delta"] == pytest.approx(1.5) for p in pairs)
     assert "vs_reference" not in out["summary"]["native"]["0.99"]
     on_disk = json.loads((run / "gamma_sweep.json").read_text(encoding="utf-8"))
     assert set(on_disk["runs"]) == set(out["runs"])
-    assert on_disk["fitness_objective"] == "mean_native_episode_return"
+    assert on_disk["fitness_objective"] == "mean_outcome_score"
 
     seen.clear()
     sweep.run_gamma_sweep(

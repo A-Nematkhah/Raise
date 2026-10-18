@@ -480,8 +480,25 @@ def run_plots(run_dir: str, output_dir: str, *, show: bool = False) -> List[str]
 
     s1 = _optional_json(os.path.join(run_dir, "stage1_population.json"))
     if s1 is not None:
+        s1_history = s1.get("history") or []
+    else:
+        epochs_path = os.path.join(run_dir, "closed_loop", "epochs.jsonl")
+        s1_history = []
+        if os.path.isfile(epochs_path):
+            with open(epochs_path, encoding="utf-8") as epochs_file:
+                s1_history = [
+                    {
+                        "generation": row.get("epoch"),
+                        "best_score": row.get("best_score1"),
+                        "best_id": row.get("evolve_best_id"),
+                    }
+                    for line in epochs_file
+                    if line.strip()
+                    for row in [json.loads(line)]
+                ]
+    if s1_history:
         path = os.path.join(output_dir, "stage1_score1.png")
-        if plot_stage1_score1(s1.get("history") or [], path):
+        if plot_stage1_score1(s1_history, path):
             written.append(path)
 
     s2 = _optional_json(os.path.join(run_dir, "stage2_population.json"))

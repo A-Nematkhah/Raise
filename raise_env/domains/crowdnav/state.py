@@ -22,7 +22,7 @@ class RobotState:
     theta: float
     radius: float
     v_pref: float
-    kinematics: str = "holonomic"
+    kinematics: str = "unicycle"
 
 
 @dataclass(frozen=True)

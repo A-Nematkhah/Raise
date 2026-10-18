@@ -52,7 +52,7 @@ def get_pack(*, with_adapter: bool = True) -> DomainPack:
         post_run_summary=post_run_summary,
         make_stage2_trainer=make_stage2_trainer if with_adapter else None,
         make_stage3_trainer=make_stage3_trainer if with_adapter else None,
-        selection_scalar_name="crowdnav_task_return",
+        selection_scalar_name="crowdnav_outcome_score",
         metadata={
             "simulator": "Shuijing725/CrowdNav_Prediction_AttnGraph CrowdSimVarNum (vendored, unmodified)",
             "upstream_repo": UPSTREAM_REPO,
@@ -61,13 +61,13 @@ def get_pack(*, with_adapter: bool = True) -> DomainPack:
             "policy": "sb3_ppo_multiinput_masked_human_pool",
             "pipeline_profile": "crowdnav",
             "stage1": "crowdnav_outcome_preference",
-            "fitness": "crowdnav_task_return",
-            "selection_scalar": "crowdnav_task_return",
+            "fitness": "crowdnav_outcome_score",
+            "selection_scalar": "crowdnav_outcome_score",
             "objective": (
-                "Official fitness = mean undiscounted sum of native upstream "
-                "CrowdNav++ rewards per episode (rl/evaluation.py) on holdout val "
-                "scenarios. Score1 is a Stage-I proxy only; PPO optimizes the LLM "
-                "compute_reward."
+                "Official fitness = mean per-episode outcome score (+1 success, "
+                "-1 collision, -0.5 timeout) on held-out val scenarios. Native "
+                "CrowdNav++ episode task return is diagnostic only. Score1 is a "
+                "Stage-I proxy; PPO optimizes the LLM compute_reward."
             ),
             "metrics_note": (
                 "SR/CR/TR = success/collision/timeout rates; NT = nav time of "

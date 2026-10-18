@@ -25,6 +25,7 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from raise_core import console
 from raise_core.candidate import RewardCandidate
+from raise_core.candidate import genome_fingerprint
 from raise_core.population_io import deserialize_population, load_candidate_dict
 from raise_core.refine import ProxyMetrics, stub_metrics_from_code
 from raise_core.sandbox import RewardValidator
@@ -92,7 +93,7 @@ class Stage3Config:
     # Crash-safe resume (``{run}/stage3/checkpoint.json``).
     resume: bool = True
     action_mode: str = "continuous"
-    robot_kinematics: str = "holonomic"
+    robot_kinematics: str = "unicycle"
     action_speed_samples: int = 5
     action_rotation_samples: int = 16
     env_config_path: Optional[str] = None
@@ -475,7 +476,29 @@ class Stage3Runner:
     def _prepare_population(
         self, population: Sequence[RewardCandidate]
     ) -> List[RewardCandidate]:
-        return self._apply_top_k(self._apply_collapse_filter(population))
+        filtered = self._apply_top_k(self._apply_collapse_filter(population))
+        unique: List[RewardCandidate] = []
+        first_by_genome: Dict[str, RewardCandidate] = {}
+        for candidate in filtered:
+            fingerprint = genome_fingerprint(candidate.code)
+            original = first_by_genome.get(fingerprint)
+            if original is not None:
+                console.status(
+                    f"skip {candidate.candidate_id} (duplicate genome of "
+                    f"{original.candidate_id})",
+                    stage="Stage III",
+                )
+                self.history.append(
+                    Stage3Record(
+                        candidate_id=str(candidate.candidate_id),
+                        metrics={"duplicate_of": str(original.candidate_id)},
+                        status="skipped_duplicate",
+                    )
+                )
+                continue
+            first_by_genome[fingerprint] = candidate
+            unique.append(candidate)
+        return unique
 
     def _train_candidate(self, cand: RewardCandidate) -> None:
         """Train ``cand`` for ``n_seeds`` PPO seeds; select by mean fitness."""

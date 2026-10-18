@@ -209,10 +209,24 @@ def load_crowdnav_dataset(path: str) -> List[CrowdNavTrajectoryRecord]:
 def with_settings(
     trajectories: Sequence[CrowdNavTrajectoryRecord], settings: CrowdNavSettings
 ) -> List[CrowdNavTrajectoryRecord]:
-    """Express recorded (holonomic) actions in ``settings``' kinematics."""
-    if settings.kinematics == "holonomic":
-        return list(trajectories)
-    return [replace(t, states=with_kinematics(t.states, settings)) for t in trajectories]
+    """Express recorded actions in ``settings``' kinematics without reconverting."""
+    converted = []
+    for trajectory in trajectories:
+        source_kinematics = {state.robot.kinematics for state in trajectory.states}
+        if not source_kinematics:
+            converted.append(trajectory)
+        elif source_kinematics == {settings.kinematics}:
+            converted.append(trajectory)
+        elif source_kinematics == {"holonomic"} and settings.kinematics == "unicycle":
+            converted.append(
+                replace(trajectory, states=with_kinematics(trajectory.states, settings))
+            )
+        else:
+            raise ValueError(
+                "Cannot convert Stage I trajectory from "
+                f"{sorted(source_kinematics)} to {settings.kinematics!r} kinematics"
+            )
+    return converted
 
 
 # ------------------------------------------------------------------ scoring

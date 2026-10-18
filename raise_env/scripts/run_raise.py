@@ -122,12 +122,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--stage2-eval-split",
-        choices=("val", "train"),
+        choices=("val",),
         default=_DEFAULTS.stage2_eval_split,
-        help=(
-            "Stage II holdout pool (default val). 'train' uses train-split cases "
-            "for selection; Stage III/final eval stay on val/test."
-        ),
+        help="Stage II selection pool (held-out val scenarios)",
     )
     parser.add_argument(
         "--stage3-train-steps",

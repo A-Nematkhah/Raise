@@ -195,11 +195,9 @@ def _delta_text(spec: MetricSpec, child: ArchiveRecord, parent: ArchiveRecord) -
     if spec.key == "fitness":
         from domains.crowdnav.metrics import paired_difference
 
-        paired = paired_difference(_episodes(parent), _episodes(child), key="task_return")
-        if paired is None:
-            paired = paired_difference(
-                _episodes(parent), _episodes(child), key="disc_return"
-            )
+        paired = paired_difference(
+            _episodes(parent), _episodes(child), key="selection_score"
+        )
         if paired is not None:
             d = float(paired["mean"])
             se_band = float(paired["se"])
@@ -445,7 +443,8 @@ class FeedbackCard:
             head,
             "Eval: " + "; ".join(bits) + ".",
             values,
-            f"fitness {fit_txt} (selection objective: mean upstream episode task return)",
+            f"fitness {fit_txt} (selection objective: mean outcome score; "
+            "+1 success, -1 collision, -0.5 timeout)",
             f"Behaviour: {behaviour(rec)}",
         ]
 

@@ -11,6 +11,12 @@ import pytest
 _CROWDNAV_DEPS = ("gymnasium", "gym", "rvo2", "stable_baselines3")
 _MISSING = [name for name in _CROWDNAV_DEPS if importlib.util.find_spec(name) is None]
 
+if _MISSING and os.environ.get("RAISE_REQUIRE_CROWDNAV") == "1":
+    pytest.exit(
+        "CrowdNav dependencies are required but missing: " + ", ".join(_MISSING),
+        returncode=2,
+    )
+
 collect_ignore_glob = ["test_*.py"] if _MISSING else []
 
 RAISE_ENV_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
