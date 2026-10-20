@@ -25,6 +25,15 @@ def test_collector_accepts_and_records_custom_env_config(
         captured["trajectory_count"] = len(trajectories)
         captured["manifest"] = extra_manifest
 
+    monkeypatch.setattr(
+        collector,
+        "load_env_config",
+        lambda _path: SimpleNamespace(
+            env=SimpleNamespace(time_limit=25, time_step=0.25),
+            sim=SimpleNamespace(human_num=10, human_num_range=3),
+            robot=SimpleNamespace(visible=True),
+        ),
+    )
     monkeypatch.setattr(collector, "collect", collect)
     monkeypatch.setattr(collector, "save_crowdnav_dataset", save_dataset)
 
@@ -50,6 +59,16 @@ def test_collector_accepts_and_records_custom_env_config(
     assert captured["manifest"]["kinematics"] == "unicycle"
     assert captured["manifest"]["upstream_commit"] == collector.UPSTREAM_COMMIT
     assert captured["manifest"]["simulator"].endswith("CrowdSimVarNum")
+    assert captured["manifest"]["environment"] == {
+        "time_limit_s": 25.0,
+        "time_step_s": 0.25,
+        "human_num": 10,
+        "human_num_range": 3,
+        "min_human_num": 7,
+        "max_human_num": 13,
+        "robot_visible_to_humans": True,
+        "predict_method": "none",
+    }
 
 
 def test_orca_joint_state_contains_only_fov_visible_humans(crowdnav_collector):

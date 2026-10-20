@@ -19,7 +19,7 @@ for _section in (
 ):
     setattr(Config, _section, deepcopy(getattr(_UpstreamConfig, _section)))
 
-Config.env.time_limit = 25
+Config.env.time_limit = 30
 Config.env.time_step = 0.25
 Config.env.val_size = 100
 Config.env.test_size = 500
@@ -30,3 +30,8 @@ Config.reward.discomfort_penalty_factor = 0.5
 Config.sim.circle_radius = 6
 Config.sim.human_num = 10
 Config.sim.human_num_range = 0
+Config.sim.predict_method = "const_vel"
+Config.sim.predict_steps = 5
+Config.data.pred_timestep = 0.25
+Config.action_space.kinematics = "holonomic"
+Config.robot.visible = True

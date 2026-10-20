@@ -9,6 +9,8 @@ from raise_core.raise_loop.config import ClosedLoopConfig
 from raise_core.raise_loop.logging_io import read_epochs
 from raise_core.raise_loop.report import format_epoch_summary
 from raise_core.raise_loop.runner import ClosedLoopRunner
+from raise_core.evo_selection.config import SelectionConfig
+from raise_core.evo_selection.llm_ranker import RankResult, LLMRanker
 from raise_core.refine import StubPolicyTrainer
 
 
@@ -73,6 +75,43 @@ def test_closed_loop_fast_two_epochs(tmp_path):
     text = open(report, encoding="utf-8").read()
     assert "epoch 0:" in text and "epoch 1:" in text
     assert "Closed-loop run report" in text
+
+
+def test_llm_rank_mode_ranks_cards_and_uses_elitist_evolution(monkeypatch, tmp_path):
+    calls = []
+
+    def rank(_self, cards, *, fallback_order, **kwargs):
+        calls.append((cards, list(fallback_order), kwargs))
+        ranking = list(reversed(fallback_order))
+        return RankResult(
+            ranking=ranking,
+            scores={candidate_id: 0.5 for candidate_id in ranking},
+            weaknesses={candidate_id: ["improve safe progress"] for candidate_id in ranking},
+            rationale={candidate_id: "Balance safety and completion." for candidate_id in ranking},
+        )
+
+    monkeypatch.setattr(LLMRanker, "rank", rank)
+    out = str(tmp_path / "llm-rank-run")
+    cfg = _cfg(
+        out,
+        selection=SelectionConfig(
+            mode="llm_rank",
+            top_k=2,
+            p_restart=0.0,
+            n_votes=1,
+            seed=61,
+        ),
+    )
+    result = ClosedLoopRunner(cfg, trainer=StubPolicyTrainer()).run()
+    epochs = read_epochs(out)
+
+    assert len(calls) == 2
+    assert all(len(cards) == 4 for cards, _, _ in calls)
+    assert all("DIAGNOSTIC FEEDBACK CARD" in card for cards, _, _ in calls for _, card in cards)
+    assert epochs[0]["selection"]["ranking"] == list(reversed(calls[0][1]))
+    assert epochs[0]["evolve_ranking"] == epochs[0]["selection"]["ranking"]
+    assert len(result.population) == 4
+    assert len(result.manifest["selection_notes"]) == 2
 
 
 class _ReevalRecordingTrainer(_RecordingTrainer):

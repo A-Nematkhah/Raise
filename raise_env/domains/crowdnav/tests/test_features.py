@@ -15,7 +15,7 @@ from domains.crowdnav.settings import spaces_compatible
 from raise_core.candidate import RewardCandidate
 
 
-def _observation_space(humans: int = 3) -> spaces.Dict:
+def _observation_space(humans: int = 3, path_points: int = 1) -> spaces.Dict:
     return spaces.Dict(
         {
             "robot_node": spaces.Box(-1.0, 1.0, shape=(7,), dtype=np.float32),
@@ -26,7 +26,7 @@ def _observation_space(humans: int = 3) -> spaces.Dict:
                 dtype=np.bool_,
             ),
             "spatial_edges": spaces.Box(
-                -np.inf, np.inf, shape=(humans, 2), dtype=np.float32
+                -np.inf, np.inf, shape=(humans, 2 * path_points), dtype=np.float32
             ),
             "detected_human_num": spaces.Box(0, humans, shape=(), dtype=np.int64),
         }
@@ -56,6 +56,20 @@ def test_crowdnav_extractor_masks_invisible_humans_and_handles_empty_mask():
     no_visible = dict(observations)
     no_visible["visible_masks"] = th.zeros((1, 3), dtype=th.bool)
     assert th.isfinite(extractor(no_visible)).all()
+
+
+def test_crowdnav_extractor_accepts_predicted_human_paths():
+    extractor = CrowdNavFeaturesExtractor(_observation_space(path_points=6))
+    observations = {
+        "robot_node": th.zeros((1, 7)),
+        "temporal_edges": th.zeros((1, 2)),
+        "visible_masks": th.tensor([[True, False, True]]),
+        "spatial_edges": th.zeros((1, 3, 12)),
+        "detected_human_num": th.tensor([2]),
+    }
+    features = extractor(observations)
+    assert features.shape == (1, 128)
+    assert th.isfinite(features).all()
 
 
 def test_spaces_compatible_checks_dict_keys_and_nested_shapes():

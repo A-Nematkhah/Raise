@@ -9,14 +9,27 @@ population, robot/human properties, sensor range/FOV, time limits and native
 reward parameters come from that config. For example, the upstream default
 Python config uses 20 humans with no initial count range, a 12 m square arena,
 holonomic simulator configuration, a 5 m sensor range, and full-circle FOV.
-RAISE defaults to unicycle kinematics and continuous control. A fixed
-`human_num_override` can be supplied for tests and smoke runs; it sets the
-configured human range to zero before unicycle compatibility adjustment.
-Unicycle reset in upstream samples from 1 through `human_num +
-human_num_range`, but checks the lower bound `human_num - human_num_range`;
-the wrapper expands a too-small unicycle range to `human_num - 1` so these
-invariants agree. Otherwise `sim.human_num` and
-`sim.human_num_range` control population bounds and changes.
+RAISE defaults to unicycle kinematics and continuous control unless an
+environment config is provided, in which case its kinematics is used by
+default. The hard config explicitly selects holonomic kinematics and uses
+`human_num=10` and `human_num_range=0`, so the effective population is
+fixed at exactly 10, including at reset and during episodes. Upstream's unicycle reset
+samples from 1 through `human_num + human_num_range` even though its step
+invariant enforces the configured lower bound. Without changing vendored code,
+the wrapper adjusts the initial population into the configured interval before
+upstream finishes reset. `human_num_override` remains available for tests and
+sets a fixed count.
+The hard config uses a 30-second time limit, enables five-step constant-
+velocity human path prediction at 0.25-second intervals, and sets
+`robot.visible=True`:
+humans can observe the robot when
+it is within their sensor range/FOV and their ORCA policy responds to it.
+The PPO policy observation's `spatial_edges` contains each visible human's
+current relative position followed by five constant-velocity predicted
+positions, all relative to the robot's current position. The evolved reward
+state remains based on observed current human states, not predicted positions.
+The separate `crowdnav_generalization_17.py` config fixes the population at
+17 humans for out-of-distribution policy evaluation.
 
 The upstream simulator resets global NumPy state. The wrapper serializes
 simulator RNG access, restores the caller's global RNG after reset, and keeps
@@ -41,6 +54,9 @@ navigation, trained and evaluated with Stable-Baselines3 PPO.
 - Episode ends on upstream `ReachGoal`, `Collision` or `Timeout`.
   Time step and time limit come from the active Python config; timeout is
   checked before the simulator advances its clock.
+- Evaluation reports timeouts independently (`TR` and per-episode outcome).
+  Navigation time, path length and minimum human separation are stored per
+  episode for analysis.
 - Reward functions are LLM-proposed Python:
   `compute_reward(state, memory) -> total_reward` or
   `(total_reward, reward_components)`. `total_reward` trains PPO;
@@ -80,6 +96,10 @@ the upstream default config sets success to +10, collision to -20, discomfort
 distance to 0.25 m, and discomfort factor to 10. Unicycle steps also receive
 the upstream rotation and backwards-motion penalties. The wrapper exposes the
 native value in `info["raise_native_reward"]`; the seed function reproduces it.
+Evaluation fitness is independent of the learned reward: mean outcome score
+(+1 success, -1 collision, -0.5 timeout). Success, collision and timeout are
+reported separately as SR, CR and TR; navigation time, successful path length,
+and per-episode minimum human separation are also recorded.
 
 ## Environment and policy observation
 

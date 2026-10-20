@@ -33,6 +33,8 @@ from raise_core.candidate import (
 )
 from raise_core.domains import DEFAULT_DOMAIN, load_domain
 from raise_core.feedback import ArchiveRecord, CandidateArchive, FeedbackCardConfig
+from raise_core.evo_selection.evolution_ops import make_evolution_plan
+from raise_core.evo_selection.feedback import build_refinement_feedback, render_candidate_cards
 from raise_core.llm import (
     EmptyCompletionError,
     LLMClient,
@@ -431,6 +433,20 @@ class StageIEvolver:
             archive=self.archive,
             config=self.feedback,
             population_note=note,
+        )
+
+    def render_selection_cards(
+        self, candidates: Sequence[RewardCandidate]
+    ) -> List[tuple[str, str]]:
+        """Render complete ranking cards with the existing domain card builder."""
+        if not self.feedback.enabled:
+            raise ValueError("selection.mode='llm_rank' requires feedback cards enabled")
+        return render_candidate_cards(
+            candidates,
+            archive=self.archive,
+            card_module=self._card_module,
+            config=self.feedback,
+            population_note=self.reflection.split(" || ")[-1] if self.reflection else "",
         )
 
     def _request(
@@ -1049,6 +1065,18 @@ class StageIEvolver:
             kwargs: Dict[str, Any] = {"func_name": self.config.func_name}
             if compact:
                 kwargs["compact"] = True
+            if card is not None:
+                card = build_refinement_feedback(
+                    card,
+                    weaknesses=[
+                        *(parent_a.metadata or {}).get("selection_weaknesses", ()),
+                        *(parent_b.metadata or {}).get("selection_weaknesses", ()),
+                    ],
+                    reflection_notes=(
+                        (parent_a.metadata or {}).get("selection_reflection_notes")
+                        or ()
+                    ),
+                )
             return self._format_d2_crossover(
                 parent_a.code,
                 parent_b.code,
@@ -1100,6 +1128,15 @@ class StageIEvolver:
             kwargs: Dict[str, Any] = {"func_name": self.config.func_name}
             if compact:
                 kwargs["compact"] = True
+            if card is not None:
+                card = build_refinement_feedback(
+                    card,
+                    weaknesses=(parent.metadata or {}).get("selection_weaknesses") or (),
+                    reflection_notes=(
+                        (parent.metadata or {}).get("selection_reflection_notes")
+                        or ()
+                    ),
+                )
             return self._format_d2_mutation(
                 parent.code,
                 weakness if card is None else card,
@@ -1286,6 +1323,93 @@ class StageIEvolver:
 
         assert len(next_pop) == cfg.population_size
         return next_pop
+
+    def _next_generation_llm_rank(
+        self,
+        ranked: Sequence[RewardCandidate],
+        *,
+        top_k: int,
+        p_restart: float,
+        seed: int,
+        generation: int,
+    ) -> List[RewardCandidate]:
+        """Keep top-ranked elites and create seeded mutation/crossover/restart children."""
+        plan = make_evolution_plan(
+            ranked,
+            population_size=self.config.population_size,
+            top_k=top_k,
+            p_restart=p_restart,
+            seed=seed,
+            generation=generation,
+        )
+        self._generation_genomes = {}
+        self._generation_behaviors = {}
+        next_population = list(plan.elites)
+        for elite in plan.elites:
+            self._register_genome(elite)
+        retries = RetryBudget(self.config.max_invalid_replacements)
+        by_id = {str(candidate.candidate_id): candidate for candidate in ranked}
+        parent_a = ranked[0]
+        parent_a_fp = self._fingerprint(parent_a.candidate_id, parent_a.code)
+        parent_b = next(
+            (
+                candidate
+                for candidate in ranked[1:]
+                if self._fingerprint(candidate.candidate_id, candidate.code)
+                != parent_a_fp
+            ),
+            ranked[1],
+        )
+        for slot, offspring in enumerate(plan.offspring):
+            if offspring.operator == "mutation":
+                parent = by_id[offspring.parent_ids[0]]
+                factory = lambda attempt, parent=parent: self._try_mutate(
+                    parent,
+                    self.reflection,
+                    phase="mutation",
+                    attempt=attempt,
+                )
+                fallback = lambda parent=parent: self._clone_valid(
+                    parent.code,
+                    origin="mutation_fallback",
+                    parent_ids=(parent.candidate_id,),
+                    source=parent,
+                )
+            elif offspring.operator == "crossover":
+                factory = lambda attempt: self._try_crossover(
+                    parent_a,
+                    parent_b,
+                    self.reflection,
+                    phase="crossover",
+                    attempt=attempt,
+                )
+                fallback = lambda: self._clone_valid(
+                    parent_a.code,
+                    origin="crossover_fallback",
+                    parent_ids=(parent_a.candidate_id, parent_b.candidate_id),
+                    source=parent_a,
+                )
+            else:
+                factory = lambda attempt: self._try_random_restart(
+                    phase="random",
+                    attempt=attempt,
+                )
+                fallback = self._seed_fallback_candidate
+            next_population.extend(
+                self._fill_valid(
+                    1,
+                    factory,
+                    max_extra=self.config.max_invalid_replacements,
+                    phase=f"llm_rank_{offspring.operator}_{slot}",
+                    fallback=fallback,
+                    shared=retries,
+                )
+            )
+        if len(next_population) != self.config.population_size:
+            raise RuntimeError(
+                "LLM-ranked evolution did not produce the configured population size"
+            )
+        return next_population
 
     def _build_evidence_reflection(
         self,

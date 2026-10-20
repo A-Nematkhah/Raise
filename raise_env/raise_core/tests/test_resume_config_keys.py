@@ -10,6 +10,7 @@ from raise_core.validate import Stage3Config
 
 def test_stage2_eval_split_in_resume_keys():
     assert "stage2_eval_split" in _RESUME_CONFIG_KEYS
+    assert "selection" in _RESUME_CONFIG_KEYS
     assert ClosedLoopConfig().stage2_eval_split == "val"
     assert RaiseRunConfig().stage2_eval_split == "val"
 

@@ -206,7 +206,7 @@ def test_prompts_read_active_crowdnav_python_config():
         prompt = format_d1_initial(include_seed=False)
         external_knowledge = prompts.D4_EXTERNAL_KNOWLEDGE
         for text in (prompt, external_knowledge):
-            assert "between 1 and 15" in text
+            assert "between 6 and 10" in text
             assert "3.5 m circle radius" in text
             assert "2.5 m" in text
             assert "0.5π radians" in text

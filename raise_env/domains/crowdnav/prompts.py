@@ -45,8 +45,6 @@ def _task_description() -> str:
         if settings.human_num_override is not None
         else int(config.sim.human_num_range)
     )
-    if settings.kinematics == "unicycle":
-        human_num_range = max(human_num_range, human_num - 1)
     minimum = max(1, human_num - human_num_range)
     maximum = human_num + human_num_range
     fov_pi = float(config.robot.FOV)

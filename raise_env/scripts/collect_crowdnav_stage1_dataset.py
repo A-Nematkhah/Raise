@@ -42,7 +42,11 @@ from typing import Any, Callable, Dict, List, Tuple  # noqa: E402
 
 import numpy as np  # noqa: E402
 
-from domains.crowdnav.env_wrapper import RewardInjectedCrowdNavEnv, eval_cases  # noqa: E402
+from domains.crowdnav.env_wrapper import (  # noqa: E402
+    RewardInjectedCrowdNavEnv,
+    eval_cases,
+    load_env_config,
+)
 from domains.crowdnav.settings import (  # noqa: E402
     DEFAULT_ENV_CONFIG_PATH,
     CrowdNavSettings,
@@ -255,6 +259,9 @@ def main(argv: List[str] | None = None) -> int:
         env_config_path=args.env_config,
         kinematics=args.kinematics,
     )
+    env_config = load_env_config(args.env_config)
+    human_num = int(env_config.sim.human_num)
+    human_num_range = int(env_config.sim.human_num_range)
     save_crowdnav_dataset(
         args.out,
         trajs,
@@ -264,6 +271,16 @@ def main(argv: List[str] | None = None) -> int:
             "env_config": args.env_config or _os.path.relpath(DEFAULT_ENV_CONFIG_PATH, _ROOT),
             "phase": "train",
             "kinematics": args.kinematics,
+            "environment": {
+                "time_limit_s": float(env_config.env.time_limit),
+                "time_step_s": float(env_config.env.time_step),
+                "human_num": human_num,
+                "human_num_range": human_num_range,
+                "min_human_num": max(1, human_num - human_num_range),
+                "max_human_num": human_num + human_num_range,
+                "robot_visible_to_humans": bool(env_config.robot.visible),
+                "predict_method": str(getattr(env_config.sim, "predict_method", "none")),
+            },
             "seed": int(args.seed),
             "episodes_per_behaviour": int(args.episodes),
             "behaviours": behaviours,

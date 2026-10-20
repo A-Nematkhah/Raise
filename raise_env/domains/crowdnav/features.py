@@ -11,7 +11,7 @@ from torch import nn
 
 
 class CrowdNavFeaturesExtractor(BaseFeaturesExtractor):
-    """Encode robot context and masked-pool the visible human positions."""
+    """Encode robot context and masked-pool visible human positions or paths."""
 
     def __init__(
         self,
@@ -39,8 +39,10 @@ class CrowdNavFeaturesExtractor(BaseFeaturesExtractor):
         count_shape = observation_space["detected_human_num"].shape
         if len(robot_shape) != 1 or len(temporal_shape) != 1:
             raise ValueError("robot_node and temporal_edges must be one-dimensional")
-        if len(human_shape) != 2 or human_shape[1] != 2:
-            raise ValueError("spatial_edges must have shape (max_humans, 2)")
+        if len(human_shape) != 2 or human_shape[1] < 2 or human_shape[1] % 2:
+            raise ValueError(
+                "spatial_edges must have shape (max_humans, 2 * path_points)"
+            )
         if mask_shape != (human_shape[0],) or count_shape not in ((), (1,)):
             raise ValueError("visible_masks and detected_human_num have incompatible shapes")
         if features_dim < 1 or human_embedding_dim < 1:
@@ -49,7 +51,7 @@ class CrowdNavFeaturesExtractor(BaseFeaturesExtractor):
         super().__init__(observation_space, features_dim)
         context_dim = robot_shape[0] + temporal_shape[0] + 1
         self.human_encoder = nn.Sequential(
-            nn.Linear(2, human_embedding_dim),
+            nn.Linear(human_shape[1], human_embedding_dim),
             nn.Tanh(),
             nn.Linear(human_embedding_dim, human_embedding_dim),
             nn.Tanh(),

@@ -36,9 +36,11 @@ from datetime import datetime  # noqa: E402
 from raise_core import console  # noqa: E402
 from raise_core.console import ensure_utf8_stdio  # noqa: E402
 from raise_core.domains import available_domains  # noqa: E402
+from raise_core.evo_selection.config import SelectionConfig  # noqa: E402
 from raise_core.explore import MUTATION_PARENTS  # noqa: E402
 from raise_core.feedback import FeedbackCardConfig  # noqa: E402
 from raise_core.pipeline import RaisePipeline, RaiseRunConfig  # noqa: E402
+from domains.crowdnav.env_wrapper import load_env_config  # noqa: E402
 
 os.chdir(_ROOT)
 
@@ -289,8 +291,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--robot-kinematics",
         choices=("holonomic", "unicycle"),
-        default=_DEFAULTS.robot_kinematics,
-        help="Robot kinematics (holonomic or unicycle; used with the Python env config)",
+        default=None,
+        help=(
+            "Robot kinematics (holonomic or unicycle; defaults to the Python env "
+            "config when --env-config is supplied, otherwise to RAISE's default)"
+        ),
     )
     parser.add_argument(
         "--action-speed-samples",
@@ -355,6 +360,66 @@ def build_parser() -> argparse.ArgumentParser:
         default=_FEEDBACK.component_instrumentation,
         help="Record per-episode reward-component sums during Stage II holdout eval",
     )
+    parser.add_argument(
+        "--selection-mode",
+        choices=("legacy", "llm_rank"),
+        default=_DEFAULTS.selection.mode,
+        help="Candidate selection strategy (legacy preserves current behavior)",
+    )
+    parser.add_argument(
+        "--selection-top-k",
+        type=int,
+        default=_DEFAULTS.selection.top_k,
+        help="LLM-rank mode: number of ranked elites retained and used as mutation parents",
+    )
+    parser.add_argument(
+        "--selection-votes",
+        type=int,
+        default=_DEFAULTS.selection.n_votes,
+        help="LLM ranking votes per stage/generation (default: 3)",
+    )
+    parser.add_argument(
+        "--selection-temperature",
+        type=float,
+        default=_DEFAULTS.selection.temperature,
+        help="LLM ranking temperature (default: 0.1)",
+    )
+    parser.add_argument(
+        "--selection-restart-probability",
+        type=float,
+        default=_DEFAULTS.selection.p_restart,
+        help="LLM-rank mode: probability of a random-restart child",
+    )
+    parser.add_argument(
+        "--selection-guards",
+        action=argparse.BooleanOptionalAction,
+        default=_DEFAULTS.selection.guards,
+        help="Append available cheap sanity flags after each unchanged ranking card",
+    )
+    parser.add_argument(
+        "--selection-guard-success-threshold",
+        type=float,
+        default=_DEFAULTS.selection.guard_success_threshold,
+        help="Guard threshold for high success combined with near-zero path length",
+    )
+    parser.add_argument(
+        "--selection-guard-min-path-length",
+        type=float,
+        default=_DEFAULTS.selection.guard_min_path_length,
+        help="Guard path-length threshold in metres",
+    )
+    parser.add_argument(
+        "--selection-reflection-note-cap",
+        type=int,
+        default=_DEFAULTS.selection.reflection_note_cap,
+        help="Maximum number of short selection reflections retained across generations",
+    )
+    parser.add_argument(
+        "--selection-seed",
+        type=int,
+        default=None,
+        help="Random seed for ranking shuffles and LLM-ranked evolution (defaults to --seed)",
+    )
     resume_group = parser.add_mutually_exclusive_group()
     resume_group.add_argument(
         "--resume",
@@ -388,6 +453,13 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     ensure_utf8_stdio()
     args = build_parser().parse_args()
+
+    if args.robot_kinematics is None:
+        args.robot_kinematics = (
+            str(load_env_config(args.env_config).action_space.kinematics)
+            if args.env_config
+            else _DEFAULTS.robot_kinematics
+        )
 
     if args.print_config:
         for k, v in sorted(vars(args).items()):
@@ -464,6 +536,18 @@ def main() -> int:
             random_calls=bool(args.feedback_random_calls),
             training_dynamics=bool(args.feedback_training_dynamics),
             component_instrumentation=bool(args.feedback_components),
+        ),
+        selection=SelectionConfig(
+            mode=str(args.selection_mode),
+            top_k=int(args.selection_top_k),
+            n_votes=int(args.selection_votes),
+            temperature=float(args.selection_temperature),
+            p_restart=float(args.selection_restart_probability),
+            guards=bool(args.selection_guards),
+            guard_success_threshold=float(args.selection_guard_success_threshold),
+            guard_min_path_length=float(args.selection_guard_min_path_length),
+            reflection_note_cap=int(args.selection_reflection_note_cap),
+            seed=int(args.selection_seed if args.selection_seed is not None else args.seed),
         ),
         device=args.device,
         torch_threads=max(0, int(args.torch_threads)),

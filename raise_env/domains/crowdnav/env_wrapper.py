@@ -200,13 +200,27 @@ def make_crowd_sim(
             "CrowdNav++ requires human_num >= 1 and "
             "0 <= human_num_range < human_num"
         )
-    if active.kinematics == "unicycle":
-        human_num_range = max(human_num_range, human_num - 1)
-        config.sim.human_num_range = human_num_range
+    prediction_method = str(getattr(config.sim, "predict_method", "none")).strip().lower()
+    if prediction_method == "inferred":
+        # RAISE has no configured GST predictor; preserve its prior no-prediction behavior.
+        prediction_method = "none"
+    if prediction_method not in ("none", "const_vel"):
+        raise ValueError(
+            "RAISE supports only 'none' or 'const_vel' human prediction; "
+            f"got {prediction_method!r}"
+        )
+    config.sim.predict_method = prediction_method
+    if prediction_method == "const_vel":
+        predict_steps = int(config.sim.predict_steps)
+        prediction_interval = int(config.data.pred_timestep // config.env.time_step)
+        if predict_steps < 1 or prediction_interval < 1:
+            raise ValueError(
+                "constant-velocity prediction requires predict_steps >= 1 and "
+                "data.pred_timestep >= env.time_step"
+            )
 
     config.action_space.kinematics = active.kinematics
     config.robot.policy = "srnn"
-    config.sim.predict_method = "none"
     config.env.use_wrapper = False
 
     with _preserve_numpy_rng():
@@ -279,6 +293,11 @@ def _observation_space(sim: CrowdSimVarNum) -> gym.spaces.Dict:
     max_humans = int(sim.max_human_num)
     if max_humans < 1:
         raise ValueError("CrowdNav++ observation requires at least one human slot")
+    prediction_steps = (
+        int(sim.config.sim.predict_steps)
+        if str(sim.config.sim.predict_method).strip().lower() == "const_vel"
+        else 0
+    )
     unbounded = np.inf
     return gym.spaces.Dict(
         {
@@ -296,7 +315,7 @@ def _observation_space(sim: CrowdSimVarNum) -> gym.spaces.Dict:
             "spatial_edges": gym.spaces.Box(
                 -unbounded,
                 unbounded,
-                shape=(max_humans, 2),
+                shape=(max_humans, 2 * (prediction_steps + 1)),
                 dtype=np.float32,
             ),
             "detected_human_num": gym.spaces.Box(
@@ -409,6 +428,40 @@ class RewardInjectedCrowdNavEnv(gym.Env):
         self._trail: List[tuple[float, float]] = []
 
     def _format_observation(self, observation: Dict[str, Any]) -> Dict[str, Any]:
+        prediction_method = str(self.sim.config.sim.predict_method).strip().lower()
+        if prediction_method == "const_vel":
+            observation = dict(observation)
+            prediction_steps = int(self.sim.config.sim.predict_steps)
+            prediction_interval = int(self.sim.pred_interval)
+            robot = self.sim.robot
+            visibility = np.asarray(self.sim.human_visibility, dtype=np.bool_)
+            max_humans = int(self.sim.max_human_num)
+            predicted_edges = np.full(
+                (max_humans, 2 * (prediction_steps + 1)),
+                15.0,
+                dtype=np.float32,
+            )
+            current_positions = np.full((max_humans, 2), 15.0, dtype=np.float64)
+            for index, human in enumerate(self.sim.humans):
+                if not visibility[index]:
+                    continue
+                position = np.asarray([human.px, human.py], dtype=np.float64)
+                velocity = np.asarray([human.vx, human.vy], dtype=np.float64)
+                current_positions[index] = position - np.asarray([robot.px, robot.py])
+                for step in range(prediction_steps + 1):
+                    predicted_edges[index, 2 * step : 2 * step + 2] = (
+                        position
+                        + velocity * step * prediction_interval * self.sim.time_step
+                        - np.asarray([robot.px, robot.py])
+                    )
+
+            if bool(getattr(self.sim.config.args, "sort_humans", False)):
+                order = np.argsort(
+                    np.linalg.norm(current_positions, axis=1),
+                    kind="stable",
+                )
+                predicted_edges = predicted_edges[order]
+            observation["spatial_edges"] = predicted_edges
         formatted = _format_observation(observation)
         if not self.observation_space.contains(formatted):
             raise ValueError("CrowdNav++ observation is outside the declared Gymnasium space")
@@ -447,7 +500,42 @@ class RewardInjectedCrowdNavEnv(gym.Env):
             try:
                 self.sim.phase = None
                 self.sim.test_case = None
-                self.sim.reset(phase=phase, test_case=case)
+                if self.settings.kinematics == "unicycle":
+                    generate_robot_humans = self.sim.generate_robot_humans
+
+                    def generate_bounded_unicycle_population(
+                        reset_phase: str, human_num: Optional[int] = None
+                    ) -> None:
+                        generate_robot_humans(reset_phase, human_num)
+                        target_num = int(
+                            np.random.randint(
+                                self.sim.min_human_num,
+                                self.sim.max_human_num + 1,
+                            )
+                        )
+                        current_num = len(self.sim.humans)
+                        if target_num < current_num:
+                            del self.sim.humans[target_num:]
+                        elif target_num > current_num:
+                            self.sim.generate_random_human_position(
+                                target_num - current_num
+                            )
+                        self.sim.human_num = target_num
+                        self.sim.last_human_states = np.zeros(
+                            (target_num, 5), dtype=np.float64
+                        )
+                        for human_id, human in enumerate(self.sim.humans):
+                            human.id = human_id
+
+                    self.sim.generate_robot_humans = (
+                        generate_bounded_unicycle_population
+                    )
+                    try:
+                        self.sim.reset(phase=phase, test_case=case)
+                    finally:
+                        del self.sim.generate_robot_humans
+                else:
+                    self.sim.reset(phase=phase, test_case=case)
                 self._sim_rng_state = np.random.get_state()
             finally:
                 np.random.set_state(global_rng_state)
@@ -512,6 +600,35 @@ class RewardInjectedCrowdNavEnv(gym.Env):
                 self._sim_rng_state = np.random.get_state()
                 np.random.set_state(global_rng_state)
 
+    def _step_with_visible_unicycle_compat(self, raw_action: Any) -> Any:
+        robot = self.sim.robot
+        if (
+            self.sim.phase != "test"
+            or robot.kinematics != "unicycle"
+            or not robot.visible
+        ):
+            return self.sim.step(raw_action)
+
+        original_lookahead = robot.one_step_lookahead
+
+        def lookahead(position: Any, action: Any) -> Any:
+            if not isinstance(action, ActionXY):
+                return original_lookahead(position, action)
+            # CrowdNav++'s visible-robot prediction uses linear ActionXY lookahead,
+            # while its unicycle validity check accepts only ActionRot.
+            return [
+                position[0] + action.vx * self.sim.time_step,
+                position[1] + action.vy * self.sim.time_step,
+                action.vx,
+                action.vy,
+            ]
+
+        robot.one_step_lookahead = lookahead
+        try:
+            return self.sim.step(raw_action)
+        finally:
+            robot.one_step_lookahead = original_lookahead
+
     def _raw_action_and_executed(self, action: Any) -> tuple[np.ndarray, Any]:
         if isinstance(action, (ActionXY, ActionRot)):
             raw = np.asarray(action, dtype=np.float64)
@@ -548,7 +665,7 @@ class RewardInjectedCrowdNavEnv(gym.Env):
                 float(executed_action[1]),
             )
         observation, native_reward, upstream_done, wrapped_info = self._run_with_env_rng(
-            lambda: self.sim.step(raw_action)
+            lambda: self._step_with_visible_unicycle_compat(raw_action)
         )
         if not isinstance(wrapped_info, dict) or "info" not in wrapped_info:
             raise TypeError("CrowdNav++ step info must contain the native 'info' object")

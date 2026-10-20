@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from raise_core.feedback import FeedbackCardConfig
+from raise_core.evo_selection.config import SelectionConfig
 
 
 @dataclass
@@ -56,6 +57,7 @@ class ClosedLoopConfig:
     env_config_path: Optional[str] = None
     # Diagnostic feedback card + LLM input-token budget.
     feedback: FeedbackCardConfig = field(default_factory=FeedbackCardConfig)
+    selection: SelectionConfig = field(default_factory=SelectionConfig)
 
     def apply_fast_profile(self) -> None:
         self.use_stub = True

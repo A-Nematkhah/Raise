@@ -9,6 +9,8 @@ import torch
 
 from raise_core import pipeline as pipeline_mod
 from raise_core.domains import make_stage3_trainer_for_domain
+from raise_core.evo_selection.config import SelectionConfig
+from raise_core.evo_selection.llm_ranker import LLMRanker, RankResult
 from raise_core.pipeline import RaisePipeline, RaiseRunConfig
 from raise_core.refine import Stage2Config
 from raise_core.validate import Stage3Config
@@ -48,6 +50,42 @@ def test_pipeline_fast(tmp_path):
     # Stage III best is the highest Stage III fitness.
     fits = [(c.metadata or {})["fitness"] for c in arts.stage3_population]
     assert (arts.best_stage3.metadata or {})["fitness"] == max(fits)
+
+
+def test_pipeline_llm_rank_selects_stage3_winner_without_api_calls(
+    tmp_path, monkeypatch
+):
+    stages = []
+
+    def rank(_self, cards, *, fallback_order, stage, **kwargs):
+        stages.append(stage)
+        ranking = list(reversed(fallback_order))
+        return RankResult(
+            ranking=ranking,
+            scores={candidate_id: 0.5 for candidate_id in ranking},
+            weaknesses={candidate_id: [] for candidate_id in ranking},
+            rationale={
+                candidate_id: "Balances completion and safety."
+                for candidate_id in ranking
+            },
+        )
+
+    monkeypatch.setattr(LLMRanker, "rank", rank)
+    cfg = RaiseRunConfig(output_dir=str(tmp_path / "llm_rank_pipeline"))
+    cfg.apply_fast_profile()
+    cfg.selection = SelectionConfig(
+        mode="llm_rank",
+        top_k=1,
+        n_votes=1,
+        p_restart=0.0,
+        seed=cfg.seed,
+    )
+    artifacts = RaisePipeline(cfg).run()
+
+    assert stages == ["stage2", "stage2", "stage3"]
+    assert artifacts.best_stage3.candidate_id == artifacts.manifest["best_stage3_id"]
+    assert artifacts.manifest["stage3_selection"]["best_id"] == artifacts.best_stage3.candidate_id
+    assert artifacts.manifest["stage3_selection"]["llm_ranking"][0] == artifacts.best_stage3.candidate_id
 
 
 def test_limit_cpu_threads(monkeypatch):

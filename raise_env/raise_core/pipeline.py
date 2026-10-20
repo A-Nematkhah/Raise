@@ -25,14 +25,23 @@ from raise_core.domains import (
     make_validator_for_domain,
 )
 from raise_core.candidate import RewardCandidate
+from raise_core.evo_selection import LLMRanker, SelectionConfig
+from raise_core.evo_selection.consistency import append_consistency_csv
+from raise_core.evo_selection.feedback import render_candidate_cards
+from raise_core.evo_selection.guards import candidate_guard_flags
 from raise_core.explore import OperatorCounts, operator_counts
-from raise_core.feedback import FeedbackCardConfig
+from raise_core.feedback import CandidateArchive, FeedbackCardConfig
 from raise_core.llm import LLMClient, make_llm_client
 from raise_core.population_io import candidate_to_dict
 from raise_core.raise_loop import ClosedLoopConfig, ClosedLoopRunner
 from raise_core.json_io import read_json_dict, utc_now_z
 from raise_core.raise_loop.logging_io import write_json
-from raise_core.selection import candidate_fitness, pick_best_trained
+from raise_core.selection import (
+    candidate_fitness,
+    candidate_fitness_se,
+    pick_best_trained,
+    statistical_ties,
+)
 from raise_core.validate import (
     FINAL_EVAL_SEED_OFFSET,
     STAGE3_EVAL_SEED_OFFSET,
@@ -163,6 +172,7 @@ class RaiseRunConfig:
     env_config_path: Optional[str] = None
     # Diagnostic feedback card + LLM input-token budget.
     feedback: FeedbackCardConfig = field(default_factory=FeedbackCardConfig)
+    selection: SelectionConfig = field(default_factory=SelectionConfig)
 
     device: str = "cuda"
     # Intra-op CPU threads for torch / OpenMP / MKL (0 = library default).
@@ -384,6 +394,7 @@ class RaisePipeline:
             warm_start=bool(cfg.warm_start),
             eval_mode=str(cfg.eval_mode or "both"),
             feedback=cfg.feedback,
+            selection=cfg.selection,
             **self._space_knobs(),
         )
 
@@ -468,7 +479,11 @@ class RaisePipeline:
             stage2_pop,
             key=lambda c: float("-inf") if c.score is None else float(c.score),
         )
-        best_s2 = pick_best_trained(stage2_pop) or stage2_pop[0]
+        best_s2 = (
+            stage2_pop[0]
+            if cfg.selection.mode == "llm_rank" and stage2_pop
+            else pick_best_trained(stage2_pop) or stage2_pop[0]
+        )
         write_json(
             os.path.join(cfg.output_dir, "best_stage1.json"),
             candidate_to_dict(best_s1),
@@ -501,6 +516,84 @@ class RaisePipeline:
         )
         stage3_pop = s3_runner.run(stage2_pop)
         stage3_selection = s3_runner.selection_summary()
+        stage3_rank = None
+        if cfg.selection.mode == "llm_rank" and stage3_pop:
+            stage3_archive = CandidateArchive()
+            stage3_archive.add_population(
+                stage3_pop,
+                generation=max(0, int(cfg.generations) - 1),
+            )
+            stage3_cards = render_candidate_cards(
+                stage3_pop,
+                archive=stage3_archive,
+                card_module=pack.feedback_card,
+                config=cfg.feedback,
+                population_note=" | ".join(
+                    cl_result.manifest.get("selection_notes") or ()
+                ),
+            )
+            stage3_fallback = sorted(
+                stage3_pop, key=candidate_fitness, reverse=True
+            )
+            stage3_rank = LLMRanker(
+                llm,
+                cfg.selection,
+                log_path=os.path.join(
+                    cfg.output_dir, "closed_loop", "llm_selection.jsonl"
+                ),
+            ).rank(
+                stage3_cards,
+                fallback_order=[
+                    candidate.candidate_id for candidate in stage3_fallback
+                ],
+                seed=int(cfg.selection.seed) + 1_000_000,
+                stage="stage3",
+                generation=max(0, int(cfg.generations) - 1),
+                flags={
+                    candidate.candidate_id: candidate_guard_flags(
+                        candidate, cfg.selection
+                    )
+                    for candidate in stage3_pop
+                },
+            )
+            stage3_by_id = {
+                candidate.candidate_id: candidate for candidate in stage3_pop
+            }
+            stage3_pop = [
+                stage3_by_id[candidate_id] for candidate_id in stage3_rank.ranking
+            ]
+            llm_selected = stage3_pop[0]
+            fitness_best_id = stage3_selection.get("best_id")
+            fitness_best = stage3_by_id.get(str(fitness_best_id))
+            stage3_selection = {
+                **stage3_selection,
+                "fitness_best_id": fitness_best_id,
+                "fitness_best_fitness": (
+                    candidate_fitness(fitness_best) if fitness_best is not None else None
+                ),
+                "fitness_tied_ids": list(stage3_selection.get("tied_ids") or []),
+                "best_id": stage3_rank.ranking[0],
+                "fitness": candidate_fitness(llm_selected),
+                "fitness_se": candidate_fitness_se(llm_selected),
+                "tied_ids": statistical_ties(s3_runner.trained, llm_selected),
+                "llm_ranking": stage3_rank.ranking,
+                "llm_scores": stage3_rank.scores,
+                "llm_weaknesses": stage3_rank.weaknesses,
+                "llm_rationale": stage3_rank.rationale,
+                "llm_fallback": stage3_rank.fallback,
+                "llm_fallback_reason": stage3_rank.fallback_reason,
+            }
+            stage2_order = [
+                candidate.candidate_id for candidate in cl_result.population
+            ]
+            stage3_selection["rank_consistency"] = append_consistency_csv(
+                os.path.join(cfg.output_dir, "closed_loop", "rank_consistency.csv"),
+                stage="stage3_vs_stage2",
+                generation=max(0, int(cfg.generations) - 1),
+                previous=stage2_order,
+                current=stage3_rank.ranking,
+                top_k=cfg.selection.top_k,
+            )
         final_eval: Optional[Dict[str, Any]] = None
         if s3_runner.best_trained is None:
             console.warn(
@@ -510,7 +603,11 @@ class RaisePipeline:
             )
             best_s3 = best_s2
         else:
-            best_s3 = s3_runner.best_trained
+            best_s3 = (
+                stage3_pop[0]
+                if stage3_rank is not None
+                else s3_runner.best_trained
+            )
             final_eval = s3_runner.final_eval(
                 best_s3,
                 episodes=int(cfg.final_eval_episodes),

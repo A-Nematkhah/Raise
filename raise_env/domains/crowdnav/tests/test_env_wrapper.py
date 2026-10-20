@@ -140,8 +140,8 @@ def test_upstream_python_config_and_human_override():
     assert CrowdNavSettings().kinematics == "unicycle"
 
     default_env = RewardInjectedCrowdNavEnv(settings=CrowdNavSettings())
-    assert default_env.max_human_num == 39
-    assert default_env.observation_space["spatial_edges"].shape == (39, 2)
+    assert default_env.max_human_num == 20
+    assert default_env.observation_space["spatial_edges"].shape == (20, 2)
 
     env = _env(human_num=2)
     obs, _ = env.reset(options={"case": 0})
@@ -156,29 +156,131 @@ def test_upstream_python_config_and_human_override():
 def test_hard_config_is_loadable_python_config():
     config_path = Path(__file__).resolve().parents[3] / "configs" / "crowdnav_hard.py"
     config = load_env_config(str(config_path))
-    assert config.env.time_limit == 25
+    assert config.env.time_limit == 30
     assert config.reward.success_reward == 1.0
     assert config.reward.collision_penalty == -0.25
     assert config.sim.circle_radius == 6
     assert config.sim.human_num == 10
     assert config.sim.human_num_range == 0
+    assert config.sim.predict_method == "const_vel"
+    assert config.sim.predict_steps == 5
+    assert config.data.pred_timestep == 0.25
+    assert config.action_space.kinematics == "holonomic"
+    assert config.robot.visible is True
 
 
-def test_unicycle_uses_upstream_variable_human_initialization():
+def test_hard_config_keeps_exactly_ten_holonomic_humans():
+    config_path = Path(__file__).resolve().parents[3] / "configs" / "crowdnav_hard.py"
     settings = CrowdNavSettings(
-        kinematics="unicycle",
+        kinematics="holonomic",
         action_mode="continuous",
-        env_config_obj=_config(human_num=3),
-        human_num_override=3,
+        env_config_path=str(config_path),
     )
     env = RewardInjectedCrowdNavEnv(settings=settings)
     try:
-        for case in range(5):
+        assert env.sim.robot.kinematics == "holonomic"
+        assert env.min_human_num == env.max_human_num == 10
+        assert env.observation_space["spatial_edges"].shape == (10, 12)
+        for case in range(12):
+            observation, _ = env.reset(options={"case": case})
+            assert len(env.sim.humans) == 10
+            assert env.sim.human_num_range == 0
+            assert env.observation_space.contains(observation)
+            assert observation["spatial_edges"].shape == (10, 12)
+    finally:
+        env.close()
+
+
+def test_hard_config_observation_contains_constant_velocity_human_paths():
+    config_path = Path(__file__).resolve().parents[3] / "configs" / "crowdnav_hard.py"
+    env = RewardInjectedCrowdNavEnv(
+        settings=CrowdNavSettings(
+            kinematics="holonomic",
+            action_mode="continuous",
+            env_config_path=str(config_path),
+        )
+    )
+    try:
+        env.reset(options={"case": 0})
+        robot = env.sim.robot
+        human = env.sim.humans[0]
+        human.px = robot.px + 1.0
+        human.py = robot.py
+        human.vx = 0.4
+        human.vy = -0.2
+        env.sim.human_visibility[0] = True
+        env.sim.ob["visible_masks"][0] = True
+        observation = env._format_observation(env.sim.ob)
+        np.testing.assert_allclose(
+            observation["spatial_edges"][0],
+            [1.0, 0.0, 1.1, -0.05, 1.2, -0.1, 1.3, -0.15, 1.4, -0.2, 1.5, -0.25],
+            atol=1e-6,
+        )
+    finally:
+        env.close()
+
+
+def test_generalization_config_uses_fixed_17_humans():
+    config_path = (
+        Path(__file__).resolve().parents[3]
+        / "configs"
+        / "crowdnav_generalization_17.py"
+    )
+    settings = CrowdNavSettings(
+        kinematics="unicycle",
+        action_mode="continuous",
+        env_config_path=str(config_path),
+    )
+    env = RewardInjectedCrowdNavEnv(settings=settings)
+    try:
+        obs, _ = env.reset(options={"case": 12})
+        assert env.time_limit == 30.0
+        assert env.human_num == 17
+        assert env.min_human_num == env.max_human_num == 17
+        assert len(env.sim.humans) == 17
+        assert env.sim.robot.visible
+        assert env.observation_space.contains(obs)
+    finally:
+        env.close()
+
+
+def test_unicycle_respects_configured_variable_population_range_and_visibility():
+    config = _config(human_num=10)
+    config.sim.human_num_range = 3
+    config.robot.visible = True
+    settings = CrowdNavSettings(
+        kinematics="unicycle",
+        action_mode="continuous",
+        env_config_obj=config,
+    )
+    env = RewardInjectedCrowdNavEnv(settings=settings)
+    try:
+        assert env.sim.robot.visible
+        assert env.min_human_num == 7
+        assert env.max_human_num == 13
+        counts = set()
+        for case in range(20):
             obs, _ = env.reset(options={"case": case})
-            assert 1 <= len(env.sim.humans) <= 5
-            assert env.sim.human_num_range == 2
+            assert 7 <= len(env.sim.humans) <= 13
+            assert env.sim.human_num_range == 3
             assert env.observation_space.contains(obs)
-            env.step(np.zeros(2, dtype=np.float32))
+            counts.add(len(env.sim.humans))
+
+        env.reset(options={"case": 31})
+        first_count = len(env.sim.humans)
+        env.reset(options={"case": 31})
+        assert len(env.sim.humans) == first_count
+
+        env.reset(options={"case": 9})
+        env.sim.global_time = 4.75
+        for _ in range(24):
+            _obs, _reward, terminated, truncated, _info = env.step(
+                np.zeros(2, dtype=np.float32)
+            )
+            assert 7 <= len(env.sim.humans) <= 13
+            if terminated or truncated:
+                break
+        assert len(counts) > 1
     finally:
         env.close()
 
@@ -349,6 +451,34 @@ def test_outcome_termination_and_native_rewards(
     assert info["raise_reached_goal"] == (outcome == "success")
     assert info["raise_timeout"] == (outcome == "timeout")
     assert set(info) == INFO_KEYS
+
+
+def test_visible_unicycle_robot_works_in_evaluation_phase():
+    config = _config(human_num=2)
+    config.robot.visible = True
+    settings = CrowdNavSettings(
+        kinematics="unicycle",
+        action_mode="continuous",
+        env_config_obj=config,
+        human_num_override=2,
+    )
+    env = RewardInjectedCrowdNavEnv(phase="val", settings=settings)
+    try:
+        env.reset(options={"case": 0})
+        assert env.sim.phase == "test"
+        assert env.sim.robot.visible is True
+
+        observation, reward, terminated, truncated, info = env.step(
+            np.zeros(2, dtype=np.float32)
+        )
+
+        assert env.observation_space.contains(observation)
+        assert np.isfinite(reward)
+        assert not terminated
+        assert not truncated
+        assert info["raise_native_reward"] == pytest.approx(reward)
+    finally:
+        env.close()
 
 
 def test_timeout_has_priority_over_collision():

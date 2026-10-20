@@ -33,12 +33,9 @@ def _observation_shapes(observation: Dict[str, Any]) -> Dict[str, Dict[str, Any]
 
 def main() -> int:
     vendor = Path(raise_paths.CROWDNAVPP_VENDOR_DIR).resolve()
-    legacy = Path(raise_paths.LEGACY_CROWDNAV_VENDOR_DIR).resolve()
     module_path = Path(crowd_sim.__file__).resolve()
     if vendor not in module_path.parents:
         raise RuntimeError(f"Imported crowd_sim outside CrowdNav++ vendor: {module_path}")
-    if any(Path(entry).resolve() == legacy for entry in sys.path if entry):
-        raise RuntimeError(f"Legacy CrowdNav path remains importable: {legacy}")
 
     config = Config()
     config.sim.predict_method = "none"

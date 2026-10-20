@@ -111,10 +111,29 @@ continues the top half from their own checkpoints for the remaining 2K2/3.
 `--mutation-exclude-collapsed` (off by default) drops CR≥`--collapse-cr`
 genomes from the mutation parent pool.
 
+The optional EvoNav-style selector is enabled with
+`--selection-mode llm_rank`; `legacy` remains the default. In this mode the
+shared LLM ranks all generation candidates from their existing diagnostic
+cards, keeps the top `--selection-top-k` elites, and generates the remaining
+slots by elite mutation, top-two crossover, or a random restart selected with
+`--selection-restart-probability`. Each ranking uses
+`--selection-votes` shuffled votes and Borda aggregation. Set
+`--selection-guards` to append optional sanity flags after each card (without
+changing its contents). The selector applies at every Stage II generation and
+again to trained Stage III candidates. It writes prompts/responses and parsed
+votes to `closed_loop/llm_selection.jsonl`, with rank consistency metrics in
+`closed_loop/rank_consistency.csv`; invalid JSON after three attempts falls
+back to the existing fitness-based ordering.
+
+```powershell
+python scripts\run_raise.py --env-config configs\crowdnav_hard.py --llm groq --selection-mode llm_rank --selection-top-k 2 --selection-votes 3 --selection-temperature 0.1 --selection-restart-probability 0.1 --selection-seed 425 --output-dir results\crowdnav_llm_rank
+```
+
 Outputs under `--output-dir`: `config.json`, `config.resume_*.json` (on
 resume), `provenance.json`, `run_<UTC>.log`, `seed_reward.py`,
 `closed_loop/` (`epochs.jsonl`, `pop_epoch_*.json`, `REPORT.txt`,
-`stage1_rejections.jsonl`, `stage2_train/` PPO models),
+`stage1_rejections.jsonl`, optional `llm_selection.jsonl` and
+`rank_consistency.csv`, `stage2_train/` PPO models),
 `stage2_population.json`, `stage3_train/`, `stage3_population.json`,
 `best_stage{1,2,3}.json`, `final_candidate.json`, `tied_final_evals.json`,
 `manifest.json`, `baselines.json` (if `--baselines`), and `plots/`
@@ -124,9 +143,42 @@ default).
 
 Robot / action options: `--robot-kinematics {holonomic,unicycle}`,
 `--action-mode {discrete,continuous}` (discrete uses the configured wrapper
-action table; defaults are unicycle kinematics and continuous actions),
+action table; defaults are continuous actions and unicycle kinematics unless
+the supplied Python config declares different kinematics),
 `--env-config` (a CrowdNav++ Python config file exposing `Config` or
-`config`). The included hard setup is `configs/crowdnav_hard.py`.
+`config`). The hard setup is `configs/crowdnav_hard.py`: 30 s time limit,
+exactly 10 humans (`human_num=10`, `human_num_range=0`),
+holonomic kinematics, constant-velocity human path prediction (5 future
+points, 0.25 s apart), and `robot.visible=True`.
+When `--env-config` is supplied, RAISE uses the kinematics declared in that
+config unless `--robot-kinematics` explicitly overrides it. The wrapper corrects
+CrowdNav++'s unicycle reset sampling to honor the configured population range.
+Timeout is always reported independently as TR and as an episode outcome.
+
+Before a long evolution, train a PPO policy with CrowdNav++'s native reward
+and evaluate it on 100 held-out validation cases:
+
+```bash
+python scripts/calibrate_crowdnav_native.py --env-config configs/crowdnav_hard.py --train-steps 300000 --eval-episodes 100 --seed 425 --n-envs 4 --device cpu
+```
+
+To continue training from an existing native-reward PPO checkpoint, use
+`--resume-from` and write to a new output directory. `--train-steps` is the
+additional budget; the checkpoint's timestep counter is preserved:
+
+```bash
+python scripts/calibrate_crowdnav_native.py --env-config configs/crowdnav_hard.py --output-dir results/crowdnav_hard_native_calibration_range3_visible_20261019_600k --train-steps 300000 --eval-episodes 100 --seed 425 --n-envs 4 --device cpu --resume-from results/crowdnav_hard_native_calibration_range3_visible_20261019/native_reward_ppo.zip
+```
+
+The optional fixed-17-human generalization config can evaluate a completed
+Stage III checkpoint without retraining it:
+
+```bash
+python scripts/evaluate_crowdnav_generalization.py --run-dir results/crowdnav_run --episodes 100
+```
+
+Its report includes outcome-based fitness, separate SR/CR/TR, and per-episode
+navigation time, path length and minimum separation.
 
 ## Sanity checks and ablations
 

@@ -24,6 +24,9 @@ from raise_core.domains import (
 from raise_core.candidate import RewardCandidate, evaluation_fields, genome_fingerprint
 from raise_core.explore import StageIConfig, StageIEvolver
 from raise_core.feedback import ArchiveRecord, CandidateArchive, component_diversity
+from raise_core.evo_selection import LLMRanker
+from raise_core.evo_selection.consistency import append_consistency_csv
+from raise_core.evo_selection.guards import candidate_guard_flags
 from raise_core.llm import LLMClient, make_llm_client
 from raise_core.raise_loop.checkpoint import (
     build_checkpoint,
@@ -180,6 +183,7 @@ _RESUME_CONFIG_KEYS = (
     "eval_mode",
     "stage2_eval_split",
     "stage2_successive_halving",
+    "selection",
 )
 
 
@@ -321,6 +325,20 @@ class ClosedLoopRunner:
             feedback_card=pack.feedback_card,
             llm_log_dir=closed_loop_dir(cfg.output_dir),
         )
+        selection_cfg = cfg.selection
+        if selection_cfg.mode == "llm_rank" and not cfg.feedback.enabled:
+            raise ValueError("selection.mode='llm_rank' requires feedback cards enabled")
+        ranker = (
+            LLMRanker(
+                self.llm,
+                selection_cfg,
+                log_path=os.path.join(
+                    closed_loop_dir(cfg.output_dir), "llm_selection.jsonl"
+                ),
+            )
+            if selection_cfg.mode == "llm_rank"
+            else None
+        )
         card_on = bool(cfg.feedback.enabled)
 
         eval_eps = getattr(cfg, "eval_episodes", None)
@@ -358,6 +376,7 @@ class ClosedLoopRunner:
 
         n_labeled = 0
         history: List[Dict[str, Any]] = []
+        selection_notes: List[str] = []
         generations = int(cfg.generations)
         start_epoch = 0
         pending: Optional[Dict[str, Any]] = None
@@ -390,6 +409,7 @@ class ClosedLoopRunner:
                     "id_counter": evolver.id_counter,
                     "n_labeled": n_labeled,
                     "generations": generations,
+                    "selection_notes": selection_notes,
                 },
             )
             payload["output_dir"] = cfg.output_dir
@@ -406,6 +426,16 @@ class ClosedLoopRunner:
             evolver.archive = CandidateArchive.from_epoch_files(closed_loop_dir(cfg.output_dir))
             ckpt_extra = ckpt.get("extra") or {}
             n_labeled = int(ckpt_extra.get("n_labeled") or 0)
+            saved_notes = [
+                str(note)
+                for note in (ckpt_extra.get("selection_notes") or [])
+                if str(note).strip()
+            ]
+            selection_notes = (
+                saved_notes[-selection_cfg.reflection_note_cap :]
+                if selection_cfg.reflection_note_cap
+                else []
+            )
             evolver.restore_id_counter(
                 ckpt_extra.get("id_counter"),
                 existing_ids=_resume_known_ids(ckpt, stage2_cfg.output_root),
@@ -631,13 +661,91 @@ class ClosedLoopRunner:
                         "duplicate_of": original.candidate_id,
                     }
 
-            ranked_for_evo = rank_population_for_evolution(ranked)
+            selection_payload: Dict[str, Any] = {}
+            rank_consistency = None
+            if ranker is not None:
+                evolver.archive.add_population(ranked, generation=g)
+                cards = evolver.render_selection_cards(ranked)
+                fallback_population = rank_population_for_evolution(ranked)
+                result = ranker.rank(
+                    cards,
+                    fallback_order=[
+                        candidate.candidate_id for candidate in fallback_population
+                    ],
+                    seed=int(selection_cfg.seed) + g,
+                    stage="stage2",
+                    generation=g,
+                    flags={
+                        candidate.candidate_id: candidate_guard_flags(
+                            candidate, selection_cfg
+                        )
+                        for candidate in ranked
+                    },
+                )
+                by_id = {candidate.candidate_id: candidate for candidate in ranked}
+                ranked = [by_id[candidate_id] for candidate_id in result.ranking]
+                note_candidates = [
+                    f"{candidate_id}: {result.rationale[candidate_id]}"
+                    for candidate_id in result.ranking[: min(3, len(result.ranking))]
+                    if candidate_id in result.rationale
+                ]
+                if note_candidates and selection_cfg.reflection_note_cap:
+                    selection_notes = (
+                        selection_notes
+                        + [f"Gen {g} reflection: " + " | ".join(note_candidates)]
+                    )[-selection_cfg.reflection_note_cap :]
+                for candidate in ranked:
+                    candidate.metadata = {
+                        **(candidate.metadata or {}),
+                        "llm_selection_rank": (
+                            result.ranking.index(candidate.candidate_id) + 1
+                        ),
+                        "llm_selection_score": result.scores.get(
+                            candidate.candidate_id
+                        ),
+                        "selection_weaknesses": result.weaknesses.get(
+                            candidate.candidate_id, []
+                        ),
+                        "selection_rationale": result.rationale.get(
+                            candidate.candidate_id, ""
+                        ),
+                        "selection_reflection_notes": list(selection_notes),
+                    }
+                if history and history[-1].get("ranking"):
+                    rank_consistency = append_consistency_csv(
+                        os.path.join(
+                            closed_loop_dir(cfg.output_dir), "rank_consistency.csv"
+                        ),
+                        stage="stage2_generation",
+                        generation=g,
+                        previous=history[-1]["ranking"],
+                        current=result.ranking,
+                        top_k=selection_cfg.top_k,
+                    )
+                selection_payload = {
+                    "ranking": result.ranking,
+                    "scores": result.scores,
+                    "weaknesses": result.weaknesses,
+                    "rationale": result.rationale,
+                    "fallback": result.fallback,
+                    "fallback_reason": result.fallback_reason,
+                    "rank_consistency": rank_consistency,
+                }
+            ranked_for_evo = (
+                list(ranked)
+                if ranker is not None
+                else rank_population_for_evolution(ranked)
+            )
             evolver.archive.add_population(ranked_for_evo, generation=g)
             evolver.reflection = evolver._build_reflection(
                 ranked_for_evo,
                 generation=g,
                 fitness_trend=[rec.get("evolve_best_fitness") for rec in history],
             )
+            if selection_notes:
+                evolver.reflection += " || LLM selection notes: " + " | ".join(
+                    selection_notes
+                )
 
             trained = [
                 c for c in to_label
@@ -683,6 +791,7 @@ class ClosedLoopRunner:
                     str(c.candidate_id): _compact_metrics(c) for c in to_label
                 },
                 "ranking": [c.candidate_id for c in ranked],
+                "selection": selection_payload,
                 "best_score1": ranked[0].score if ranked else None,
                 "evolve_ranking": [c.candidate_id for c in ranked_for_evo],
                 "evolve_best_id": (
@@ -734,7 +843,17 @@ class ClosedLoopRunner:
             console.status(format_epoch_summary(epoch_rec), stage="closed-loop")
 
             if g + 1 < generations:
-                population = evolver._next_generation(ranked_for_evo)
+                population = (
+                    evolver._next_generation_llm_rank(
+                        ranked_for_evo,
+                        top_k=selection_cfg.top_k,
+                        p_restart=selection_cfg.p_restart,
+                        seed=selection_cfg.seed,
+                        generation=g,
+                    )
+                    if ranker is not None
+                    else evolver._next_generation(ranked_for_evo)
+                )
             else:
                 population = ranked_for_evo
 
@@ -754,6 +873,7 @@ class ClosedLoopRunner:
             "config": cfg_dict,
             "operators": evolver.operators.to_dict(),
             "history": history,
+            "selection_notes": list(selection_notes),
         }
         write_json(
             os.path.join(closed_loop_dir(cfg.output_dir), "manifest.json"),
