@@ -9,6 +9,8 @@ import time
 
 import pytest
 
+from domains.crowdnav import feedback_card as crowdnav_feedback_card
+from domains.crowdnav import prompts as crowdnav_prompts
 from domains.crowdnav.prompts import D5_SEED_FUNCTION
 from domains.crowdnav.reward_checks import make_crowdnav_validator
 from domains.crowdnav.stage1 import make_score_fn
@@ -78,7 +80,13 @@ def test_load_ckpt_refuses_when_every_copy_is_corrupt(tmp_path):
 
 def test_restore_id_counter_skips_issued_ids():
     score_fn, _ds = make_score_fn(mode="smoke")
-    evolver = StageIEvolver(None, score_fn=score_fn, validator=make_crowdnav_validator())
+    evolver = StageIEvolver(
+        None,
+        score_fn=score_fn,
+        validator=make_crowdnav_validator(),
+        prompts=crowdnav_prompts,
+        feedback_card=crowdnav_feedback_card,
+    )
     assert evolver.restore_id_counter(None, existing_ids=["ini_0003", "mut_0011_v2", "x"]) == 12
     assert evolver.restore_id_counter(20) == 20
     assert evolver._next_id("cro") == "cro_0020"
@@ -105,7 +113,9 @@ def test_parallel_label_emits_in_order_and_survives_crash():
     def _label(cand, _round):
         time.sleep(delays[cand.candidate_id])
         if cand.candidate_id == "c2":
-            raise RuntimeError("boom")
+            from raise_core.sandbox.errors import RewardSandboxError
+
+            raise RewardSandboxError("boom")
         return {"status": "ok"}
 
     seen = []
@@ -115,7 +125,7 @@ def test_parallel_label_emits_in_order_and_survives_crash():
         assert threading.current_thread() is main
         seen.append((i, result["status"]))
 
-    n_ok, n_fail = label_candidates_parallel(
+    stats = label_candidates_parallel(
         cands,
         already_done={"c3"},
         workers=3,
@@ -124,15 +134,17 @@ def test_parallel_label_emits_in_order_and_survives_crash():
         round_index_fn=lambda i: i,
     )
     assert seen == [(0, "ok"), (1, "ok"), (2, "failed")]
-    assert (n_ok, n_fail) == (2, 1)
+    assert (stats.n_ok, stats.n_fail) == (2, 1)
 
 
 def test_sequential_label_records_crash_as_failed():
+    from raise_core.sandbox.errors import RewardSandboxError
+
     def _label(cand, _round):
-        raise ValueError("bad")
+        raise RewardSandboxError("bad")
 
     seen = []
-    n_ok, n_fail = label_candidates_parallel(
+    stats = label_candidates_parallel(
         [_cand("c0")],
         already_done=set(),
         workers=1,
@@ -140,8 +152,8 @@ def test_sequential_label_records_crash_as_failed():
         on_done=lambda c, r, i: seen.append(r),
         round_index_fn=lambda i: i,
     )
-    assert (n_ok, n_fail) == (0, 1)
-    assert "ValueError" in seen[0]["reason"]
+    assert (stats.n_ok, stats.n_fail) == (0, 1)
+    assert "RewardSandboxError" in seen[0]["reason"]
 
 
 def test_closed_loop_resume_does_not_reissue_ids(tmp_path):

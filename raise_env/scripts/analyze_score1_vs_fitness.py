@@ -9,10 +9,9 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import os
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence
 
 
 def _spearman(xs: Sequence[float], ys: Sequence[float]) -> Optional[float]:

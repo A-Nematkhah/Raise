@@ -21,6 +21,7 @@ from domains.crowdnav.adapter import (  # noqa: E402
 )
 from domains.crowdnav.reward_checks import make_crowdnav_validator  # noqa: E402
 from raise_core.candidate import RewardCandidate  # noqa: E402
+from raise_config import CONFIG, build_upstream_config  # noqa: E402
 from raise_core.validate import Stage3Config  # noqa: E402
 
 
@@ -43,9 +44,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-dir", required=True, help="Completed RAISE run directory")
     parser.add_argument(
-        "--env-config",
-        default="configs/crowdnav_generalization_17.py",
-        help="Generalization Python config (default: fixed 17 humans)",
+        "--evaluation-variant",
+        default="generalization_17",
+        help="raise_config.evaluation_variants key (default: fixed 17 humans)",
     )
     parser.add_argument("--episodes", type=int, default=100)
     parser.add_argument("--seed", type=int, default=20261019)
@@ -62,9 +63,8 @@ def main(argv: list[str] | None = None) -> int:
     candidate_path = run_dir / "final_candidate.json"
     if not candidate_path.is_file():
         raise FileNotFoundError(f"Final candidate file not found: {candidate_path}")
-    config_path = Path(args.env_config).resolve()
-    if not config_path.is_file():
-        raise FileNotFoundError(f"Generalization config not found: {config_path}")
+    variant = str(args.evaluation_variant).strip()
+    upstream = build_upstream_config(CONFIG.env, variant=variant, config=CONFIG)
     payload = json.loads(candidate_path.read_text(encoding="utf-8"))
     code = str(payload.get("code") or "")
     candidate_id = str(payload.get("candidate_id") or "final_candidate")
@@ -92,7 +92,7 @@ def main(argv: list[str] | None = None) -> int:
         device=args.device,
         robot_kinematics="unicycle",
         action_mode="continuous",
-        env_config_path=str(config_path),
+        env_config_obj=upstream,
         eval_mode="holdout_only",
         eval_split="test",
         eval_seed_base=args.seed,
@@ -108,7 +108,8 @@ def main(argv: list[str] | None = None) -> int:
     results["generalization"] = {
         "candidate_id": candidate_id,
         "checkpoint_path": metadata["checkpoint_path"],
-        "env_config": str(config_path),
+        "evaluation_variant": variant,
+        "human_num": int(upstream.sim.human_num),
         "population": "fixed 17 humans",
         "split": "test",
         "episodes": int(args.episodes),

@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from domains.crowdnav import feedback_card as crowdnav_feedback_card
 from domains.crowdnav import prompts as cn_prompts
 from domains.crowdnav.reward_checks import make_crowdnav_validator
 from raise_core.explore import StageIConfig, StageIEvolver, operator_counts
@@ -81,6 +82,7 @@ def test_default_generation_at_n6_has_every_operator():
         config=StageIConfig(population_size=6, keep_runtime_elite=True),
         prompts=cn_prompts,
         feedback=FeedbackCardConfig(enabled=False),
+        feedback_card=crowdnav_feedback_card,
     )
     ranked = evo.score_population(evo.initialize_population())
     gen1 = evo._next_generation(ranked)
@@ -120,15 +122,24 @@ def test_pipeline_config_passes_counts_through():
     assert cfg.operators().to_dict() == {"elite": 1, "crossover": 2, "mutation": 3, "random": 0}
 
 
-def test_cli_rejects_counts_that_do_not_add_up(monkeypatch, capsys):
+def test_cli_rejects_counts_that_do_not_add_up(monkeypatch, capsys, tmp_path):
     script = _RAISE_ROOT / "scripts" / "run_raise.py"
+    out_dir = tmp_path / "bad_ops"
     monkeypatch.chdir(_RAISE_ROOT)
     monkeypatch.setattr(sys, "argv", [
-        str(script), "--allow-seed-llm", "--population", "6",
-        "--n-crossover", "4", "--n-mutation", "4", "--output-dir", "results/_bad_ops",
+        str(script),
+        "--allow-seed-llm",
+        "--set",
+        "budget.population_size=6",
+        "--set",
+        "budget.n_crossover=4",
+        "--set",
+        "budget.n_mutation=4",
+        "--output-dir",
+        str(out_dir),
     ])
     with pytest.raises(SystemExit) as exc:
         runpy.run_path(str(script), run_name="__main__")
     assert exc.value.code == 2
     assert "do not add up" in capsys.readouterr().err
-    assert not (_RAISE_ROOT / "results" / "_bad_ops").exists()
+    assert not out_dir.exists()

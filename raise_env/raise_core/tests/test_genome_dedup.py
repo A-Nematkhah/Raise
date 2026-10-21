@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 
+from domains.crowdnav import feedback_card as crowdnav_feedback_card
 from domains.crowdnav import prompts as cn_prompts
 from domains.crowdnav.reward_checks import make_crowdnav_validator
 from raise_core.candidate import RewardCandidate, genome_fingerprint
@@ -49,6 +50,7 @@ def _evolver(completions, *, archive=None, log_path=None, **cfg) -> StageIEvolve
         config=StageIConfig(**base),
         prompts=cn_prompts,
         feedback=FeedbackCardConfig(enabled=False),
+        feedback_card=crowdnav_feedback_card,
         rejection_log_path=log_path,
     )
     if archive is not None:

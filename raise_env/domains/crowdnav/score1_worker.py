@@ -139,7 +139,8 @@ class Score1TimeoutWorker:
 
     def _score_in_child(self, reward_fn: Any, candidate_id: str) -> Score1Result:
         self._ensure_started()
-        assert self._conn is not None
+        if self._conn is None:
+            raise RuntimeError("Score1 worker connection is not open")
         try:
             self._conn.send((reward_fn, candidate_id))
             ready = self._conn.poll(self.timeout_seconds)

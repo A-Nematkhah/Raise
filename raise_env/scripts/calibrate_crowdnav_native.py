@@ -31,15 +31,18 @@ from domains.crowdnav.env_wrapper import (  # noqa: E402
     load_env_config,
 )
 from domains.crowdnav.settings import CrowdNavSettings  # noqa: E402
+from raise_config import build_upstream_config  # noqa: E402
 from raise_core.console import ensure_utf8_stdio  # noqa: E402
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--env-config",
-        default="configs/crowdnav_hard.py",
-        help="CrowdNav++ Python config file",
+        "--set",
+        action="append",
+        default=[],
+        metavar="SECTION.KEY=VALUE",
+        help="Override raise_config.env (repeatable)",
     )
     parser.add_argument(
         "--output-dir",
@@ -79,9 +82,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.eval_only and args.resume_from:
         raise ValueError("--eval-only and --resume-from cannot be used together")
 
-    env_config = Path(args.env_config).resolve()
-    if not env_config.is_file():
-        raise FileNotFoundError(f"CrowdNav++ config not found: {env_config}")
+    from raise_config import resolve_config
+
+    raise_cfg = resolve_config(set_overrides=tuple(args.set or ()))
+    upstream = build_upstream_config(raise_cfg.env, config=raise_cfg)
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     output_dir = Path(args.output_dir or f"results/crowdnav_native_calibration_{timestamp}")
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -98,11 +102,11 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.torch_threads:
         torch.set_num_threads(args.torch_threads)
-    kinematics = str(load_env_config(str(env_config)).action_space.kinematics)
+    kinematics = str(upstream.action_space.kinematics)
     settings = CrowdNavSettings(
         kinematics=kinematics,
         action_mode="continuous",
-        env_config_path=str(env_config),
+        env_config_obj=upstream,
     )
     n_steps = min(256, max(16, args.train_steps // args.n_envs))
     batch_size = min(64 * args.n_envs, max(8, n_steps * args.n_envs))

@@ -16,6 +16,8 @@ from domains.crowdnav.state import (
     CrowdNavRewardState,
     HumanState,
     RobotState,
+    boundary_min_separation,
+    potential_factor_for,
     smoke_action,
     with_kinematics,
 )
@@ -82,6 +84,11 @@ def _state_to_dict(s: CrowdNavRewardState) -> Dict[str, Any]:
         "reached_goal": s.reached_goal,
         "timeout": s.timeout,
         "min_separation": s.min_separation,
+        "min_separation_post": (
+            s.min_separation
+            if s.min_separation_post is None
+            else s.min_separation_post
+        ),
         "discomfort_dist": s.discomfort_dist,
         "goal_distance": s.goal_distance,
         "progress": s.progress,
@@ -89,6 +96,41 @@ def _state_to_dict(s: CrowdNavRewardState) -> Dict[str, Any]:
         "global_time": s.global_time,
         "time_limit": s.time_limit,
     }
+
+
+def _legacy_min_separation_post(d: Dict[str, Any]) -> float:
+    """Post-step gap for legacy rows that omit ``min_separation_post``.
+
+    Recomputes from stored robot/humans geometry rather than copying the
+    pre-step ``min_separation`` (which can differ after the move).
+    """
+    if d.get("min_separation_post") is not None:
+        return float(d["min_separation_post"])
+    r = d["robot"]
+    robot = RobotState(
+        px=float(r["px"]),
+        py=float(r["py"]),
+        vx=float(r["vx"]),
+        vy=float(r["vy"]),
+        gx=float(r["gx"]),
+        gy=float(r["gy"]),
+        theta=float(r["theta"]),
+        radius=float(r["radius"]),
+        v_pref=float(r["v_pref"]),
+        kinematics=str(r.get("kinematics", "holonomic")),
+    )
+    humans = tuple(
+        HumanState(
+            px=float(h["px"]),
+            py=float(h["py"]),
+            vx=float(h["vx"]),
+            vy=float(h["vy"]),
+            radius=float(h["radius"]),
+            visible=bool(h.get("visible", False)),
+        )
+        for h in d.get("humans") or []
+    )
+    return float(boundary_min_separation(robot, humans))
 
 
 def _state_from_dict(d: Dict[str, Any]) -> CrowdNavRewardState:
@@ -134,6 +176,7 @@ def _state_from_dict(d: Dict[str, Any]) -> CrowdNavRewardState:
         discomfort_penalty_factor=float(d.get("discomfort_penalty_factor", 0.5)),
         potential_delta=float(d.get("potential_delta", 0.0)),
         potential_factor=float(d.get("potential_factor", 2.0)),
+        min_separation_post=_legacy_min_separation_post(d),
     )
 
 
@@ -471,7 +514,8 @@ def _smoke_frame(
         collision_penalty=float(config.reward.collision_penalty),
         discomfort_penalty_factor=float(config.reward.discomfort_penalty_factor),
         potential_delta=float(progress),
-        potential_factor=3.0 if settings.kinematics == "unicycle" else 2.0,
+        potential_factor=potential_factor_for(settings.kinematics),
+        min_separation_post=float(min_sep),
     )
 
 

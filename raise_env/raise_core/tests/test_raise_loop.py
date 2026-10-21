@@ -123,7 +123,10 @@ class _ReevalRecordingTrainer(_RecordingTrainer):
     def reevaluate(self, candidate, *, round_index, config):
         self.reevaluated.append((str(candidate.candidate_id), int(config.eval_seed_base)))
         if self.fail:
-            raise RuntimeError("saved policy unreadable")
+            # Reward-side failure so default infra policy does not abort the run.
+            from raise_core.sandbox.errors import RewardSandboxError
+
+            raise RewardSandboxError("saved policy unreadable")
         return super().reevaluate(candidate, round_index=round_index, config=config)
 
 

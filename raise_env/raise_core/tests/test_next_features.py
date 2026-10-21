@@ -2,20 +2,16 @@
 
 from __future__ import annotations
 
-import json
 import random
 from pathlib import Path
-from types import SimpleNamespace
 
 from domains.crowdnav.reward_checks import make_crowdnav_validator
 from raise_core.explore import (
     RewardCandidate,
     StageIConfig,
-    StageIEvolver,
     filter_mutation_pool,
     select_mutation_parents,
 )
-from raise_core.llm import ScriptedLLMClient
 from raise_core.pipeline import RaiseRunConfig, _eval_tied_finalists
 from raise_core.raise_loop.config import ClosedLoopConfig
 from raise_core.raise_loop.runner import _RESUME_CONFIG_KEYS

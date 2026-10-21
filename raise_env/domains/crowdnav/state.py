@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, replace
-from typing import Tuple
+from typing import Optional, Tuple
 
 from domains.crowdnav.settings import CrowdNavSettings, get_settings
 
@@ -37,6 +37,24 @@ class HumanState:
     visible: bool = False
 
 
+def potential_factor_for(kinematics: str) -> float:
+    """Upstream potential-shaping factor: 3 for unicycle, 2 for holonomic."""
+    return 3.0 if str(kinematics).strip().lower() == "unicycle" else 2.0
+
+
+def boundary_min_separation(
+    robot: RobotState, humans: Tuple[HumanState, ...]
+) -> float:
+    """Smallest robot-human boundary gap from snapshot positions (post-step geometry)."""
+    distances = [
+        math.hypot(human.px - robot.px, human.py - robot.py)
+        - human.radius
+        - robot.radius
+        for human in humans
+    ]
+    return float(min(distances)) if distances else float("inf")
+
+
 @dataclass(frozen=True)
 class CrowdNavRewardState:
     """
@@ -44,9 +62,15 @@ class CrowdNavRewardState:
 
     Outcome flags mirror the upstream ``info`` of ``CrowdSim.step`` and are
     mutually exclusive in its priority order (timeout > collision > goal).
-    ``min_separation`` is the upstream ``dmin``: the smallest boundary-to-
-    boundary distance between robot and any human along this step's relative
-    motion (negative on collision).
+
+    ``min_separation`` is the upstream pre-step ``dmin``: the smallest
+    boundary-to-boundary gap between the robot and any human at the start of
+    the step (negative on collision). It is not a swept along-motion distance.
+
+    ``min_separation_post`` is the same gap recomputed from the post-step
+    ``robot`` / ``humans`` positions in this snapshot. ``None`` means absent
+    (legacy datasets); loaders recompute it from the stored robot/humans
+    geometry via ``boundary_min_separation`` (not by copying ``min_separation``).
     """
 
     robot: RobotState
@@ -68,6 +92,7 @@ class CrowdNavRewardState:
     discomfort_penalty_factor: float = 0.5
     potential_delta: float = 0.0
     potential_factor: float = 2.0
+    min_separation_post: Optional[float] = None
 
 
 def holonomic_to_unicycle(
@@ -94,8 +119,16 @@ def with_kinematics(
     """
     if settings.kinematics == "holonomic":
         return tuple(states)
+    if not states:
+        return tuple(states)
+    first = states[0]
+    theta = float(first.robot.theta)
+    if not math.isfinite(theta):
+        theta = math.atan2(
+            first.robot.gy - first.robot.py, first.robot.gx - first.robot.px
+        )
     out = []
-    theta = math.pi / 2.0
+    factor = potential_factor_for("unicycle")
     for st in states:
         action, theta = holonomic_to_unicycle(st.action[0], st.action[1], theta)
         out.append(
@@ -103,7 +136,7 @@ def with_kinematics(
                 st,
                 action=action,
                 robot=replace(st.robot, theta=theta, kinematics="unicycle"),
-                potential_factor=3.0,
+                potential_factor=factor,
             )
         )
     return tuple(out)
@@ -135,6 +168,11 @@ def default_smoke_states() -> Tuple[CrowdNavRewardState, ...]:
     near_goal_y = circle_radius * 0.95
     start_y = -circle_radius * 0.5
     away_y = -circle_radius * 0.75
+    human_num = int(config.sim.human_num)
+    human_num_range = int(config.sim.human_num_range)
+    crowd_size = max(1, human_num + human_num_range)
+    kin = get_settings().kinematics
+    factor = potential_factor_for(kin)
 
     def _state(
         *,
@@ -162,7 +200,7 @@ def default_smoke_states() -> Tuple[CrowdNavRewardState, ...]:
                 theta=math.pi / 2.0,
                 radius=robot_radius,
                 v_pref=robot_v_pref,
-                kinematics=get_settings().kinematics,
+                kinematics=kin,
             ),
             humans=humans,
             action=smoke_action(vx, vy),
@@ -181,7 +219,8 @@ def default_smoke_states() -> Tuple[CrowdNavRewardState, ...]:
             success_reward=float(config.reward.success_reward),
             collision_penalty=float(config.reward.collision_penalty),
             potential_delta=float(progress),
-            potential_factor=3.0 if get_settings().kinematics == "unicycle" else 2.0,
+            potential_factor=factor,
+            min_separation_post=float(min_separation),
         )
 
     crowd = (
@@ -218,6 +257,18 @@ def default_smoke_states() -> Tuple[CrowdNavRewardState, ...]:
             radius=human_radius,
             visible=True,
         ),
+    )
+    # Realistic crowd size for O(N^2) timing (human_num + human_num_range).
+    large_crowd = tuple(
+        HumanState(
+            px=circle_radius * math.cos(2.0 * math.pi * i / crowd_size),
+            py=circle_radius * math.sin(2.0 * math.pi * i / crowd_size) * 0.5,
+            vx=0.1 * human_v_pref,
+            vy=-0.1 * human_v_pref,
+            radius=human_radius,
+            visible=(i % 3 == 0),
+        )
+        for i in range(crowd_size)
     )
     return (
         # Heading to the goal through a crowd
@@ -275,6 +326,12 @@ def default_smoke_states() -> Tuple[CrowdNavRewardState, ...]:
         ),
         # Start of an episode, empty surroundings
         _state(py=-circle_radius * 0.95, progress=time_step, global_time=time_step),
+        # Full configured crowd (timing / O(N^2) probe)
+        _state(
+            humans=large_crowd,
+            min_separation=discomfort_dist * 3.0,
+            global_time=time_limit * 0.12,
+        ),
     )
 
 
@@ -319,9 +376,11 @@ __all__ = [
     "CrowdNavRewardState",
     "HumanState",
     "RobotState",
+    "boundary_min_separation",
     "default_smoke_states",
     "fingerprint_smoke_states",
     "holonomic_to_unicycle",
+    "potential_factor_for",
     "smoke_action",
     "with_kinematics",
 ]

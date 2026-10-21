@@ -7,6 +7,7 @@ from collections import Counter
 
 import pytest
 
+from domains.crowdnav import feedback_card as crowdnav_feedback_card
 from domains.crowdnav import prompts as cn_prompts
 from domains.crowdnav.reward_checks import make_crowdnav_validator
 from raise_core.candidate import RewardCandidate
@@ -61,6 +62,7 @@ def _evolver(**cfg) -> StageIEvolver:
         config=StageIConfig(population_size=6, **cfg),
         prompts=cn_prompts,
         feedback=FeedbackCardConfig(enabled=False),
+        feedback_card=crowdnav_feedback_card,
     )
 
 
@@ -89,6 +91,7 @@ def _card_evolver(random_calls: bool) -> StageIEvolver:
         validator=make_crowdnav_validator(),
         prompts=cn_prompts,
         feedback=FeedbackCardConfig(random_calls=random_calls),
+        feedback_card=crowdnav_feedback_card,
     )
     archive = CandidateArchive()
     archive.add(ArchiveRecord.from_candidate(_ranked(1)[0], generation=0))

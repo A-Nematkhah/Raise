@@ -9,6 +9,8 @@ import os
 
 import pytest
 
+from domains.crowdnav import feedback_card as crowdnav_feedback_card
+from domains.crowdnav import prompts as crowdnav_prompts
 from domains.crowdnav.prompts import (
     D1_SYSTEM_PROMPT,
     D4_EXTERNAL_KNOWLEDGE,
@@ -62,6 +64,8 @@ def _evolver(client, **cfg) -> StageIEvolver:
         score_fn=_score_by_smoke,
         validator=make_crowdnav_validator(),
         config=StageIConfig(**cfg),
+        prompts=crowdnav_prompts,
+        feedback_card=crowdnav_feedback_card,
     )
 
 
@@ -92,7 +96,21 @@ def test_prompt_templates_contain_appendix_anchors():
 
 def test_evolver_requires_validator():
     with pytest.raises(ValueError):
-        StageIEvolver(ScriptedLLMClient([]), score_fn=_score_by_smoke)
+        StageIEvolver(
+            ScriptedLLMClient([]),
+            score_fn=_score_by_smoke,
+            prompts=crowdnav_prompts,
+            feedback_card=crowdnav_feedback_card,
+        )
+
+
+def test_evolver_requires_prompts_and_feedback_card():
+    with pytest.raises(ValueError, match="prompts= and feedback_card="):
+        StageIEvolver(
+            ScriptedLLMClient(["unused"]),
+            score_fn=_score_by_smoke,
+            validator=make_crowdnav_validator(),
+        )
 
 
 def test_scripted_generate_n():
@@ -152,6 +170,8 @@ def test_gen0_replaces_invalid_with_extra_draws(tmp_path):
         validator=make_crowdnav_validator(),
         config=StageIConfig(population_size=8, max_invalid_replacements=8),
         rejection_log_path=log_path,
+        prompts=crowdnav_prompts,
+        feedback_card=crowdnav_feedback_card,
     )
     pop = evolver.initialize_population()
     assert len(pop) == 8

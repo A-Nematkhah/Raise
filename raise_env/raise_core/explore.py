@@ -21,7 +21,7 @@ import math
 import os
 import random
 import re
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
@@ -31,7 +31,16 @@ from raise_core.candidate import (
     evaluation_fields,
     genome_fingerprint,
 )
-from raise_core.domains import DEFAULT_DOMAIN, load_domain
+from raise_core.config_defaults import (
+    budget_generations,
+    budget_population,
+    budget_stage1_behavioral_dedup,
+    budget_stage1_max_invalid,
+    run_seed,
+    selection_max_fallback_fraction,
+    selection_mutation_parents,
+    selection_strict_fallback,
+)
 from raise_core.feedback import ArchiveRecord, CandidateArchive, FeedbackCardConfig
 from raise_core.evo_selection.evolution_ops import make_evolution_plan
 from raise_core.evo_selection.feedback import build_refinement_feedback, render_candidate_cards
@@ -191,22 +200,24 @@ class RetryBudget:
 
 @dataclass
 class StageIConfig:
-    population_size: int = 8
-    generations: int = 10
+    # Defaults match closed-loop ``CONFIG.budget`` (6/4). Standalone explorers
+    # that need historical 8/10 must pass explicit population_size/generations.
+    population_size: int = field(default_factory=budget_population)
+    generations: int = field(default_factory=budget_generations)
     # Next-generation children per operator; None -> ``operator_counts`` default.
     n_crossover: Optional[int] = None
     n_mutation: Optional[int] = None
     n_random: Optional[int] = None
     # Extra LLM draws for invalid replies, shared by all slots of a generation
     # (Gen0 and each bred generation); exhausted slots take their fallback.
-    max_invalid_replacements: int = 16
+    max_invalid_replacements: int = field(default_factory=budget_stage1_max_invalid)
     func_name: str = "compute_reward"
     include_external_knowledge: bool = True
     # Carry the best genome into the next generation (one of the N slots).
     keep_runtime_elite: bool = True
     # How mutation parents are picked (``MUTATION_PARENTS``); draws are seeded
     # by ``seed`` and the ranked ids, so a resumed run picks the same parents.
-    mutation_parents: str = "lower"
+    mutation_parents: str = field(default_factory=selection_mutation_parents)
     # Drop Stage-II CR>=collapse_cr genomes from the mutation parent pool
     # (default off for compatibility with older runs).
     mutation_exclude_collapsed: bool = False
@@ -214,7 +225,11 @@ class StageIConfig:
     seed: int = 0
     # Reject rewards whose smoke-state totals match an earlier genome
     # (catches comment/float-cast clones that genome_fingerprint misses).
-    behavioral_dedup: bool = True
+    behavioral_dedup: bool = field(default_factory=budget_stage1_behavioral_dedup)
+    # Fraction of slots filled by seed/clone fallback before marking contaminated.
+    max_fallback_fraction: float = field(default_factory=selection_max_fallback_fraction)
+    # When True, exceeding max_fallback_fraction aborts the run.
+    strict_fallback: bool = field(default_factory=selection_strict_fallback)
 
 
 class StageIEvolver:
@@ -245,20 +260,20 @@ class StageIEvolver:
         self.score_fn = score_fn
         self.validator = validator
         self.config = config or StageIConfig()
-        default_pack = (
-            load_domain(DEFAULT_DOMAIN, with_adapter=False)
-            if prompts is None or feedback_card is None
-            else None
-        )
-        self._prompts = prompts if prompts is not None else default_pack.prompts
+        if prompts is None or feedback_card is None:
+            raise ValueError(
+                "StageIEvolver requires prompts= and feedback_card= from the domain "
+                "pack (e.g. pack.prompts / pack.feedback_card). Construct via the "
+                "closed-loop runner or pass them explicitly; silent load_domain "
+                "defaults are no longer used."
+            )
+        self._prompts = prompts
         self.system_prompt = str(self._prompts.D1_SYSTEM_PROMPT)
         self.rejection_log_path = rejection_log_path
         self._counter = 0
         self.reflection: str = ""
         self.feedback = feedback if feedback is not None else FeedbackCardConfig()
-        self._card_module = (
-            feedback_card if feedback_card is not None else default_pack.feedback_card
-        )
+        self._card_module = feedback_card
         # Evaluated candidates (the closed-loop runner adds each generation).
         self.archive = CandidateArchive()
         self._token_counter = make_token_counter(str(getattr(llm, "provider", "") or ""))
@@ -267,6 +282,12 @@ class StageIEvolver:
         # Genomes accepted into the population being built (fingerprint -> id);
         # with the archive this rejects LLM children identical to known genomes.
         self._generation_genomes: Dict[str, str] = {}
+        self.last_fallback_stats: Dict[str, Any] = {
+            "n_fallback_slots": 0,
+            "fallback_fraction": 0.0,
+        }
+        self.run_status: str = "ok"
+        self._fallback_slots_this_gen: int = 0
         self._generation_behaviors: Dict[str, str] = {}
         self._fingerprints: Dict[str, str] = {}
 
@@ -360,6 +381,9 @@ class StageIEvolver:
             "validation_error": validation_error,
             "rejection_category": (
                 "accepted" if accepted else categorize_validation_error(validation_error)
+            ),
+            "source_repairs": list(
+                getattr(self.validator, "last_source_repairs", None) or []
             ),
         }
         os.makedirs(os.path.dirname(self.rejection_log_path) or ".", exist_ok=True)
@@ -640,6 +664,10 @@ class StageIEvolver:
     ) -> RewardCandidate:
         cid = self._next_id(origin[:3])
         reward_fn, err = self._validate(code)
+        md = dict(metadata or {})
+        repairs = getattr(self.validator, "last_source_repairs", None) or []
+        if repairs:
+            md["source_repairs"] = list(repairs)
         return RewardCandidate(
             candidate_id=cid,
             code=code,
@@ -648,7 +676,7 @@ class StageIEvolver:
             origin=origin,
             parent_ids=parent_ids,
             validation_error=err,
-            metadata=dict(metadata or {}),
+            metadata=md,
         )
 
     def _attempt_candidate(
@@ -808,6 +836,7 @@ class StageIEvolver:
                 len(out) + 1,
                 needed,
             )
+            self._fallback_slots_this_gen += 1
             self._log_rejection(
                 phase=phase,
                 attempt=attempts + len(out) + 1,
@@ -820,6 +849,34 @@ class StageIEvolver:
             )
             out.append(fb)
         return out
+
+    def _record_fallback_stats(self, population: Sequence[RewardCandidate]) -> None:
+        """Update last_fallback_stats / run_status from this generation's fills."""
+        n = max(1, int(self.config.population_size))
+        n_fb = int(self._fallback_slots_this_gen)
+        # Also count clones already stamped as llm_fallback_clone in the pop.
+        for cand in population:
+            md = cand.metadata or {}
+            origin = str(getattr(cand, "origin", "") or "")
+            if md.get("llm_fallback_clone") or origin.endswith("_fallback"):
+                # Avoid double-counting slots already tallied in _fill_valid.
+                continue
+        fraction = float(n_fb) / float(n)
+        self.last_fallback_stats = {
+            "n_fallback_slots": n_fb,
+            "fallback_fraction": fraction,
+        }
+        max_frac = float(getattr(self.config, "max_fallback_fraction", 0.5) or 0.5)
+        if fraction > max_frac:
+            msg = (
+                f"fallback contamination: {n_fb}/{n} slots "
+                f"({fraction:.2f} > max_fallback_fraction={max_frac:.2f})"
+            )
+            logger.error(msg)
+            self.run_status = "contaminated"
+            if bool(getattr(self.config, "strict_fallback", False)):
+                raise RuntimeError(msg)
+        self._fallback_slots_this_gen = 0
 
     def _clone_valid(
         self,
@@ -861,6 +918,7 @@ class StageIEvolver:
         out: List[RewardCandidate] = []
         self._generation_genomes = {}
         self._generation_behaviors = {}
+        self._fallback_slots_this_gen = 0
         batch_id = f"gen0_batch_{self._counter:04d}"
         console.status(
             f"Gen 0/{cfg.generations} - generating initial population (N={needed})",
@@ -941,6 +999,7 @@ class StageIEvolver:
 
         remaining = needed - len(out)
         if remaining <= 0:
+            self._record_fallback_stats(out)
             return out
 
         console.status(
@@ -970,6 +1029,7 @@ class StageIEvolver:
                 phase="gen0_regen",
             )
         )
+        self._record_fallback_stats(out)
         return out
 
     # ------------------------------------------------------------------ scoring
@@ -1239,6 +1299,7 @@ class StageIEvolver:
 
         self._generation_genomes = {}
         self._generation_behaviors = {}
+        self._fallback_slots_this_gen = 0
         top_a = ranked[0]
         fp_a = self._fingerprint(top_a.candidate_id, top_a.code)
         # Crossing a genome with its own copy is a mutation without evidence.
@@ -1321,7 +1382,12 @@ class StageIEvolver:
         if generated_random > 0:
             next_pop.extend(self._fill_random_batch(generated_random, retries))
 
-        assert len(next_pop) == cfg.population_size
+        if len(next_pop) != cfg.population_size:
+            raise RuntimeError(
+                f"next generation size {len(next_pop)} != population_size "
+                f"{cfg.population_size}; operator counts={self.operators.to_dict()}"
+            )
+        self._record_fallback_stats(next_pop)
         return next_pop
 
     def _next_generation_llm_rank(
@@ -1344,6 +1410,7 @@ class StageIEvolver:
         )
         self._generation_genomes = {}
         self._generation_behaviors = {}
+        self._fallback_slots_this_gen = 0
         next_population = list(plan.elites)
         for elite in plan.elites:
             self._register_genome(elite)
@@ -1406,9 +1473,14 @@ class StageIEvolver:
                 )
             )
         if len(next_population) != self.config.population_size:
+            ops = getattr(self, "operators", None)
+            ops_txt = ops.to_dict() if ops is not None else {}
             raise RuntimeError(
-                "LLM-ranked evolution did not produce the configured population size"
+                "LLM-ranked evolution did not produce the configured population "
+                f"size ({len(next_population)} != {self.config.population_size}); "
+                f"operator counts={ops_txt}"
             )
+        self._record_fallback_stats(next_population)
         return next_population
 
     def _build_evidence_reflection(

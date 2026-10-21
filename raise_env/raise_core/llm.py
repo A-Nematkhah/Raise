@@ -12,11 +12,14 @@ Primary Stage I API:
 from __future__ import annotations
 
 import ast
+import logging
 import os
 import re
 import time
 from abc import ABC, abstractmethod
 from typing import Any, Callable, Dict, List, Optional, Sequence
+
+logger = logging.getLogger(__name__)
 
 from raise_core.key_manager import (
     GroqKeyManager,
@@ -30,6 +33,11 @@ from raise_core.llm_errors import (
     CompletionTruncatedError,
     EmptyCompletionError,
     GroqRateLimitError,
+)
+from raise_core.source_normalize import (  # noqa: F401 — re-export
+    normalize_to_compute_reward,
+    normalize_to_compute_reward_with_report,
+    strip_redundant_scalar_subscripts,
 )
 
 # Shared by Groq / vLLM defaults and feedback-card token-count tests.
@@ -98,6 +106,21 @@ def _gpt_oss_model(model: str) -> bool:
     return "gpt-oss" in str(model or "").lower()
 
 
+def _looks_like_unsupported_seed(exc: BaseException) -> bool:
+    msg = str(exc).lower()
+    return "seed" in msg and any(
+        needle in msg
+        for needle in (
+            "unexpected",
+            "unknown",
+            "unsupported",
+            "invalid",
+            "not supported",
+            "extra",
+        )
+    )
+
+
 class ScriptedLLMClient(LLMClient):
     """Deterministic stand-in: returns pre-canned completions in order."""
 
@@ -146,21 +169,24 @@ class GroqLLMClient(LLMClient):
         *,
         model: str = DEFAULT_MODEL,
         temperature: float = 0.4,
-        # gpt-oss reasoning tokens count against max_tokens; 1500 truncated
-        # ~26% of calls in crowdnav_16h. Override with --llm-max-tokens /
+        # gpt-oss reasoning tokens count against max_tokens; short budgets
+        # truncated many calls in long runs. Override with --llm-max-tokens /
         # --llm-reasoning-effort.
         max_tokens: int = 3500,
         api_key: Optional[str] = None,
         system_prompt: Optional[str] = None,
         use_key_pool: bool = True,
         reasoning_effort: Optional[str] = None,
+        seed: Optional[int] = None,
     ) -> None:
         self.model = model
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.reasoning_effort = reasoning_effort
+        self.seed = int(seed) if seed is not None else None
         self.system_prompt = system_prompt or DEFAULT_CLIENT_SYSTEM
         self.last_usage: Optional[Dict[str, Any]] = None
+        self._seed_unsupported_logged = False
         explicit = (api_key or "").strip() or None
         if explicit is None and use_key_pool and groq_key_pool_available():
             self._key_manager = get_key_manager()
@@ -185,9 +211,11 @@ class GroqLLMClient(LLMClient):
         }
         if self.reasoning_effort is not None and _gpt_oss_model(self.model):
             create_kwargs["reasoning_effort"] = self.reasoning_effort
+        if self.seed is not None:
+            create_kwargs["seed"] = self.seed
         started = time.monotonic()
         try:
-            response = self._key_manager.chat_completion(**create_kwargs)
+            response = self._chat_with_optional_seed(create_kwargs)
         except ImportError as exc:
             raise RuntimeError(
                 "GroqLLMClient requires the 'groq' package. Install with: pip install groq"
@@ -208,6 +236,23 @@ class GroqLLMClient(LLMClient):
         if not content or not str(content).strip():
             raise EmptyCompletionError("Groq returned an empty completion.")
         return str(content)
+
+    def _chat_with_optional_seed(self, create_kwargs: Dict[str, Any]) -> Any:
+        try:
+            return self._key_manager.chat_completion(**create_kwargs)
+        except Exception as exc:  # noqa: BLE001
+            if "seed" not in create_kwargs or not _looks_like_unsupported_seed(exc):
+                raise
+            if not self._seed_unsupported_logged:
+                logger.warning(
+                    "Groq create() rejected seed=%s; retrying without seed",
+                    create_kwargs.get("seed"),
+                )
+                self._seed_unsupported_logged = True
+            create_kwargs = dict(create_kwargs)
+            create_kwargs.pop("seed", None)
+            self.seed = None
+            return self._key_manager.chat_completion(**create_kwargs)
 
 
 class VLLMLLMClient(LLMClient):
@@ -235,6 +280,7 @@ class VLLMLLMClient(LLMClient):
         max_attempts: int = 3,
         retry_delay_seconds: float = 3.0,
         reasoning_effort: Optional[str] = None,
+        seed: Optional[int] = None,
     ) -> None:
         self.model = model
         self.base_url = (base_url or os.environ.get("VLLM_BASE_URL") or self.DEFAULT_BASE_URL).rstrip(
@@ -244,10 +290,12 @@ class VLLMLLMClient(LLMClient):
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.reasoning_effort = reasoning_effort
+        self.seed = int(seed) if seed is not None else None
         self.system_prompt = system_prompt or DEFAULT_CLIENT_SYSTEM
         self.max_attempts = int(max_attempts)
         self.retry_delay_seconds = float(retry_delay_seconds)
         self.last_usage: Optional[Dict[str, Any]] = None
+        self._seed_unsupported_logged = False
 
     def complete(self, prompt: str, *, max_tokens: Optional[int] = None) -> str:
         last_error: Optional[Exception] = None
@@ -280,13 +328,34 @@ class VLLMLLMClient(LLMClient):
             from openai import OpenAI
 
             client = OpenAI(base_url=self.base_url, api_key=self.api_key)
-            response = client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                temperature=self.temperature,
-                max_tokens=token_limit,
-                **self._request_options(),
-            )
+            opts = self._request_options()
+            try:
+                response = client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    temperature=self.temperature,
+                    max_tokens=token_limit,
+                    **opts,
+                )
+            except Exception as exc:  # noqa: BLE001
+                if "seed" in opts and _looks_like_unsupported_seed(exc):
+                    if not self._seed_unsupported_logged:
+                        logger.warning(
+                            "vLLM create() rejected seed=%s; retrying without seed",
+                            opts.get("seed"),
+                        )
+                        self._seed_unsupported_logged = True
+                    self.seed = None
+                    opts = self._request_options()
+                    response = client.chat.completions.create(
+                        model=self.model,
+                        messages=messages,
+                        temperature=self.temperature,
+                        max_tokens=token_limit,
+                        **opts,
+                    )
+                else:
+                    raise
             self.last_usage = _usage_from_response(
                 response, latency_s=time.monotonic() - started, attempts=attempt
             )
@@ -296,9 +365,12 @@ class VLLMLLMClient(LLMClient):
 
     def _request_options(self) -> dict:
         """Return provider-specific OpenAI-compatible request options."""
+        opts: Dict[str, Any] = {}
         if self.reasoning_effort is not None:
-            return {"reasoning_effort": self.reasoning_effort}
-        return {}
+            opts["reasoning_effort"] = self.reasoning_effort
+        if self.seed is not None:
+            opts["seed"] = self.seed
+        return opts
 
     @staticmethod
     def _extract_message_text(message) -> str:
@@ -393,7 +465,9 @@ class OllamaLLMClient(VLLMLLMClient):
 
     def _request_options(self) -> dict:
         # Qwen reasoning can consume the entire completion budget before code.
-        return {"reasoning_effort": "none"}
+        opts = super()._request_options()
+        opts["reasoning_effort"] = "none"
+        return opts
 
 
 class SeedVariantLLMClient(LLMClient):
@@ -549,133 +623,3 @@ def split_reward_function_sources(
                 pieces.append(normalize_to_compute_reward(segment, func_name))
     return pieces
 
-
-_DEF_RE = re.compile(
-    r"^def\s+(cal_reward|seed_reward_func|compute_reward_v\d+|[\w]+_v2)\s*\(",
-    re.MULTILINE,
-)
-
-
-def normalize_to_compute_reward(code: str, target_name: str = "compute_reward") -> str:
-    """
-    Ensure the top-level function is named ``compute_reward(state, memory)``.
-
-    Renames common paper aliases (cal_reward, *_v2, seed_reward_func) and
-    upgrades a single-arg ``(state)`` signature to ``(state, memory)`` so
-    older completions still validate under the episode-memory contract.
-    Also strips redundant ``[0]``/``[1]``/``[-1]`` on known scalar state
-    fields (LLMs often treat ``state.robot.px`` like a batched tensor).
-    """
-    text = code.strip()
-    match = re.search(r"^def\s+(\w+)\s*\(", text, re.MULTILINE)
-    if not match:
-        return strip_redundant_scalar_subscripts(text)
-    name = match.group(1)
-    if name != target_name:
-        text = re.sub(
-            rf"^def\s+{re.escape(name)}\s*\(",
-            f"def {target_name}(",
-            text,
-            count=1,
-            flags=re.MULTILINE,
-        )
-    sig = re.search(
-        rf"^def\s+{re.escape(target_name)}\s*\(([^)]*)\)",
-        text,
-        re.MULTILINE,
-    )
-    if not sig:
-        return strip_redundant_scalar_subscripts(text)
-    raw_args = [a.strip() for a in sig.group(1).split(",") if a.strip()]
-    arg_names = [a.split(":")[0].split("=")[0].strip() for a in raw_args]
-    if arg_names == ["state"]:
-        text = re.sub(
-            rf"^def\s+{re.escape(target_name)}\s*\([^)]*\)",
-            f"def {target_name}(state, memory)",
-            text,
-            count=1,
-            flags=re.MULTILINE,
-        )
-    return strip_redundant_scalar_subscripts(text)
-
-
-# Scalar CrowdNavRewardState / RobotState / HumanState fields — never arrays.
-# ``action`` is deliberately absent (a tuple in continuous mode).
-_SCALAR_FIELD_ATTRS = frozenset(
-    {
-        "px",
-        "py",
-        "vx",
-        "vy",
-        "gx",
-        "gy",
-        "theta",
-        "radius",
-        "v_pref",
-        "collision",
-        "reached_goal",
-        "timeout",
-        "min_separation",
-        "discomfort_dist",
-        "goal_distance",
-        "progress",
-        "time_step",
-        "global_time",
-        "time_limit",
-    }
-)
-
-
-def _is_trivial_int_index(slice_node: ast.AST) -> bool:
-    """True for ``[0]``, ``[1]``, ``[-1]`` (common LLM tensor-habits)."""
-    if isinstance(slice_node, ast.Constant) and isinstance(slice_node.value, int):
-        return slice_node.value in (0, 1, -1)
-    if (
-        isinstance(slice_node, ast.UnaryOp)
-        and isinstance(slice_node.op, ast.USub)
-        and isinstance(slice_node.operand, ast.Constant)
-        and isinstance(slice_node.operand.value, int)
-        and slice_node.operand.value == 1
-    ):
-        return True
-    return False
-
-
-class _StripScalarSubscripts(ast.NodeTransformer):
-    """Rewrite ``state.robot.px[0]`` → ``state.robot.px`` (and nested repeats)."""
-
-    def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
-        node = self.generic_visit(node)
-        assert isinstance(node, ast.Subscript)
-        if not isinstance(node.value, ast.Attribute):
-            return node
-        if node.value.attr not in _SCALAR_FIELD_ATTRS:
-            return node
-        if not _is_trivial_int_index(node.slice):
-            return node
-        return node.value
-
-
-def strip_redundant_scalar_subscripts(code: str) -> str:
-    """
-    Drop ``[0]``/``[1]``/``[-1]`` on known float/bool state fields.
-
-    Does **not** touch ``state.action[...]`` (a tuple in continuous mode).
-    On parse failure, or when nothing changes, returns ``code`` unchanged so
-    LLM comments are preserved (``ast.unparse`` would strip them).
-    """
-    text = (code or "").strip()
-    if not text:
-        return text
-    tree = _safe_parse(text)
-    if tree is None:
-        return text
-    try:
-        before = ast.dump(tree)
-        new_tree = _StripScalarSubscripts().visit(tree)
-        if ast.dump(new_tree) == before:
-            return text
-        ast.fix_missing_locations(new_tree)
-        return ast.unparse(new_tree)
-    except Exception:  # noqa: BLE001 — keep original if transform/unparse fails (incl. RecursionError)
-        return text

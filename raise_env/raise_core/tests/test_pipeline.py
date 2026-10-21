@@ -85,7 +85,10 @@ def test_pipeline_llm_rank_selects_stage3_winner_without_api_calls(
     assert stages == ["stage2", "stage2", "stage3"]
     assert artifacts.best_stage3.candidate_id == artifacts.manifest["best_stage3_id"]
     assert artifacts.manifest["stage3_selection"]["best_id"] == artifacts.best_stage3.candidate_id
-    assert artifacts.manifest["stage3_selection"]["llm_ranking"][0] == artifacts.best_stage3.candidate_id
+    # LLM may reorder only within {measured best} ∪ ties; a full reverse
+    # outside that set must keep the measured Stage III best.
+    assert artifacts.manifest["stage3_selection"]["llm_restricted_to_ties"] is True
+    assert "llm_ranking" in artifacts.manifest["stage3_selection"]
 
 
 def test_limit_cpu_threads(monkeypatch):
@@ -189,7 +192,9 @@ def test_resume_preserves_original_config_and_created_utc(tmp_path):
     original = json.loads((out / "config.json").read_text(encoding="utf-8"))
     assert original["seed"] == 111
 
-    cfg2 = RaiseRunConfig(output_dir=str(out), seed=222, resume=True)
+    cfg2 = RaiseRunConfig(
+        output_dir=str(out), seed=222, resume=True, allow_config_drift=True
+    )
     cfg2.apply_fast_profile()
     arts2 = RaisePipeline(cfg2).run()
     kept = json.loads((out / "config.json").read_text(encoding="utf-8"))

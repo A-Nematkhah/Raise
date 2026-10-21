@@ -12,8 +12,30 @@ on:
       - ".github/workflows/raise-ci.yml"
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: raise_env
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install ruff
+        run: pip install ruff
+      - name: Ruff (unused imports / vars / f-strings)
+        run: ruff check --select F401,F841,F541 raise_core domains scripts
+
   test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # numpy==1.23.5 / gym==0.15.7 / matplotlib==3.6.2 are pinned for 3.10.
+        # 3.11 is included only when those pins still install (verified below);
+        # drop 3.11 from the matrix rather than loosening pins if install fails.
+        python-version: ["3.10", "3.11"]
     defaults:
       run:
         working-directory: raise_env
@@ -23,18 +45,34 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.10"
+          python-version: ${{ matrix.python-version }}
 
-      # Same torch release as requirements.txt, CPU build (the pinned
-      # +cu128 wheel is GPU-only and several GB).
-      - name: Install deps (CPU torch + pinned)
+      - name: Install pinned deps (CPU torch via PyTorch index)
         run: |
           python -m pip install --upgrade pip
+          # Install non-torch pins first so requirements.txt cannot pull a CUDA wheel.
+          grep -vE '^torch==' requirements.txt > "$RUNNER_TEMP/requirements_no_torch.txt"
+          pip install -r "$RUNNER_TEMP/requirements_no_torch.txt"
           pip install torch==2.11.0 --index-url https://download.pytorch.org/whl/cpu
-          grep -vE '^(torch==|--extra-index-url)' requirements.txt > "$RUNNER_TEMP/requirements_ci.txt"
-          pip install -r "$RUNNER_TEMP/requirements_ci.txt"
+          python - <<'PY'
+          import sys
+          import numpy, gym, matplotlib
+          print("py", sys.version)
+          print("numpy", numpy.__version__)
+          print("gym", gym.__version__)
+          print("matplotlib", matplotlib.__version__)
+          assert numpy.__version__.startswith("1.23."), numpy.__version__
+          assert gym.__version__.startswith("0.15."), gym.__version__
+          assert matplotlib.__version__.startswith("3.6."), matplotlib.__version__
+          PY
 
-      # CrowdNav++'s ORCA humans need Python-RVO2 (C++ library, built from source).
+      - name: Cache Python-RVO2 build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pip
+          key: rvo2-${{ runner.os }}-py${{ matrix.python-version }}-c2c46ba8
+
       - name: Build Python-RVO2
         run: |
           pip install Cython==0.29.36 cmake

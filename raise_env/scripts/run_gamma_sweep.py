@@ -15,8 +15,8 @@ finished runs are skipped on restart.
 
 Examples (from ``raise_env/``)::
 
-    python scripts/run_gamma_sweep.py --run-dir results/crowdnav_16h
-    python scripts/run_gamma_sweep.py --run-dir results/crowdnav_16h \\
+    python scripts/run_gamma_sweep.py --run-dir <run-dir>
+    python scripts/run_gamma_sweep.py --run-dir <run-dir> \\
         --gammas matched,0.99,0.995 --rewards native,final --seeds 3
 """
 

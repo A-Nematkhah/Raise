@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import io
+import tokenize
 from dataclasses import replace
 from typing import Optional, Sequence
 
@@ -41,8 +43,44 @@ _UNICODE_PUNCT_TO_ASCII = str.maketrans(
 
 
 def normalize_unicode_punctuation(code: str) -> str:
-    """Map look-alike Unicode dashes/spaces/quotes to ASCII."""
-    return str(code).translate(_UNICODE_PUNCT_TO_ASCII)
+    """Map look-alike Unicode dashes/spaces/quotes to ASCII outside strings/comments."""
+    text = str(code)
+    if not text:
+        return text
+    try:
+        tokens = list(tokenize.generate_tokens(io.StringIO(text).readline))
+    except (tokenize.TokenError, IndentationError):
+        return text.translate(_UNICODE_PUNCT_TO_ASCII)
+
+    line_starts = [0]
+    for i, ch in enumerate(text):
+        if ch == "\n":
+            line_starts.append(i + 1)
+
+    def _off(row: int, col: int) -> int:
+        if row - 1 >= len(line_starts):
+            return len(text)
+        return line_starts[row - 1] + col
+
+    protected = [False] * len(text)
+    stringish = {tokenize.STRING, tokenize.COMMENT}
+    # Python 3.12+ f-string token types (ignore if absent).
+    for name in ("FSTRING_START", "FSTRING_MIDDLE", "FSTRING_END"):
+        typ = getattr(tokenize, name, None)
+        if typ is not None:
+            stringish.add(typ)
+
+    for tok in tokens:
+        if tok.type in stringish:
+            a = _off(*tok.start)
+            b = _off(*tok.end)
+            for i in range(max(0, a), min(len(protected), b)):
+                protected[i] = True
+
+    return "".join(
+        ch if protected[i] else ch.translate(_UNICODE_PUNCT_TO_ASCII)
+        for i, ch in enumerate(text)
+    )
 
 
 class CrowdNavRewardValidator(RewardValidator):

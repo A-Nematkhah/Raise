@@ -58,7 +58,8 @@ MODEL_DIR = os.path.join(BENCH_DIR, "models")
 LOG_DIR = os.path.join(BENCH_DIR, "logs")
 PROFILE_DIR = os.path.join(BENCH_DIR, "profiles")
 DATASET = "domains/crowdnav/data/stage1_dataset"
-REF_RUN = os.path.join("results", "crowdnav_16h")
+# Phase-4 benches that load a finished RAISE run require ``--run-dir``.
+REF_RUN = os.environ.get("RAISE_BENCH_RUN_DIR", "")
 RUN_RAISE = os.path.join(_ROOT, "scripts", "run_raise.py")
 SEED = 425
 PHYSICAL_CORES_FALLBACK = max(1, (os.cpu_count() or 2) // 2)
@@ -736,7 +737,9 @@ def k_step_decomp(p: Dict[str, Any], st: Dict[str, Any], rep: int) -> Dict[str, 
         raw = rf.last_reward_components()
         comps = {str(k): float(v) for k, v in raw.items()} if isinstance(raw, dict) else {}
         t6 = pc()
-        info = {
+        # Timing-only path: build the same info dict shape as production without
+        # retaining it (avoids an unused local while preserving the cost).
+        {
             "raise_outcome": outcome_of(info_obj), "raise_collision": collision,
             "raise_reached_goal": reached, "raise_timeout": timeout, "raise_danger": danger,
             "raise_danger_min_dist": float(info_obj.min_dist) if danger else None,
@@ -1328,6 +1331,16 @@ def k_gen0(p: Dict[str, Any], st: Dict[str, Any], rep: int) -> Dict[str, Any]:
     return out
 
 
+def _require_ref_run() -> str:
+    path = str(REF_RUN or "").strip()
+    if not path or not os.path.isdir(path):
+        raise FileNotFoundError(
+            "phase-4 benches need a finished RAISE run: pass --run-dir <run-dir> "
+            "or set RAISE_BENCH_RUN_DIR"
+        )
+    return path
+
+
 def k_feedback(p: Dict[str, Any], st: Dict[str, Any], rep: int) -> Dict[str, Any]:
     """Feedback-card render + token counting on the archive of a real run."""
     from domains.crowdnav import feedback_card as fc
@@ -1340,9 +1353,10 @@ def k_feedback(p: Dict[str, Any], st: Dict[str, Any], rep: int) -> Dict[str, Any
         make_token_counter,
     )
 
+    ref = _require_ref_run()
     pc = time.perf_counter
     t = pc()
-    archive = CandidateArchive.from_epoch_files(os.path.join(REF_RUN, "closed_loop"))
+    archive = CandidateArchive.from_epoch_files(os.path.join(ref, "closed_loop"))
     rebuild_s = pc() - t
     recs = [r for r in archive.records() if r.evaluated and r.metadata.get("fitness") is not None]
     last_gen = max(r.generation for r in recs)
@@ -1412,11 +1426,12 @@ def k_ckpt_io(p: Dict[str, Any], st: Dict[str, Any], rep: int) -> Dict[str, Any]
     from raise_core.raise_loop.checkpoint import save_checkpoint
     from raise_core.raise_loop.logging_io import append_epoch_record, write_json
 
-    with open(os.path.join(REF_RUN, "closed_loop", "checkpoint.json"), encoding="utf-8") as fh:
+    ref = _require_ref_run()
+    with open(os.path.join(ref, "closed_loop", "checkpoint.json"), encoding="utf-8") as fh:
         payload = json.load(fh)
-    with open(os.path.join(REF_RUN, "closed_loop", "pop_epoch_000.json"), encoding="utf-8") as fh:
+    with open(os.path.join(ref, "closed_loop", "pop_epoch_000.json"), encoding="utf-8") as fh:
         pop_payload = json.load(fh)
-    with open(os.path.join(REF_RUN, "closed_loop", "epochs.jsonl"), encoding="utf-8") as fh:
+    with open(os.path.join(ref, "closed_loop", "epochs.jsonl"), encoding="utf-8") as fh:
         epoch_rows = [json.loads(x) for x in fh if x.strip()]
     root = os.path.join(WORK_DIR, "p4_io")
     shutil.rmtree(root, ignore_errors=True)
@@ -1463,7 +1478,7 @@ def k_ckpt_io(p: Dict[str, Any], st: Dict[str, Any], rep: int) -> Dict[str, Any]
             append_epoch_record(root, row)
         epochs_s = (pc() - t) / max(1, min(4, len(epoch_rows)))
         t = pc()
-        CandidateArchive.from_epoch_files(os.path.join(REF_RUN, "closed_loop"))
+        CandidateArchive.from_epoch_files(os.path.join(ref, "closed_loop"))
         archive_s = pc() - t
     finally:
         jio.os.replace = real_replace
@@ -1485,7 +1500,11 @@ def k_ckpt_io(p: Dict[str, Any], st: Dict[str, Any], rep: int) -> Dict[str, Any]
 
 def k_llm_log(p: Dict[str, Any], st: Dict[str, Any], rep: int) -> Dict[str, Any]:
     """Latency / token statistics from a real Groq run's llm_calls.jsonl."""
-    path = os.path.join(REF_RUN, "closed_loop", "llm_calls.jsonl")
+    try:
+        ref = _require_ref_run()
+    except FileNotFoundError:
+        return {"available": False}
+    path = os.path.join(ref, "closed_loop", "llm_calls.jsonl")
     if not os.path.isfile(path):
         return {"available": False}
     req: Dict[str, Dict[str, Any]] = {}
@@ -1497,7 +1516,7 @@ def k_llm_log(p: Dict[str, Any], st: Dict[str, Any], rep: int) -> Dict[str, Any]
                 req[o["call_id"]] = o
             elif o.get("event") == "response":
                 resp[o["call_id"]] = o
-    with open(os.path.join(REF_RUN, "config.json"), encoding="utf-8") as fh:
+    with open(os.path.join(ref, "config.json"), encoding="utf-8") as fh:
         run_cfg = json.load(fh)
     lat = [float(r["latency_s"]) for r in resp.values() if r.get("latency_s") is not None]
     ptok = [int(r.get("prompt_tokens") or 0) for r in resp.values()]
@@ -2342,8 +2361,17 @@ def main() -> int:
     ap.add_argument("--list", action="store_true", help="print rows and exit")
     ap.add_argument("--p5-best-flags", default=None, help="override run_raise flags of p5.best")
     ap.add_argument("--p5-best-env", default=None, help="override env of p5.best (K=V,K2=V2)")
+    ap.add_argument(
+        "--run-dir",
+        default=None,
+        help="Finished RAISE run directory for phase-4 archive/IO benches "
+        "(or set RAISE_BENCH_RUN_DIR)",
+    )
     ap.add_argument("--worker", default=None, help=argparse.SUPPRESS)
     args = ap.parse_args()
+    global REF_RUN
+    if args.run_dir:
+        REF_RUN = os.path.abspath(str(args.run_dir))
     if args.worker:
         spec = json.loads(base64.urlsafe_b64decode(args.worker.encode()).decode())
         return worker_main(spec)

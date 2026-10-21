@@ -11,8 +11,8 @@ per-case differences.
 
 Examples (from ``raise_env/``)::
 
-    python scripts/run_baselines.py --run-dir results/crowdnav_16h
-    python scripts/run_baselines.py --run-dir results/crowdnav_16h --seeds 3 --extra-ids ini_0000
+    python scripts/run_baselines.py --run-dir <run-dir>
+    python scripts/run_baselines.py --run-dir <run-dir> --seeds 3 --extra-ids ini_0000
 """
 
 from __future__ import annotations

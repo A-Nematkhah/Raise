@@ -13,10 +13,22 @@ from __future__ import annotations
 
 import hashlib
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
-from typing import Dict, Optional
+from dataclasses import dataclass, field
+from typing import Any, Dict, Optional
 
 from raise_core.candidate import RewardCandidate
+from raise_core.config_defaults import (
+    budget_stage2_eval_episodes,
+    budget_stage2_train_steps,
+    env_action_mode,
+    env_kinematics,
+    env_rotation_samples,
+    env_speed_samples,
+    ppo_n_epochs,
+    ppo_n_steps,
+    run_seed,
+    upstream_env_config,
+)
 
 
 @dataclass
@@ -24,9 +36,9 @@ class Stage2Config:
     """Stage II budget + domain trainer knobs."""
 
     # PPO budget per candidate (environment steps).
-    train_env_steps: int = 12_000
-    eval_episodes: int = 30
-    seed: int = 425
+    train_env_steps: int = field(default_factory=budget_stage2_train_steps)
+    eval_episodes: int = field(default_factory=budget_stage2_eval_episodes)
+    seed: int = field(default_factory=run_seed)
     output_root: str = "trained_models/stage2"
     device: str = "cpu"
     n_envs: int = 1
@@ -35,18 +47,19 @@ class Stage2Config:
     # Upstream scenario split for selection / held-out evaluation.
     eval_split: str = "val"
     # Robot / action space (domains.crowdnav.settings).
-    action_mode: str = "continuous"
-    robot_kinematics: str = "unicycle"
-    action_speed_samples: int = 5
-    action_rotation_samples: int = 16
+    action_mode: str = field(default_factory=env_action_mode)
+    robot_kinematics: str = field(default_factory=env_kinematics)
+    action_speed_samples: int = field(default_factory=env_speed_samples)
+    action_rotation_samples: int = field(default_factory=env_rotation_samples)
     env_config_path: Optional[str] = None
+    env_config_obj: Any = field(default_factory=upstream_env_config, repr=False)
     # PPO entropy bonus (SB3 default 0.0) and holdout eval policy mode.
     # Stochastic eval: deterministic argmax labels flip with the training seed.
     ppo_ent_coef: float = 0.0
     eval_deterministic: bool = False
     # PPO rollout length cap per env and optimisation epochs per rollout.
-    ppo_n_steps: int = 256
-    ppo_n_epochs: int = 10
+    ppo_n_steps: int = field(default_factory=ppo_n_steps)
+    ppo_n_epochs: int = field(default_factory=ppo_n_epochs)
     # PPO per-step discount; None -> domain default (CrowdNav PPO_GAMMA = 0.99).
     ppo_gamma: Optional[float] = None
     # Eval scenario seed shared by every candidate trained in one generation
@@ -56,6 +69,8 @@ class Stage2Config:
     # per-episode reward-component sums on holdout (no reward / PPO change).
     record_training_dynamics: bool = False
     record_reward_components: bool = False
+    # When True, wrap the training VecEnv in VecNormalize(norm_reward=True).
+    ppo_normalize_reward: bool = False
 
 
 @dataclass
@@ -140,7 +155,13 @@ class PolicyTrainer(ABC):
         *,
         round_index: int,
         config: Stage2Config,
+        train_seed_index: Optional[int] = None,
     ) -> ProxyMetrics:
+        """Train + eval.
+
+        ``train_seed_index`` selects the PPO train seed (``config.seed +
+        train_seed_index``). ``None`` keeps the legacy ``seed + round_index``.
+        """
         raise NotImplementedError
 
 
@@ -158,7 +179,10 @@ class StubPolicyTrainer(PolicyTrainer):
         *,
         round_index: int,
         config: Stage2Config,
+        train_seed_index: Optional[int] = None,
+        **kwargs: Any,
     ) -> ProxyMetrics:
+        del train_seed_index, kwargs
         return self._metrics(candidate, round_index)
 
     def reevaluate(
@@ -167,8 +191,11 @@ class StubPolicyTrainer(PolicyTrainer):
         *,
         round_index: int,
         config: Stage2Config,
+        train_seed_index: Optional[int] = None,
+        **kwargs: Any,
     ) -> ProxyMetrics:
         """Eval-only pass; the stub has no policy, so it re-derives the metrics."""
+        del train_seed_index, kwargs
         return self._metrics(candidate, round_index)
 
     @staticmethod

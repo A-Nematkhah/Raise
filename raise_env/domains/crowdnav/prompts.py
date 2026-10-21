@@ -162,7 +162,7 @@ _STATE_FIELDS = """\
     - state.humans: tuple of all humans; iterate `for h in state.humans:` then h.px, h.py, h.vx, h.vy, h.radius, h.visible
     - FRAMES: every position and velocity is in the WORLD frame (metres, m/s); (state.robot.gx, state.robot.gy) is the goal. Distances to humans must be computed, e.g. ((h.px - state.robot.px) ** 2 + (h.py - state.robot.py) ** 2) ** 0.5 is centre-to-centre; subtract h.radius + state.robot.radius for the gap between bodies.
     - state.collision, state.reached_goal, state.timeout, state.danger: bool flags from upstream CrowdNav++.
-    - state.min_separation: float, the smallest current robot-human body gap; state.discomfort_dist is the configured comfort threshold.
+    - state.min_separation: float, upstream pre-step robot-human body gap (dmin at step start); state.min_separation_post: same gap from post-step positions; state.discomfort_dist is the configured comfort threshold.
     - state.goal_distance: float, robot-centre distance to the goal after the step; state.progress: float, decrease of goal_distance during this step (negative when moving away).
     - state.action (see the action space below), state.time_step (s), state.global_time (s since reset), state.time_limit (s)
     - state.success_reward, state.collision_penalty, state.discomfort_penalty_factor: configured upstream reward parameters.
@@ -233,7 +233,7 @@ CrowdNavRewardState access (dot notation only — never getattr/hasattr/__import
 - state.robot.px, .py, .vx, .vy, .gx, .gy, .theta, .radius, .v_pref, .kinematics (world frame; (gx, gy) is the goal)
 - state.humans — loop `for h in state.humans:` then h.px, h.py, h.vx, h.vy, h.radius, h.visible (world frame; includes all humans)
 - state.collision, state.reached_goal, state.timeout (mutually exclusive outcome flags), state.danger (upstream danger classification)
-- state.min_separation (smallest current robot-human body gap; negative on collision), state.discomfort_dist (configured)
+- state.min_separation (upstream pre-step body gap / dmin; negative on collision), state.min_separation_post (post-step gap from robot/humans), state.discomfort_dist (configured)
 - state.goal_distance (after the step), state.progress (decrease of goal_distance this step)
 - state.action, state.time_step, state.global_time, state.time_limit
 - state.success_reward, state.collision_penalty, state.discomfort_penalty_factor

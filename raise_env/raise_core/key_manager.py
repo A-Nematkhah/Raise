@@ -29,6 +29,7 @@ import json
 import logging
 import math
 import os
+import threading
 import time
 from typing import Any, List, Optional, Tuple
 
@@ -187,19 +188,25 @@ class GroqRateLimitPacer:
         self.min_interval_seconds = max(0.0, float(min_interval_seconds))
         self._last_request_at = 0.0
         self._hold_until = 0.0
+        self._lock = threading.Lock()
 
     def wait_turn(self) -> None:
-        now = time.time()
-        target = max(self._last_request_at + self.min_interval_seconds, self._hold_until)
-        if now < target:
-            delay = target - now
+        with self._lock:
+            now = time.time()
+            target = max(self._last_request_at + self.min_interval_seconds, self._hold_until)
+            delay = max(0.0, target - now)
+            # Reserve this slot before sleeping so concurrent waiters serialize.
+            self._last_request_at = max(now, target)
+        if delay > 0.0:
             logger.info("Groq pacing: sleeping %.2fs before request", delay)
             time.sleep(delay)
-        self._last_request_at = time.time()
 
     def hold(self, seconds: float) -> None:
         """Delay the next request by at least ``seconds`` from now."""
-        self._hold_until = max(self._hold_until, time.time() + max(0.0, float(seconds)))
+        with self._lock:
+            self._hold_until = max(
+                self._hold_until, time.time() + max(0.0, float(seconds))
+            )
 
     def observe_response(self, response: Any) -> None:
         headers = _response_headers(response)
@@ -275,9 +282,10 @@ class GroqKeyManager:
     ):
         self.keys_path = keys_path or resolve_groq_keys_path()
         self.max_wait_seconds = max(0.0, float(max_wait_seconds))
-        # Requests sent by the latest ``chat_completion`` call (for call logs).
-        self.last_attempts = 0
-        self.last_errors: list = []
+        # Per-thread attempt counters so concurrent chat_completion callers
+        # do not clobber each other's call-log stats.
+        self._local = threading.local()
+        self._lock = threading.Lock()
         if keys is not None:
             self.keys = [k for k in keys if k and not _is_placeholder_key(k)]
         else:
@@ -290,11 +298,32 @@ class GroqKeyManager:
         self.index = 0
         self.cooldown_until = {key: 0.0 for key in self.keys}
 
+    @property
+    def last_attempts(self) -> int:
+        return int(getattr(self._local, "last_attempts", 0) or 0)
+
+    @last_attempts.setter
+    def last_attempts(self, value: int) -> None:
+        self._local.last_attempts = int(value)
+
+    @property
+    def last_errors(self) -> list:
+        errors = getattr(self._local, "last_errors", None)
+        if errors is None:
+            errors = []
+            self._local.last_errors = errors
+        return errors
+
+    @last_errors.setter
+    def last_errors(self, value: list) -> None:
+        self._local.last_errors = list(value)
+
     def _current_key(self) -> str:
         return self.keys[self.index]
 
     def _advance(self) -> None:
-        self.index = (self.index + 1) % len(self.keys)
+        with self._lock:
+            self.index = (self.index + 1) % len(self.keys)
 
     def _label(self, key: str) -> str:
         """Log-safe key identifier (pool position, never key characters)."""
@@ -302,21 +331,24 @@ class GroqKeyManager:
 
     def _mark_rate_limited(self, key: str, seconds: Optional[float] = None) -> None:
         wait = float(COOLDOWN_SECONDS) if seconds is None else max(1.0, float(seconds))
-        self.cooldown_until[key] = time.time() + wait
+        with self._lock:
+            self.cooldown_until[key] = time.time() + wait
         logger.warning("Groq key %s rate-limited; cooling down %.0fs", self._label(key), wait)
 
     def _seconds_until_available(self) -> float:
         """0 when some key is ready, else the wait until the earliest cooldown ends."""
-        return max(0.0, min(self.cooldown_until.values()) - time.time())
+        with self._lock:
+            return max(0.0, min(self.cooldown_until.values()) - time.time())
 
     def _select_available_key(self) -> str:
-        now = time.time()
-        for _ in range(len(self.keys)):
-            key = self._current_key()
-            if self.cooldown_until[key] <= now:
-                return key
-            self._advance()
-        return self._current_key()
+        with self._lock:
+            now = time.time()
+            for _ in range(len(self.keys)):
+                key = self.keys[self.index]
+                if self.cooldown_until[key] <= now:
+                    return key
+                self.index = (self.index + 1) % len(self.keys)
+            return self.keys[self.index]
 
     def get_client(self) -> Tuple[Any, str]:
         if Groq is None:

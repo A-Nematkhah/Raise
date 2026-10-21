@@ -1,4 +1,3 @@
-from pathlib import Path
 
 from scripts.evaluate_crowdnav_generalization import _checkpoint_path
 

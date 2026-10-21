@@ -153,9 +153,10 @@ def test_upstream_python_config_and_human_override():
     assert env.observation_space.contains(obs)
 
 
-def test_hard_config_is_loadable_python_config():
-    config_path = Path(__file__).resolve().parents[3] / "configs" / "crowdnav_hard.py"
-    config = load_env_config(str(config_path))
+def test_raise_config_upstream_is_loadable():
+    from raise_config import CONFIG, build_upstream_config
+
+    config = build_upstream_config(CONFIG.env, config=CONFIG)
     assert config.env.time_limit == 30
     assert config.reward.success_reward == 1.0
     assert config.reward.collision_penalty == -0.25
@@ -165,16 +166,18 @@ def test_hard_config_is_loadable_python_config():
     assert config.sim.predict_method == "const_vel"
     assert config.sim.predict_steps == 5
     assert config.data.pred_timestep == 0.25
-    assert config.action_space.kinematics == "holonomic"
+    assert config.action_space.kinematics == "unicycle"
     assert config.robot.visible is True
 
 
-def test_hard_config_keeps_exactly_ten_holonomic_humans():
-    config_path = Path(__file__).resolve().parents[3] / "configs" / "crowdnav_hard.py"
+def test_default_env_keeps_exactly_ten_holonomic_humans():
+    from raise_config import CONFIG, build_upstream_config
+
+    upstream = build_upstream_config(CONFIG.env, config=CONFIG)
     settings = CrowdNavSettings(
         kinematics="holonomic",
         action_mode="continuous",
-        env_config_path=str(config_path),
+        env_config_obj=upstream,
     )
     env = RewardInjectedCrowdNavEnv(settings=settings)
     try:
@@ -191,13 +194,15 @@ def test_hard_config_keeps_exactly_ten_holonomic_humans():
         env.close()
 
 
-def test_hard_config_observation_contains_constant_velocity_human_paths():
-    config_path = Path(__file__).resolve().parents[3] / "configs" / "crowdnav_hard.py"
+def test_default_env_observation_contains_constant_velocity_human_paths():
+    from raise_config import CONFIG, build_upstream_config
+
+    upstream = build_upstream_config(CONFIG.env, config=CONFIG)
     env = RewardInjectedCrowdNavEnv(
         settings=CrowdNavSettings(
             kinematics="holonomic",
             action_mode="continuous",
-            env_config_path=str(config_path),
+            env_config_obj=upstream,
         )
     )
     try:
@@ -220,16 +225,14 @@ def test_hard_config_observation_contains_constant_velocity_human_paths():
         env.close()
 
 
-def test_generalization_config_uses_fixed_17_humans():
-    config_path = (
-        Path(__file__).resolve().parents[3]
-        / "configs"
-        / "crowdnav_generalization_17.py"
-    )
+def test_generalization_variant_uses_fixed_17_humans():
+    from raise_config import CONFIG, build_upstream_config
+
+    upstream = build_upstream_config(CONFIG.env, variant="generalization_17", config=CONFIG)
     settings = CrowdNavSettings(
         kinematics="unicycle",
         action_mode="continuous",
-        env_config_path=str(config_path),
+        env_config_obj=upstream,
     )
     env = RewardInjectedCrowdNavEnv(settings=settings)
     try:

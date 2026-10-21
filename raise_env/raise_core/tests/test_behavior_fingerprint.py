@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from domains.crowdnav import feedback_card as crowdnav_feedback_card
 from domains.crowdnav.prompts import D5_SEED_FUNCTION
 from domains.crowdnav.reward_checks import make_crowdnav_validator
 from raise_core.candidate import behavior_fingerprint, genome_fingerprint
@@ -70,6 +71,7 @@ def test_evolver_rejects_behavioral_duplicate(tmp_path):
         validator=validator,
         prompts=cn_prompts,
         feedback=FeedbackCardConfig(enabled=False),
+        feedback_card=crowdnav_feedback_card,
         config=StageIConfig(population_size=2, behavioral_dedup=True),
         rejection_log_path=str(tmp_path / "rej.jsonl"),
     )

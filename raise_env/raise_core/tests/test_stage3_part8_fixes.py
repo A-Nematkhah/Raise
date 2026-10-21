@@ -139,10 +139,14 @@ def test_failed_final_eval_is_recorded_not_raised(tmp_path, monkeypatch):
 
 
 def test_all_failed_stage3_is_labelled(tmp_path, monkeypatch):
-    _, arts, manifest, trainer, _ = _run_fast(tmp_path, monkeypatch, fail_train=True)
+    _, arts, manifest, trainer, out = _run_fast(tmp_path, monkeypatch, fail_train=True)
     assert manifest["stage3_selection"]["status"] == "all_failed"
     assert manifest["stage3_selection"]["n_failed"] == len(trainer.train_configs)
-    assert manifest["best_stage3_id"] == manifest["best_stage2_id"]
+    assert manifest["stage3_status"] == "fallback_to_stage2"
+    assert manifest["best_stage3_id"] is None
+    assert arts.best_stage3.candidate_id == manifest["best_stage2_id"]
+    final = json.loads((out / "final_candidate.json").read_text(encoding="utf-8"))
+    assert final["metadata"]["selection_stage"] == "stage2_fallback"
     assert manifest["final_eval"] is None
     assert trainer.reeval_configs == []
 
@@ -213,6 +217,8 @@ def test_resume_warns_when_eval_mode_changes(tmp_path, monkeypatch):
 
 
 def test_cli_exposes_stage3_and_robot_flags(monkeypatch, capsys):
+    import json
+
     script = _RAISE_ROOT / "scripts" / "run_raise.py"
     monkeypatch.chdir(_RAISE_ROOT)
     monkeypatch.setattr(
@@ -221,24 +227,22 @@ def test_cli_exposes_stage3_and_robot_flags(monkeypatch, capsys):
         [
             str(script),
             "--print-config",
-            "--domain",
-            "crowdnav",
-            "--robot-kinematics",
-            "unicycle",
-            "--action-mode",
-            "continuous",
-            "--stage3-warm-start",
-            "--final-eval-episodes",
-            "60",
+            "--set",
+            "env.kinematics=unicycle",
+            "--set",
+            "env.action_mode=continuous",
+            "--set",
+            "budget.stage3.warm_start=true",
+            "--set",
+            "budget.final_eval_episodes=60",
         ],
     )
     try:
         runpy.run_path(str(script), run_name="__main__")
     except SystemExit as exc:
         assert int(exc.code or 0) == 0
-    out = capsys.readouterr().out
-    assert "domain='crowdnav'" in out
-    assert "robot_kinematics='unicycle'" in out
-    assert "action_mode='continuous'" in out
-    assert "stage3_warm_start=True" in out
-    assert "final_eval_episodes=60" in out
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["env"]["kinematics"] == "unicycle"
+    assert payload["env"]["action_mode"] == "continuous"
+    assert payload["budget"]["stage3"]["warm_start"] is True
+    assert payload["budget"]["final_eval_episodes"] == 60

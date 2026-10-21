@@ -85,14 +85,20 @@ def _reward(code: str, **cfg_overrides) -> SandboxedReward:
 
 
 def test_smoke_rejects_state_dependent_slow_loop():
+    # Nested loops stay under max_range_length but still blow the per-call budget.
+    # (A single huge range(...) is rejected earlier by the guarded range helper.)
     code = _FN + (
         "    total = 0.0\n"
-        "    for i in range(int(state.goal_distance * 2000000)):\n"
-        "        total = total + 0.0\n"
+        "    n = int(state.goal_distance) + 1\n"
+        "    for i in range(10000):\n"
+        "        for j in range(10000):\n"
+        "            total = total + float(n) * 0.0\n"
         "    return total\n"
     )
     reward_fn, err = make_crowdnav_validator(smoke_states=fingerprint_smoke_states()).try_validate(code)
-    assert reward_fn is None and "too slow" in (err or "")
+    assert reward_fn is None
+    # Per-call budget ("too slow") or the overall smoke timeout both count.
+    assert "too slow" in (err or "") or "timeout" in (err or "").lower()
 
 
 def test_compute_rejects_a_single_call_over_budget():

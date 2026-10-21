@@ -15,6 +15,7 @@ from raise_core.raise_loop.config import ClosedLoopConfig
 from raise_core.raise_loop.logging_io import append_epoch_record, read_epochs
 from raise_core.raise_loop.runner import ClosedLoopRunner
 from raise_core.refine import StubPolicyTrainer
+from raise_core.sandbox.errors import RewardSandboxError
 from raise_core.scoring import Score1Result
 
 
@@ -121,8 +122,10 @@ def test_failed_label_is_retried_on_resume(tmp_path):
     pop = [_cand("c0", 1.0), _cand("c1", 1.5), _cand("c2", 2.0)]
     _labeling_ckpt(out, pop)
 
+    # Reward-side failure (not infra/unknown): marked failed and retried on resume.
+    # Unknown RuntimeError / infra abort under the default retry_then_abort policy.
     crashing = _ScriptedTrainer(
-        raises={"c1": RuntimeError("cuda oom"), "c2": KeyboardInterrupt()}
+        raises={"c1": RewardSandboxError("diverged"), "c2": KeyboardInterrupt()}
     )
     with pytest.raises(KeyboardInterrupt):
         ClosedLoopRunner(_cfg(out), trainer=crashing).run()
@@ -140,7 +143,7 @@ def test_failed_label_is_retried_on_resume(tmp_path):
 def test_failed_label_is_reported_separately_and_has_no_inf(tmp_path):
     out = str(tmp_path / "run")
     _labeling_ckpt(out, [_cand("c0", 1.0), _cand("c1", 1.5)])
-    trainer = _ScriptedTrainer(raises={"c1": RuntimeError("diverged")})
+    trainer = _ScriptedTrainer(raises={"c1": RewardSandboxError("diverged")})
     ClosedLoopRunner(_cfg(out), trainer=trainer).run()
 
     (rec,) = read_epochs(out)
@@ -184,14 +187,19 @@ def test_score1_rejected_candidate_is_not_trained(tmp_path):
     assert rec["labeled_ids"] == ["good"]
 
 
-def test_resume_warns_about_config_drift(tmp_path, monkeypatch):
+def test_resume_aborts_on_config_drift_unless_allowed(tmp_path, monkeypatch):
     out = str(tmp_path / "run")
     ClosedLoopRunner(_cfg(out)).run()
+    with pytest.raises(RuntimeError, match="config drift"):
+        ClosedLoopRunner(_cfg(out, stage2_train_steps=16, seed=7)).run()
+
     warnings: list[str] = []
     monkeypatch.setattr(
         runner_mod.console, "warn", lambda msg, **_kw: warnings.append(str(msg))
     )
-    ClosedLoopRunner(_cfg(out, stage2_train_steps=16, seed=7)).run()
+    ClosedLoopRunner(
+        _cfg(out, stage2_train_steps=16, seed=7, allow_config_drift=True)
+    ).run()
     drift = [w for w in warnings if "differ from the checkpoint" in w]
     assert len(drift) == 1
     assert "stage2_train_steps: 8 -> 16" in drift[0]
@@ -199,5 +207,7 @@ def test_resume_warns_about_config_drift(tmp_path, monkeypatch):
 
     # The resumed run saved its own settings: same settings again, no warning.
     warnings.clear()
-    ClosedLoopRunner(_cfg(out, stage2_train_steps=16, seed=7)).run()
+    ClosedLoopRunner(
+        _cfg(out, stage2_train_steps=16, seed=7, allow_config_drift=True)
+    ).run()
     assert not [w for w in warnings if "differ from the checkpoint" in w]

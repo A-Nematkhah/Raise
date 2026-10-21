@@ -16,23 +16,40 @@ evals use ``val``) for the number to report.
 
 from __future__ import annotations
 
+import inspect
 import logging
-import math
-import statistics
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Any, Dict, List, Optional, Sequence
 
 from raise_core import console
 from raise_core.candidate import RewardCandidate
 from raise_core.candidate import genome_fingerprint
+from raise_core.config_defaults import (
+    budget_stage3_eval_episodes,
+    budget_stage3_train_steps,
+    env_action_mode,
+    env_kinematics,
+    env_rotation_samples,
+    env_speed_samples,
+    ppo_n_steps,
+    run_seed,
+    upstream_env_config,
+)
 from raise_core.population_io import deserialize_population, load_candidate_dict
 from raise_core.refine import ProxyMetrics, stub_metrics_from_code
 from raise_core.sandbox import RewardValidator
+from raise_core.seed_aggregate import (
+    aggregate_seed_fits,
+    median_seed_checkpoint,
+    partial_seeds_flag,
+)
 from raise_core.selection import (
     candidate_fitness,
     candidate_fitness_se,
+    candidate_fitness_se_source,
     metrics_fitness,
+    pick_best_trained,
     statistical_ties,
 )
 from raise_core.stage3_checkpoint import (
@@ -44,8 +61,8 @@ from raise_core.stage3_checkpoint import (
 
 logger = logging.getLogger(__name__)
 
-# K3 default (environment steps per candidate).
-STAGE3_STEPS: int = 70_000
+# K3 default (environment steps per candidate) lives in ``raise_config.CONFIG``.
+STAGE3_STEPS = budget_stage3_train_steps()
 
 # Eval seed bases relative to the run seed. Closed-loop generation g uses
 # ``seed + g * 1000``, so these stay clear of any realistic G.
@@ -85,25 +102,26 @@ _STAGE2_PRESERVE_AS = (
 class Stage3Config:
     """Stage III budget + domain trainer knobs."""
 
-    train_env_steps: int = STAGE3_STEPS
-    eval_episodes: int = 30
-    seed: int = 425
+    train_env_steps: int = field(default_factory=budget_stage3_train_steps)
+    eval_episodes: int = field(default_factory=budget_stage3_eval_episodes)
+    seed: int = field(default_factory=run_seed)
     output_root: str = "trained_models/stage3"
     device: str = "cpu"
     # Crash-safe resume (``{run}/stage3/checkpoint.json``).
     resume: bool = True
-    action_mode: str = "continuous"
-    robot_kinematics: str = "unicycle"
-    action_speed_samples: int = 5
-    action_rotation_samples: int = 16
+    action_mode: str = field(default_factory=env_action_mode)
+    robot_kinematics: str = field(default_factory=env_kinematics)
+    action_speed_samples: int = field(default_factory=env_speed_samples)
+    action_rotation_samples: int = field(default_factory=env_rotation_samples)
     env_config_path: Optional[str] = None
+    env_config_obj: Any = field(default_factory=upstream_env_config, repr=False)
     eval_mode: str = "both"
     # Selection split; ``final_eval`` switches to ``FINAL_EVAL_SPLIT``.
     eval_split: str = "val"
     warm_start: bool = False
     n_envs: int = 1
     # Same PPO rollout / eval policy mode as Stage II so both stages are comparable.
-    ppo_n_steps: int = 256
+    ppo_n_steps: int = field(default_factory=ppo_n_steps)
     # PPO per-step discount; None -> domain default (CrowdNav PPO_GAMMA = 0.99).
     ppo_gamma: Optional[float] = None
     eval_deterministic: bool = False
@@ -116,8 +134,12 @@ class Stage3Config:
     skip_collapsed: bool = True
     collapse_cr: float = 0.8
     # Independent PPO train seeds per finalist (default 1 = current behaviour).
-    # Selection uses mean fitness across seeds; final eval uses the best seed's
-    # checkpoint. Pay for K>1 via ``top_k`` (top Stage-II non-collapsed).
+    # Selection uses mean fitness across seeds (SE across seeds when >1 seed
+    # succeeds). The blind final eval re-evaluates ALL successful seed
+    # checkpoints on the same final cases and reports their mean fitness;
+    # ``checkpoint_path`` on the candidate is the median-fitness seed (used for
+    # viz only, never the max). Pay for K>1 via ``top_k`` (top Stage-II
+    # non-collapsed).
     n_seeds: int = 1
     # After the collapse filter, keep only the top-k by Stage II fitness.
     # None / <=0 = keep everyone that survived the collapse filter.
@@ -160,7 +182,14 @@ class PolicyTrainer(ABC):
         *,
         round_index: int,
         config: Stage3Config,
+        train_seed_index: Optional[int] = None,
     ) -> TrainEvalBundle:
+        """Train + eval one policy.
+
+        ``train_seed_index`` selects the PPO train seed (``config.seed +
+        train_seed_index``). ``None`` keeps the legacy behaviour where the train
+        seed is derived from ``round_index``.
+        """
         raise NotImplementedError
 
 
@@ -173,8 +202,11 @@ class StubPolicyTrainer(PolicyTrainer):
         *,
         round_index: int,
         config: Stage3Config,
+        train_seed_index: Optional[int] = None,
         **kwargs: Any,
     ) -> TrainEvalBundle:
+        # The stub derives its jitter from ``round_index`` only; ``train_seed_index``
+        # is accepted for API parity with real trainers.
         metrics = stub_metrics_from_code(
             candidate.code,
             round_index,
@@ -199,10 +231,15 @@ class StubPolicyTrainer(PolicyTrainer):
         *,
         round_index: int,
         config: Stage3Config,
+        train_seed_index: Optional[int] = None,
+        **kwargs: Any,
     ) -> ProxyMetrics:
         """Eval-only pass; the stub has no policy, so it re-derives the metrics."""
         return self.train_and_eval(
-            candidate, round_index=round_index, config=config
+            candidate,
+            round_index=round_index,
+            config=config,
+            train_seed_index=train_seed_index,
         ).metrics
 
 
@@ -251,6 +288,40 @@ def _trained_metrics(candidate: RewardCandidate, bundle: TrainEvalBundle) -> Dic
     metrics: Dict[str, Any] = bundle.metrics.as_dict()
     metrics["fitness"] = metrics_fitness(metrics)
     return metrics
+
+
+def _accepts_kwarg(fn: Any, name: str) -> bool:
+    """True when callable ``fn`` takes keyword ``name`` (explicitly or via ``**kwargs``)."""
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return True
+    if name in params:
+        return True
+    return any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
+
+
+def _call_train_and_eval(
+    trainer: Any,
+    candidate: RewardCandidate,
+    *,
+    round_index: int,
+    config: Stage3Config,
+    train_seed_index: Optional[int],
+) -> TrainEvalBundle:
+    """Call ``trainer.train_and_eval``, passing ``train_seed_index`` when supported.
+
+    Third-party trainers written against the old signature (no ``**kwargs``)
+    keep working: they fall back to the legacy ``round_index``-derived seed.
+    """
+    if _accepts_kwarg(trainer.train_and_eval, "train_seed_index"):
+        return trainer.train_and_eval(
+            candidate,
+            round_index=round_index,
+            config=config,
+            train_seed_index=train_seed_index,
+        )
+    return trainer.train_and_eval(candidate, round_index=round_index, config=config)
 
 
 class Stage3Runner:
@@ -332,8 +403,15 @@ class Stage3Runner:
         path = save_checkpoint(self._ckpt_dir(), payload)
         logger.info("Stage III checkpoint → %s (%s, next=%d)", path, status, next_index)
 
-    def _record(self, candidate: RewardCandidate, bundle: TrainEvalBundle) -> RewardCandidate:
-        metrics = _trained_metrics(candidate, bundle)
+    def _record(
+        self,
+        candidate: RewardCandidate,
+        bundle: TrainEvalBundle,
+        *,
+        metrics: Optional[Dict[str, Any]] = None,
+    ) -> RewardCandidate:
+        if metrics is None:
+            metrics = _trained_metrics(candidate, bundle)
         fitness = float(metrics["fitness"])
         trained = replace(
             candidate,
@@ -354,17 +432,8 @@ class Stage3Runner:
                 checkpoint_path=bundle.checkpoint_path,
             )
         )
-        prev = (
-            candidate_fitness(self.best_trained)
-            if self.best_trained is not None
-            else float("-inf")
-        )
-        if fitness > prev:
-            self.best_trained = trained
-            console.status(
-                f"new best {trained.candidate_id} fitness={fitness:.3f}",
-                stage="Stage III",
-            )
+        # ``best_trained`` is re-ranked by the caller after seed aggregation
+        # (``pick_best_trained``), not here on a single seed's fitness.
         return trained
 
     def _record_failure(self, candidate: RewardCandidate, exc: Exception) -> None:
@@ -501,21 +570,33 @@ class Stage3Runner:
         return unique
 
     def _train_candidate(self, cand: RewardCandidate) -> None:
-        """Train ``cand`` for ``n_seeds`` PPO seeds; select by mean fitness."""
+        """Train ``cand`` for ``n_seeds`` PPO seeds; select by mean fitness.
+
+        Fitness / SE come from ``aggregate_seed_fits`` over all successful
+        seeds. ``checkpoint_path`` is the *median* seed's checkpoint (never the
+        max, which would bias the reported policy upward); every successful
+        seed checkpoint is kept in ``stage3_seed_checkpoints`` for the final eval.
+        """
         n_seeds = max(1, int(self.config.n_seeds))
         seed_runs: List[Dict[str, Any]] = []
-        best_bundle: Optional[TrainEvalBundle] = None
-        best_fit = float("-inf")
+        seed_bundles: Dict[int, TrainEvalBundle] = {}
+        seed_metrics: Dict[int, Dict[str, Any]] = {}
         for s in range(n_seeds):
             console.status(
                 f"candidate {cand.candidate_id} seed {s + 1}/{n_seeds}",
                 stage="Stage III",
             )
             try:
-                # ``round_index`` offsets the train seed; ``eval_seed_base`` stays
-                # fixed so every seed of a genome sees the same holdout cases.
-                bundle = self.trainer.train_and_eval(
-                    cand, round_index=s, config=self.config
+                # ``round_index=s`` keeps bookkeeping / output dirs ordered;
+                # ``train_seed_index=s`` selects the PPO train seed explicitly.
+                # ``eval_seed_base`` stays fixed so every seed of a genome sees
+                # the same holdout cases.
+                bundle = _call_train_and_eval(
+                    self.trainer,
+                    cand,
+                    round_index=s,
+                    config=self.config,
+                    train_seed_index=s,
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.exception(
@@ -541,12 +622,14 @@ class Stage3Runner:
                     "train_seed": (cand.metadata or {}).get("train_seed"),
                 }
             )
-            if fit > best_fit:
-                best_fit = fit
-                best_bundle = bundle
+            seed_bundles[s] = bundle
+            seed_metrics[s] = dict(metrics)
 
-        ok_fits = [float(r["fitness"]) for r in seed_runs if r.get("status") == "ok"]
-        if not ok_fits or best_bundle is None:
+        ok_runs = [r for r in seed_runs if r.get("status") == "ok"]
+        ok_fits = [float(r["fitness"]) for r in ok_runs]
+        n_ok = len(ok_runs)
+        n_failed = n_seeds - n_ok
+        if not ok_fits:
             first_err = next(
                 (str(r.get("error") or "") for r in seed_runs if r.get("status") == "failed"),
                 f"all {n_seeds} Stage III seed(s) failed",
@@ -554,40 +637,75 @@ class Stage3Runner:
             self._record_failure(cand, RuntimeError(first_err or f"all {n_seeds} seed(s) failed"))
             return
 
-        trained = self._record(cand, best_bundle)
+        # Median seed (not max) supplies the reported checkpoint and metrics.
+        median_path, median_idx = median_seed_checkpoint(seed_runs)
+        if median_idx is None or median_idx not in seed_bundles:
+            median_idx = int(ok_runs[0]["seed_index"])
+            median_path = seed_bundles[median_idx].checkpoint_path
+        median_bundle = seed_bundles[median_idx]
+        median_metrics = seed_metrics[median_idx]
+
+        episode_se = float(median_metrics.get("fitness_se") or 0.0)
+        agg = aggregate_seed_fits(ok_fits, episode_se=episode_se)
+        mean_fit = float(agg["fitness"])
+        se = float(agg["fitness_se"])
+        se_source = str(agg["fitness_se_source"])
+        partial = partial_seeds_flag(n_ok=n_ok, n_seeds=n_seeds)
+        if partial:
+            console.warn(
+                f"{cand.candidate_id}: only {n_ok}/{n_seeds} seed(s) succeeded; "
+                "fitness is a partial-seed mean and ranks below full-seed candidates",
+                stage="Stage III",
+            )
+
+        trained = self._record(cand, median_bundle, metrics=median_metrics)
         md = dict(trained.metadata or {})
-        mean_fit = float(statistics.fmean(ok_fits))
-        if n_seeds > 1 and len(ok_fits) > 1:
-            # SE of the mean across independent train seeds.
-            se = float(statistics.stdev(ok_fits) / math.sqrt(len(ok_fits)))
-        else:
-            se = float((md.get("last_metrics") or {}).get("fitness_se") or 0.0)
         last = dict(md.get("last_metrics") or {})
         last["fitness"] = mean_fit
         last["fitness_se"] = se
+        last["fitness_se_source"] = se_source
         last["stage3_seed_fits"] = list(ok_fits)
         md["last_metrics"] = last
         md["fitness"] = mean_fit
         md["selection_scalar"] = mean_fit
+        md["fitness_se_source"] = se_source
         md["stage3_n_seeds"] = n_seeds
         md["stage3_seed_runs"] = seed_runs
-        # Keep the best-seed checkpoint for blind re-eval / viz.
-        md["checkpoint_path"] = best_bundle.checkpoint_path
+        md["stage3_seed_checkpoints"] = [
+            str(r["checkpoint_path"])
+            for r in ok_runs
+            if r.get("checkpoint_path") is not None
+        ]
+        md["n_ok_seeds"] = n_ok
+        md["n_failed_seeds"] = n_failed
+        md["partial_seeds"] = bool(partial)
+        # Median-fitness seed's checkpoint (viz / single-policy consumers).
+        md["checkpoint_path"] = median_path
+        md["checkpoint_selection"] = "median_seed"
+        md["median_seed_index"] = int(median_idx)
         trained.metadata = md
-        # Refresh history row + best pointer with the aggregated fitness.
+        # Refresh history row with the aggregated fitness.
         for row in self.history:
             if row.candidate_id == str(cand.candidate_id) and row.status == "ok":
                 row.metrics = dict(last)
-                row.checkpoint_path = best_bundle.checkpoint_path
+                row.checkpoint_path = median_path
                 break
-        # ``_record`` ranked on the best seed alone; re-select by mean fitness.
-        self.best_trained = (
-            max(self.trained, key=candidate_fitness) if self.trained else None
-        )
+        # Partial-seed candidates rank below full-seed ones (``pick_best_trained``).
+        prev_best = self.best_trained
+        self.best_trained = pick_best_trained(self.trained)
+        if (
+            self.best_trained is not None
+            and self.best_trained is not prev_best
+            and str(self.best_trained.candidate_id) == str(cand.candidate_id)
+        ):
+            console.status(
+                f"new best {cand.candidate_id} fitness={mean_fit:.3f}",
+                stage="Stage III",
+            )
         if n_seeds > 1:
             console.status(
                 f"{cand.candidate_id} mean_fitness={mean_fit:.3f} "
-                f"se={se:.3f} (n_seeds={len(ok_fits)})",
+                f"se={se:.3f} ({se_source}, n_ok_seeds={n_ok}/{n_seeds})",
                 stage="Stage III",
             )
 
@@ -658,6 +776,9 @@ class Stage3Runner:
             "n_trained": len(self.trained),
             "n_failed": n_failed,
             "n_seeds": max(1, int(self.config.n_seeds)),
+            "fitness_se_source": candidate_fitness_se_source(best),
+            "n_ok_seeds": (best.metadata or {}).get("n_ok_seeds"),
+            "partial_seeds": bool((best.metadata or {}).get("partial_seeds", False)),
             "top_k": self.config.top_k,
             "eval_episodes": int(self.config.eval_episodes),
             "eval_split": str(self.config.eval_split),
@@ -669,18 +790,21 @@ class Stage3Runner:
     ) -> Optional[Dict[str, Any]]:
         """Re-evaluate the selected policy alone on unseen scenarios.
 
-        Selection already used the Stage III scores, so only an evaluation on
-        fresh seeds gives an unbiased estimate of the winner's fitness.
-        Returns ``None`` when disabled or the trainer cannot re-evaluate.
+        When the candidate carries multiple successful seed checkpoints
+        (``stage3_seed_checkpoints`` / ``stage3_seed_runs``), every seed is
+        evaluated on the same final cases and the reported fitness is the mean
+        across seeds (with cross-seed SE). ``checkpoint_path`` stays the median
+        seed for visualization. Returns ``None`` when disabled or the trainer
+        cannot re-evaluate.
         """
         reevaluate = getattr(self.trainer, "reevaluate", None)
         if int(episodes) <= 0 or reevaluate is None:
             return None
-        md = dict(candidate.metadata or {})
+        src_md = dict(candidate.metadata or {})
+        md = dict(src_md)
         for key in _STAGE2_RESULT_KEYS:
             if key != "checkpoint_path":
                 md.pop(key, None)
-        probe = replace(candidate, metadata=md)
         cfg = replace(
             self.config,
             eval_episodes=int(episodes),
@@ -696,6 +820,17 @@ class Stage3Runner:
             "seed_base": int(seed_base),
             "split": FINAL_EVAL_SPLIT,
         }
+        seed_ckpts = _final_eval_seed_checkpoints(src_md)
+        if len(seed_ckpts) > 1:
+            return self._final_eval_multi_seed(
+                candidate,
+                md,
+                seed_ckpts,
+                reevaluate=reevaluate,
+                cfg=cfg,
+                row=row,
+            )
+        probe = replace(candidate, metadata=md)
         try:
             result = reevaluate(probe, round_index=0, config=cfg)
         except Exception as exc:  # noqa: BLE001 - the trained winner is still valid
@@ -708,7 +843,11 @@ class Stage3Runner:
             status="ok",
             fitness=float(metrics["fitness"]),
             fitness_se=metrics.get("fitness_se"),
+            fitness_se_source="episodes_only",
             metrics=metrics,
+            n_ok_seeds=1,
+            n_failed_seeds=0,
+            partial_seeds=bool(src_md.get("partial_seeds", False)),
         )
         console.status(
             f"final eval {candidate.candidate_id} fitness={row['fitness']:.3f} "
@@ -716,6 +855,138 @@ class Stage3Runner:
             stage="Stage III",
         )
         return row
+
+    def _final_eval_multi_seed(
+        self,
+        candidate: RewardCandidate,
+        base_md: Dict[str, Any],
+        seed_ckpts: List[Dict[str, Any]],
+        *,
+        reevaluate: Any,
+        cfg: Stage3Config,
+        row: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Evaluate every successful seed checkpoint on the same final cases."""
+        seed_evals: List[Dict[str, Any]] = []
+        ok_fits: List[float] = []
+        for entry in seed_ckpts:
+            path = entry.get("checkpoint_path")
+            seed_index = int(entry.get("seed_index") or 0)
+            probe_md = {**base_md, "checkpoint_path": path}
+            probe = replace(candidate, metadata=probe_md)
+            try:
+                result = reevaluate(probe, round_index=0, config=cfg)
+            except Exception as exc:  # noqa: BLE001
+                logger.exception(
+                    "final eval seed %s failed for %s", seed_index, candidate.candidate_id
+                )
+                seed_evals.append(
+                    {
+                        "seed_index": seed_index,
+                        "checkpoint_path": path,
+                        "status": "failed",
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
+                )
+                continue
+            bundle = (
+                result if isinstance(result, TrainEvalBundle) else TrainEvalBundle(result)
+            )
+            metrics = _trained_metrics(probe, bundle)
+            fit = float(metrics["fitness"])
+            ok_fits.append(fit)
+            seed_evals.append(
+                {
+                    "seed_index": seed_index,
+                    "checkpoint_path": path,
+                    "status": "ok",
+                    "fitness": fit,
+                    "fitness_se": metrics.get("fitness_se"),
+                    "metrics": metrics,
+                }
+            )
+        n_requested = max(
+            len(seed_ckpts),
+            int((candidate.metadata or {}).get("stage3_n_seeds") or len(seed_ckpts)),
+        )
+        n_ok = len(ok_fits)
+        n_failed = len(seed_ckpts) - n_ok
+        if not ok_fits:
+            return {
+                **row,
+                "status": "failed",
+                "error": "all seed checkpoints failed final eval",
+                "seed_evals": seed_evals,
+                "n_ok_seeds": 0,
+                "n_failed_seeds": n_failed,
+                "partial_seeds": True,
+            }
+        agg = aggregate_seed_fits(
+            ok_fits,
+            episode_se=float(seed_evals[0].get("fitness_se") or 0.0),
+        )
+        partial = partial_seeds_flag(n_ok=n_ok, n_seeds=n_requested) or bool(
+            (candidate.metadata or {}).get("partial_seeds")
+        )
+        if partial:
+            console.warn(
+                f"final eval {candidate.candidate_id}: partial seeds "
+                f"({n_ok}/{n_requested} ok)",
+                stage="Stage III",
+            )
+        median_path = (candidate.metadata or {}).get("checkpoint_path")
+        row.update(
+            status="ok",
+            fitness=float(agg["fitness"]),
+            fitness_se=float(agg["fitness_se"]),
+            fitness_se_source=str(agg["fitness_se_source"]),
+            seed_evals=seed_evals,
+            n_ok_seeds=n_ok,
+            n_failed_seeds=n_failed,
+            partial_seeds=bool(partial),
+            checkpoint_path=median_path,
+            checkpoint_selection="median_seed",
+            metrics={
+                "fitness": float(agg["fitness"]),
+                "fitness_se": float(agg["fitness_se"]),
+                "fitness_se_source": str(agg["fitness_se_source"]),
+                "stage3_seed_fits": list(ok_fits),
+            },
+        )
+        console.status(
+            f"final eval {candidate.candidate_id} mean_fitness={row['fitness']:.3f} "
+            f"se={row['fitness_se']:.3f} ({row['fitness_se_source']}, "
+            f"n_ok_seeds={n_ok}/{n_requested})",
+            stage="Stage III",
+        )
+        return row
+
+
+def _final_eval_seed_checkpoints(md: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Successful Stage III seed checkpoints for multi-seed final eval."""
+    runs = md.get("stage3_seed_runs")
+    out: List[Dict[str, Any]] = []
+    if isinstance(runs, list):
+        for row in runs:
+            if not isinstance(row, dict) or row.get("status") != "ok":
+                continue
+            path = row.get("checkpoint_path")
+            if not path:
+                continue
+            out.append(
+                {
+                    "seed_index": int(row.get("seed_index") or 0),
+                    "checkpoint_path": str(path),
+                }
+            )
+        if out:
+            return out
+    paths = md.get("stage3_seed_checkpoints")
+    if isinstance(paths, list):
+        for i, path in enumerate(paths):
+            if path:
+                out.append({"seed_index": i, "checkpoint_path": str(path)})
+    return out
 
 
 __all__ = [

@@ -34,9 +34,9 @@ does not look; if linking fails, build the checkout manually with
 `cmake --build . --config Release` and copy the library to
 `build/RVO2/src/`.
 
-The pinned GPU wheel is `torch==2.11.0+cu128`. Adjust the `cu1xx` suffix and
-the PyTorch index URL in `requirements.txt` to match the local CUDA driver, or
-pass `--device cpu`.
+Default `requirements.txt` pins CPU-friendly `torch==2.11.0`. For CUDA wheels,
+install `requirements-cuda.txt` (pinned `torch==2.11.0+cu128`; adjust the
+`cu1xx` suffix / index URL to match the local driver), or pass `--device cpu`.
 
 ## API keys (Groq)
 
@@ -62,10 +62,110 @@ The server URL defaults to `http://localhost:11434/v1`; override it with
 
 | Goal | Command | Hardware | Time |
 |------|---------|----------|------|
-| Wiring smoke | `python scripts/run_raise.py --fast` | CPU | seconds |
+| Wiring smoke | `python scripts/run_raise.py --dry-run` | CPU | seconds |
 | Stage I dataset | `python scripts/collect_crowdnav_stage1_dataset.py` | CPU | seconds |
-| Real PPO, no LLM | `python scripts/run_raise.py --llm seed --allow-seed-llm --population 2 --generations 1 --stage2-train-steps 256 --stage3-train-steps 512 --device cpu` | CPU | minutes |
-| Full run | `python scripts/run_raise.py --llm groq --output-dir results/crowdnav_run` | GPU/CPU + Groq | hours |
+| Real PPO, no LLM | `python scripts/run_raise.py --allow-seed-llm --set budget.population_size=2 --set budget.generations=1 --set budget.stage2_train_steps=256 --set budget.stage3.train_steps=512 --set ppo.device=cpu` | CPU | minutes |
+| Full run | `python scripts/run_raise.py --set llm.provider=groq --output-dir results/crowdnav_run` | GPU/CPU + Groq | hours |
+
+## Configuration
+
+All simulator and budget defaults live in **`raise_config.py`** (`CONFIG`).
+Edit that file, or override at runtime:
+
+- **`--config path.py`** — file must export `CONFIG: RaiseConfig`
+- **`--set section.key=value`** — repeatable; nested keys use dots (e.g.
+  `budget.stage3.train_steps=50000`)
+- Precedence: built-in `CONFIG` < `--config` < `--set`
+
+On run start, `scripts/run_raise.py` writes **`config_snapshot.json`** (with
+sha256) under `--output-dir`. Resume compares the snapshot unless
+`--allow-config-drift` is set (legacy runs without a snapshot skip the check).
+
+`run_raise.py` flags (everything else moves to `--set`):
+
+| Flag | Purpose |
+|------|---------|
+| `--config`, `--set` | Effective `raise_config` |
+| `--output-dir` / `--run-dir` | Run directory |
+| `--resume` / `--no-resume` | Checkpoint resume (default: resume) |
+| `--allow-config-drift` | Resume despite snapshot mismatch |
+| `--dry-run` / `--fast` | Stub trainers + smoke Score1 |
+| `--print-config` | JSON dump of effective config and exit |
+| `--verbose` | DEBUG logging |
+| `--baselines` | Run `scripts/run_baselines.py` after the pipeline |
+| `--allow-seed-llm` | Allow `llm.provider=seed` on non-dry runs |
+
+### `run_raise.py` flag migration (`--set` keys)
+
+| Removed flag | `raise_config` key |
+|--------------|-------------------|
+| `--seed` | `seed` |
+| `--llm` | `llm.provider` |
+| `--llm-model` | `llm.model` |
+| `--llm-max-tokens` | `llm.max_tokens` |
+| `--llm-reasoning-effort` | `llm.reasoning_effort` |
+| `--llm-seed` | `llm.seed` |
+| `--device` | `ppo.device` |
+| `--torch-threads` | `ppo.torch_threads` |
+| `--score1` | (use `--dry-run` for smoke; dataset is default) |
+| `--stage1-dataset` | `budget.stage1.dataset_path` |
+| `--population` | `budget.population_size` |
+| `--generations` | `budget.generations` |
+| `--stage2-train-steps` | `budget.stage2_train_steps` |
+| `--stage2-eval-episodes` | `budget.stage2_eval_episodes` |
+| `--stage2-eval-split` | `budget.stage2_eval_split` |
+| `--stage2-seeds` | `budget.stage2_seeds` |
+| `--stage2-paired-seeds` / `--no-stage2-paired-seeds` | `budget.stage2_paired_seeds` |
+| `--stage2-successive-halving` | `budget.stage2_successive_halving` |
+| `--stage3-train-steps` | `budget.stage3.train_steps` |
+| `--stage3-eval-episodes` | `budget.stage3.eval_episodes` |
+| `--stage3-warm-start` | `budget.stage3.warm_start` |
+| `--stage3-skip-collapsed` | `budget.stage3.skip_collapsed` |
+| `--stage3-seeds` | `budget.stage3.n_seeds` |
+| `--stage3-top-k` | `budget.stage3.top_k` |
+| `--final-eval-episodes` | `budget.final_eval_episodes` |
+| `--eval-tied-finalists` | `budget.eval_tied_finalists` |
+| `--elitism` | `budget.elitism` |
+| `--n-crossover` / `--n-mutation` / `--n-random` | `budget.n_crossover` / `n_mutation` / `n_random` |
+| `--mutation-parents` | `selection.mutation_parents` |
+| `--mutation-exclude-collapsed` | `budget.mutation_exclude_collapsed` |
+| `--collapse-cr` | `budget.collapse_cr` |
+| `--n-envs` | `budget.n_envs` |
+| `--label-workers` | `budget.label_workers` |
+| `--warm-start` | `budget.warm_start` |
+| `--eval-mode` | `budget.eval_mode` |
+| `--action-mode` | `env.action_mode` |
+| `--robot-kinematics` | `env.kinematics` |
+| `--action-speed-samples` | `env.speed_samples` |
+| `--action-rotation-samples` | `env.rotation_samples` |
+| `--env-config` | edit `raise_config.py` `CONFIG.env` (or `--set env.human_num=…`) |
+| `--feedback-card` | `selection.feedback_card` |
+| `--max-input-tokens` | `selection.max_input_tokens` |
+| `--target-input-tokens` | `selection.target_input_tokens` |
+| `--feedback-history` | `selection.feedback_history` |
+| `--feedback-trajectories` | `selection.feedback_trajectories` |
+| `--feedback-random-calls` | `selection.feedback_random_calls` |
+| `--feedback-training-dynamics` | `selection.feedback_training_dynamics` |
+| `--feedback-components` | `selection.feedback_components` |
+| `--selection-mode` | `selection.mode` |
+| `--selection-top-k` | `selection.top_k` |
+| `--selection-votes` | `selection.n_votes` |
+| `--selection-temperature` | `selection.temperature` |
+| `--selection-restart-probability` | `selection.p_restart` |
+| `--selection-guards` | `selection.guards` |
+| `--selection-guard-success-threshold` | `selection.guard_success_threshold` |
+| `--selection-guard-min-path-length` | `selection.guard_min_path_length` |
+| `--selection-reflection-note-cap` | `selection.reflection_note_cap` |
+| `--selection-seed` | `seed` (ranking shuffle seed) |
+| `--infra-error-policy` | `selection.infra_error_policy` |
+| `--max-fallback-fraction` | `selection.max_fallback_fraction` |
+| `--strict-fallback` | `selection.strict_fallback` |
+| `--ppo-normalize-reward` | `ppo.normalize_reward` |
+| `--domain` | (CrowdNav-only entry point; domain fixed to `crowdnav`) |
+
+Environment presets: **`evaluation_variants.generalization_17`** replaces
+`configs/crowdnav_generalization_17.py` (17 humans). The default simulator
+matches former `configs/crowdnav_hard.py` fields now in `CONFIG.env`.
 
 Resume: rerun with the same `--output-dir` (on by default; `--no-resume`
 starts fresh). Checkpoints: `closed_loop/checkpoint.json` (per trained
@@ -126,7 +226,7 @@ votes to `closed_loop/llm_selection.jsonl`, with rank consistency metrics in
 back to the existing fitness-based ordering.
 
 ```powershell
-python scripts\run_raise.py --env-config configs\crowdnav_hard.py --llm groq --selection-mode llm_rank --selection-top-k 2 --selection-votes 3 --selection-temperature 0.1 --selection-restart-probability 0.1 --selection-seed 425 --output-dir results\crowdnav_llm_rank
+python scripts\run_raise.py --set llm.provider=groq --set selection.mode=llm_rank --set selection.top_k=2 --set selection.n_votes=3 --set selection.temperature=0.1 --set selection.p_restart=0.1 --output-dir results\crowdnav_llm_rank
 ```
 
 Outputs under `--output-dir`: `config.json`, `config.resume_*.json` (on
@@ -141,25 +241,20 @@ resume), `provenance.json`, `run_<UTC>.log`, `seed_reward.py`,
 trajectory plot of the best policy on `test` scenarios; stochastic by
 default).
 
-Robot / action options: `--robot-kinematics {holonomic,unicycle}`,
-`--action-mode {discrete,continuous}` (discrete uses the configured wrapper
-action table; defaults are continuous actions and unicycle kinematics unless
-the supplied Python config declares different kinematics),
-`--env-config` (a CrowdNav++ Python config file exposing `Config` or
-`config`). The hard setup is `configs/crowdnav_hard.py`: 30 s time limit,
-exactly 10 humans (`human_num=10`, `human_num_range=0`),
-holonomic kinematics, constant-velocity human path prediction (5 future
-points, 0.25 s apart), and `robot.visible=True`.
-When `--env-config` is supplied, RAISE uses the kinematics declared in that
-config unless `--robot-kinematics` explicitly overrides it. The wrapper corrects
-CrowdNav++'s unicycle reset sampling to honor the configured population range.
+Robot / action options: `--set env.kinematics=…`, `--set env.action_mode=…`
+(discrete uses the wrapper action table). Default env: 30 s time limit, 10
+humans (`human_num=10`, `human_num_range=0`), unicycle kinematics,
+constant-velocity prediction (5 steps, 0.25 s), `robot.visible=True`.
+Stage I collection historically uses holonomic kinematics via
+`budget.stage1.collect_kinematics`. The wrapper corrects CrowdNav++'s unicycle
+reset sampling to honor the configured population range.
 Timeout is always reported independently as TR and as an episode outcome.
 
 Before a long evolution, train a PPO policy with CrowdNav++'s native reward
 and evaluate it on 100 held-out validation cases:
 
 ```bash
-python scripts/calibrate_crowdnav_native.py --env-config configs/crowdnav_hard.py --train-steps 300000 --eval-episodes 100 --seed 425 --n-envs 4 --device cpu
+python scripts/calibrate_crowdnav_native.py --train-steps 300000 --eval-episodes 100 --seed 425 --n-envs 4 --device cpu
 ```
 
 To continue training from an existing native-reward PPO checkpoint, use
@@ -167,7 +262,7 @@ To continue training from an existing native-reward PPO checkpoint, use
 additional budget; the checkpoint's timestep counter is preserved:
 
 ```bash
-python scripts/calibrate_crowdnav_native.py --env-config configs/crowdnav_hard.py --output-dir results/crowdnav_hard_native_calibration_range3_visible_20261019_600k --train-steps 300000 --eval-episodes 100 --seed 425 --n-envs 4 --device cpu --resume-from results/crowdnav_hard_native_calibration_range3_visible_20261019/native_reward_ppo.zip
+python scripts/calibrate_crowdnav_native.py --output-dir results/calibration_600k --train-steps 300000 --eval-episodes 100 --seed 425 --n-envs 4 --device cpu --resume-from results/calibration/native_reward_ppo.zip
 ```
 
 The optional fixed-17-human generalization config can evaluate a completed
@@ -186,9 +281,9 @@ navigation time, path length and minimum separation.
 # CrowdNav++ ORCA baseline report on the test split
 python scripts/check_orca_reference.py --out results/orca_report.json
 # Baselines on a finished run; --seeds applies to native-reward PPO (A)
-python scripts/run_baselines.py --run-dir results/crowdnav_16h --seeds 3 --skip-b --skip-c
+python scripts/run_baselines.py --run-dir <run-dir> --seeds 3 --skip-b --skip-c
 # PPO discount sweep: fixed rewards and blind eval, K3 per (reward, gamma, seed)
-python scripts/run_gamma_sweep.py --run-dir results/crowdnav_16h --gammas matched,0.99,0.995 --rewards native,final --seeds 2
+python scripts/run_gamma_sweep.py --run-dir <run-dir> --gammas matched,0.99,0.995 --rewards native,final --seeds 2
 ```
 
 CrowdNav++ native episode return is retained as a diagnostic. RAISE selection
@@ -202,6 +297,44 @@ paired per-seed deltas vs the reference gamma). Score1 continues to use
 
 LLM: Groq default `max_tokens` is 3500 (gpt-oss reasoning tokens count);
 override with `--llm-max-tokens` / `--llm-reasoning-effort`.
+
+## Behavior changes
+
+Defaults that changed relative to earlier CrowdNav runs (all overridable):
+
+- **`StageIConfig()` defaults** match closed-loop **`raise_config`** (**N=6 /
+  G=4**). Historical standalone explorers that expected 8/10 must pass explicit
+  `population_size` / `generations`.
+- **Stage II paired seeds** default **on** (`--stage2-paired-seeds` /
+  `--no-stage2-paired-seeds`). Every candidate in a generation shares the same
+  PPO train seed(s); `--stage2-seeds K` averages fitness over K seeds.
+  Pre-patch checkpoints missing these keys resume with **legacy** values
+  (`paired=False`, `seeds=1`) without drift-abort.
+- **Cross-seed SE** (`fitness_se_source=across_seeds`) requires **≥3**
+  successful seeds; fewer keep `episodes_only` (with a warning).
+- **`successive_halving` + `stage2_seeds>1`** is rejected (unsupported combo).
+- Closed-loop manifest uses **`run_quality`** (`ok` / `contaminated`) so it
+  does not collide with checkpoint ``status`` (`running` / `completed` /
+  `aborted_infra`).
+- **`infra_error_policy`** defaults to **`retry_then_abort`**
+  (`--infra-error-policy {retry_then_abort,abort,penalize}`).
+- **Config drift on resume aborts** unless `--allow-config-drift` is set
+  (result-changing keys: train steps, seeds, population, eval episodes,
+  kinematics, gamma, PPO knobs).
+- **`max_fallback_fraction`** defaults to **0.5** (mark contaminated when more
+  than half a generation is seed/clone fallback); `--strict-fallback` aborts.
+- **Stage III final eval** with `--stage3-seeds K>1` re-evaluates **all**
+  successful seed checkpoints and reports the **mean** fitness (cross-seed SE);
+  `checkpoint_path` is the **median**-fitness seed for visualization.
+- **`ppo_normalize_reward`** defaults to **False** (`--ppo-normalize-reward`
+  enables VecNormalize reward normalization on the training VecEnv only).
+- **Sandbox**: `RewardValidator` requires a domain attribute allowlist (or
+  explicit `allow_unrestricted=True`); `range` / `**` / episode `memory` are
+  bounded; POSIX smoke children get a 2 GiB `RLIMIT_AS` cap.
+- **`min_separation_post`**: post-step robot–human gap on `CrowdNavRewardState`
+  (legacy datasets that omit it recompute from stored robot/humans geometry).
+- **LLM `seed`**: forwarded from `--llm-seed` / run seed to Groq/vLLM when
+  supported; logged and omitted when the provider rejects it.
 
 ## Tests
 

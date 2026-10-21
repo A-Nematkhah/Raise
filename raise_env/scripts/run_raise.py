@@ -2,423 +2,98 @@
 """
 Single entry point for RAISE on CrowdNav++ CrowdSimVarNum.
 
-  closed loop (G generations): Score1 → Stage II PPO train+eval → fitness
-  rank → LLM crossover/mutation with evaluation feedback
-  → Stage III long PPO on the final population → best by fitness
+Edit ``raise_config.py`` or pass ``--config`` / ``--set section.key=value``.
+See README_RAISE.md Configuration for migrated CLI flags.
 
-Examples (from ``raise_env/`` with system Python)::
+Examples (from ``raise_env/``)::
 
-    # Seconds-scale dry run (stub trainers + seed LLM)
-    python scripts/run_raise.py --fast --output-dir results/raise_fast
-
-    # Real PPO run with a real LLM
-    python scripts/run_raise.py --llm groq --output-dir results/crowdnav_run
-
-    # Real PPO run without LLM cost (seed-variant rewards)
-    python scripts/run_raise.py --llm seed --allow-seed-llm
-
-    # Resume: rerun with the same --output-dir (resume is on by default)
-    python scripts/run_raise.py --llm groq --output-dir results/crowdnav_run
+    python scripts/run_raise.py --dry-run --output-dir results/raise_fast
+    python scripts/run_raise.py --set llm.provider=groq --output-dir results/crowdnav_run
+    python scripts/run_raise.py --print-config
 """
 
 from __future__ import annotations
 
-import os as _os, sys as _sys
+import os as _os
+import sys as _sys
+
 _ROOT = _os.path.abspath(_os.path.join(_os.path.dirname(__file__), ".."))
 if _ROOT not in _sys.path:
     _sys.path.insert(0, _ROOT)
 import argparse  # noqa: E402
+import json  # noqa: E402
 import logging  # noqa: E402
 import os  # noqa: E402
 import sys  # noqa: E402
 from datetime import datetime  # noqa: E402
 
+from raise_config import config_to_dict, resolve_config  # noqa: E402
 from raise_core import console  # noqa: E402
+from raise_core.config_factory import ensure_config_snapshot, make_run_config  # noqa: E402
 from raise_core.console import ensure_utf8_stdio  # noqa: E402
-from raise_core.domains import available_domains  # noqa: E402
-from raise_core.evo_selection.config import SelectionConfig  # noqa: E402
-from raise_core.explore import MUTATION_PARENTS  # noqa: E402
-from raise_core.feedback import FeedbackCardConfig  # noqa: E402
-from raise_core.pipeline import RaisePipeline, RaiseRunConfig  # noqa: E402
-from domains.crowdnav.env_wrapper import load_env_config  # noqa: E402
+from raise_core.pipeline import RaisePipeline  # noqa: E402
 
 os.chdir(_ROOT)
 
-_DEFAULTS = RaiseRunConfig()
-_FEEDBACK = FeedbackCardConfig()
+_MIGRATION_HINT = (
+    "Removed run_raise flags map to --set keys; see README_RAISE.md Configuration."
+)
+
+
+class RaiseArgumentParser(argparse.ArgumentParser):
+    def error(self, message: str) -> None:
+        if "unrecognized arguments" in message:
+            self.exit(
+                2,
+                f"{message}\n\n{_MIGRATION_HINT}\n",
+            )
+        super().error(message)
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="RAISE end-to-end (CrowdNav)")
+    parser = RaiseArgumentParser(description="RAISE end-to-end (CrowdNav)")
+    parser.add_argument(
+        "--config",
+        type=str,
+        default=None,
+        help="Python file exporting CONFIG: RaiseConfig (overrides raise_config.py)",
+    )
+    parser.add_argument(
+        "--set",
+        action="append",
+        default=[],
+        metavar="SECTION.KEY=VALUE",
+        help="Override raise_config (repeatable); e.g. budget.population_size=8",
+    )
     parser.add_argument(
         "--print-config",
         action="store_true",
-        help="Print the effective argparse namespace and exit",
+        help="Print effective raise_config JSON and exit",
     )
     parser.add_argument(
         "--output-dir",
+        "--run-dir",
+        dest="output_dir",
         type=str,
         default=None,
         help="Run directory (default: results/crowdnav_<timestamp>)",
     )
-    parser.add_argument("--seed", type=int, default=_DEFAULTS.seed)
     parser.add_argument(
-        "--domain", choices=available_domains(), default=_DEFAULTS.domain
-    )
-    parser.add_argument(
-        "--llm",
-        type=str,
-        default=_DEFAULTS.llm_provider,
-        choices=["seed", "groq", "vllm", "ollama", "scripted"],
-        help="LLM provider (seed = local seed variants, no API key; "
-        "non-fast runs require a real provider or --allow-seed-llm)",
-    )
-    parser.add_argument("--llm-model", type=str, default=None)
-    parser.add_argument(
-        "--llm-max-tokens",
-        type=int,
-        default=None,
-        help="Max completion tokens per LLM call (default: provider default)",
-    )
-    parser.add_argument(
-        "--llm-reasoning-effort",
-        type=str,
-        default=None,
-        choices=["none", "low", "medium", "high"],
-        help="Groq gpt-oss reasoning_effort (omit to use the provider default)",
+        "--dry-run",
+        "--fast",
+        dest="dry_run",
+        action="store_true",
+        help="Stub trainers + smoke Score1 (seconds-scale wiring check)",
     )
     parser.add_argument(
         "--allow-seed-llm",
         action="store_true",
-        help="Permit --llm seed on a non-fast run (debug / wiring without API cost)",
-    )
-    parser.add_argument("--verbose", action="store_true", help="DEBUG logging")
-    parser.add_argument(
-        "--score1",
-        type=str,
-        default=_DEFAULTS.score1_mode,
-        choices=["dataset", "smoke"],
-        help="Stage I scorer: dataset=Score1 on pre-collected trajs; smoke=fast-test only",
+        help="Permit llm.provider=seed on a non-dry run (debug without API cost)",
     )
     parser.add_argument(
-        "--stage1-dataset",
-        type=str,
-        default=_DEFAULTS.stage1_dataset_path,
-        help="Path from scripts/collect_crowdnav_stage1_dataset.py",
-    )
-    parser.add_argument("--fast", action="store_true", help="Stub trainers + smoke Score1")
-    parser.add_argument(
-        "--device", type=str, default=_DEFAULTS.device, choices=["cpu", "cuda"]
-    )
-
-    parser.add_argument("--population", type=int, default=_DEFAULTS.population)
-    parser.add_argument("--generations", type=int, default=_DEFAULTS.generations)
-    parser.add_argument(
-        "--stage2-train-steps",
-        type=int,
-        default=_DEFAULTS.stage2_train_steps,
-        help="K2: PPO env steps per candidate per generation",
-    )
-    parser.add_argument(
-        "--stage2-eval-episodes", type=int, default=_DEFAULTS.stage2_eval_episodes
-    )
-    parser.add_argument(
-        "--stage2-eval-split",
-        choices=("val",),
-        default=_DEFAULTS.stage2_eval_split,
-        help="Stage II selection pool (held-out val scenarios)",
-    )
-    parser.add_argument(
-        "--stage3-train-steps",
-        type=int,
-        default=_DEFAULTS.stage3_train_steps,
-        help="K3: PPO env steps per final candidate",
-    )
-    parser.add_argument(
-        "--stage3-eval-episodes", type=int, default=_DEFAULTS.stage3_eval_episodes
-    )
-    parser.add_argument(
-        "--stage3-warm-start",
-        action=argparse.BooleanOptionalAction,
-        default=_DEFAULTS.stage3_warm_start,
-        help=(
-            "Warm-start Stage III PPO from the Stage II policy (off by default: "
-            "warm-started candidates would train longer than K3)"
-        ),
-    )
-    parser.add_argument(
-        "--stage3-skip-collapsed",
-        action=argparse.BooleanOptionalAction,
-        default=_DEFAULTS.stage3_skip_collapsed,
-        help=(
-            "Skip Stage III training for candidates whose Stage II holdout CR "
-            "is at/above --collapse-cr (default: on). Timeout-heavy results "
-            "are kept. If every candidate is collapsed, all are trained."
-        ),
-    )
-    parser.add_argument(
-        "--collapse-cr",
-        type=float,
-        default=_DEFAULTS.collapse_cr,
-        help="Stage II collision-rate threshold for --stage3-skip-collapsed "
-        "and --mutation-exclude-collapsed",
-    )
-    parser.add_argument(
-        "--stage3-seeds",
-        type=int,
-        default=_DEFAULTS.stage3_seeds,
-        help=(
-            "Independent PPO train seeds per Stage III finalist (default 1). "
-            "Selection uses mean fitness across seeds; pay for K>1 with "
-            "--stage3-top-k"
-        ),
-    )
-    parser.add_argument(
-        "--stage3-top-k",
-        type=int,
-        default=_DEFAULTS.stage3_top_k,
-        help=(
-            "After the collapse filter, keep only the top-k Stage II genomes "
-            "for Stage III (default: all survivors)"
-        ),
-    )
-    parser.add_argument(
-        "--final-eval-episodes",
-        type=int,
-        default=_DEFAULTS.final_eval_episodes,
-        help=(
-            "Blind re-evaluation of the Stage III winner on unseen scenarios "
-            "(0 = skip); report this fitness, not the selection score"
-        ),
-    )
-    parser.add_argument(
-        "--eval-tied-finalists",
-        action=argparse.BooleanOptionalAction,
-        default=_DEFAULTS.eval_tied_finalists,
-        help=(
-            "Also blind-eval every Stage III statistical tie on the test split "
-            "(report only in tied_final_evals.json; never used for selection)"
-        ),
-    )
-    parser.add_argument(
-        "--elitism",
-        action=argparse.BooleanOptionalAction,
-        default=_DEFAULTS.elitism,
-        help="Carry each generation's best genome into the next generation",
-    )
-    for op, what in (
-        ("crossover", "crossover children of the top two genomes"),
-        ("mutation", "mutation children of the lower half"),
-        ("random", "random restarts"),
-    ):
-        parser.add_argument(
-            f"--n-{op}",
-            type=int,
-            default=getattr(_DEFAULTS, f"n_{op}"),
-            help=f"Next-generation {what} (default: split of N; N=6 with elitism "
-            "is 1 elite + 2 crossover + 2 mutation + 1 random). Elite + "
-            "crossover + mutation + random must equal --population.",
-        )
-    parser.add_argument(
-        "--mutation-parents",
-        choices=MUTATION_PARENTS,
-        default=_DEFAULTS.mutation_parents,
-        help="Mutation parents: lower = bottom half (default), rank_weighted = "
-        "drawn by linear rank, tournament = better of two random genomes",
-    )
-    parser.add_argument(
-        "--mutation-exclude-collapsed",
-        action=argparse.BooleanOptionalAction,
-        default=_DEFAULTS.mutation_exclude_collapsed,
-        help=(
-            "Drop Stage II CR>=--collapse-cr genomes from the mutation parent "
-            "pool (default: off). If the filtered pool is empty, fall back to "
-            "the unfiltered pool"
-        ),
-    )
-    parser.add_argument(
-        "--stage2-successive-halving",
-        action=argparse.BooleanOptionalAction,
-        default=_DEFAULTS.stage2_successive_halving,
-        help=(
-            "Stage II successive-halving: train all at K2/3, continue the top "
-            "half from their own checkpoints for the remaining 2K2/3 (default: "
-            "off). Total budget per survivor is still K2"
-        ),
-    )
-    parser.add_argument(
-        "--n-envs",
-        type=int,
-        default=_DEFAULTS.n_envs,
-        help="DummyVecEnv count for PPO (same budget)",
-    )
-    parser.add_argument(
-        "--label-workers",
-        type=int,
-        default=_DEFAULTS.label_workers,
-        help="Parallel Stage II training threads",
-    )
-    parser.add_argument(
-        "--torch-threads",
-        type=int,
-        default=_DEFAULTS.torch_threads,
-        help="CPU intra-op threads for torch/OpenMP/MKL (0 = library default)",
-    )
-    parser.add_argument(
-        "--eval-mode",
-        choices=("both", "holdout_only"),
-        default=_DEFAULTS.eval_mode,
-        help="Evaluate upstream train + holdout (val) scenarios, or holdout only",
-    )
-    parser.add_argument(
-        "--warm-start",
-        action=argparse.BooleanOptionalAction,
-        default=_DEFAULTS.warm_start,
-        help=(
-            "Stage II: warm-start PPO from the parent's checkpoint when available "
-            "(off by default: warm-started children get a larger effective budget)"
-        ),
-    )
-    parser.add_argument(
-        "--action-mode",
-        choices=("discrete", "continuous"),
-        default=_DEFAULTS.action_mode,
-        help=(
-            "Action space: continuous = CrowdNav++ Box(2), clipped to physical "
-            "limits (default); discrete = optional wrapper-level action table"
-        ),
-    )
-    parser.add_argument(
-        "--robot-kinematics",
-        choices=("holonomic", "unicycle"),
-        default=None,
-        help=(
-            "Robot kinematics (holonomic or unicycle; defaults to the Python env "
-            "config when --env-config is supplied, otherwise to RAISE's default)"
-        ),
-    )
-    parser.add_argument(
-        "--action-speed-samples",
-        type=int,
-        default=_DEFAULTS.action_speed_samples,
-        help="Discrete: exponentially spaced speeds (upstream CADRL: 5)",
-    )
-    parser.add_argument(
-        "--action-rotation-samples",
-        type=int,
-        default=_DEFAULTS.action_rotation_samples,
-        help="Discrete: headings / rotations (upstream CADRL: 16)",
-    )
-    parser.add_argument(
-        "--env-config",
-        type=str,
-        default=_DEFAULTS.env_config_path,
-        help="CrowdNav++ Python config file (default: vendored upstream config.py)",
-    )
-    parser.add_argument(
-        "--feedback-card",
-        action=argparse.BooleanOptionalAction,
-        default=_FEEDBACK.enabled,
-        help="Diagnostic feedback card in mutation/crossover/random prompts "
-        "(--no-feedback-card restores the plain evidence/reflection text)",
-    )
-    parser.add_argument(
-        "--max-input-tokens",
-        type=int,
-        default=_FEEDBACK.max_input_tokens,
-        help="Hard limit on the full LLM request (system + user prompt); never exceeded",
-    )
-    parser.add_argument(
-        "--target-input-tokens",
-        type=int,
-        default=_FEEDBACK.target_input_tokens,
-        help="Card truncation target for the full LLM request",
-    )
-    parser.add_argument(
-        "--feedback-history", type=int, default=_FEEDBACK.history_entries,
-        help="Lineage history entries in the card",
-    )
-    parser.add_argument(
-        "--feedback-trajectories", type=int, default=_FEEDBACK.max_trajectories,
-        help="Representative holdout episodes in the card",
-    )
-    parser.add_argument(
-        "--feedback-random-calls",
-        action=argparse.BooleanOptionalAction,
-        default=_FEEDBACK.random_calls,
-        help="Show random restarts a reference card of the best evaluated genome",
-    )
-    parser.add_argument(
-        "--feedback-training-dynamics",
-        action=argparse.BooleanOptionalAction,
-        default=_FEEDBACK.training_dynamics,
-        help="Record training-rollout outcome windows during Stage II PPO",
-    )
-    parser.add_argument(
-        "--feedback-components",
-        action=argparse.BooleanOptionalAction,
-        default=_FEEDBACK.component_instrumentation,
-        help="Record per-episode reward-component sums during Stage II holdout eval",
-    )
-    parser.add_argument(
-        "--selection-mode",
-        choices=("legacy", "llm_rank"),
-        default=_DEFAULTS.selection.mode,
-        help="Candidate selection strategy (legacy preserves current behavior)",
-    )
-    parser.add_argument(
-        "--selection-top-k",
-        type=int,
-        default=_DEFAULTS.selection.top_k,
-        help="LLM-rank mode: number of ranked elites retained and used as mutation parents",
-    )
-    parser.add_argument(
-        "--selection-votes",
-        type=int,
-        default=_DEFAULTS.selection.n_votes,
-        help="LLM ranking votes per stage/generation (default: 3)",
-    )
-    parser.add_argument(
-        "--selection-temperature",
-        type=float,
-        default=_DEFAULTS.selection.temperature,
-        help="LLM ranking temperature (default: 0.1)",
-    )
-    parser.add_argument(
-        "--selection-restart-probability",
-        type=float,
-        default=_DEFAULTS.selection.p_restart,
-        help="LLM-rank mode: probability of a random-restart child",
-    )
-    parser.add_argument(
-        "--selection-guards",
-        action=argparse.BooleanOptionalAction,
-        default=_DEFAULTS.selection.guards,
-        help="Append available cheap sanity flags after each unchanged ranking card",
-    )
-    parser.add_argument(
-        "--selection-guard-success-threshold",
-        type=float,
-        default=_DEFAULTS.selection.guard_success_threshold,
-        help="Guard threshold for high success combined with near-zero path length",
-    )
-    parser.add_argument(
-        "--selection-guard-min-path-length",
-        type=float,
-        default=_DEFAULTS.selection.guard_min_path_length,
-        help="Guard path-length threshold in metres",
-    )
-    parser.add_argument(
-        "--selection-reflection-note-cap",
-        type=int,
-        default=_DEFAULTS.selection.reflection_note_cap,
-        help="Maximum number of short selection reflections retained across generations",
-    )
-    parser.add_argument(
-        "--selection-seed",
-        type=int,
-        default=None,
-        help="Random seed for ranking shuffles and LLM-ranked evolution (defaults to --seed)",
+        "--allow-config-drift",
+        action="store_true",
+        help="Allow resume when raise_config differs from config_snapshot.json",
     )
     resume_group = parser.add_mutually_exclusive_group()
     resume_group.add_argument(
@@ -426,26 +101,19 @@ def build_parser() -> argparse.ArgumentParser:
         dest="resume",
         action="store_true",
         default=True,
-        help=(
-            "Resume from checkpoints when present (default: on): "
-            "--output-dir/closed_loop/checkpoint.json and stage3/checkpoint.json"
-        ),
+        help="Resume from checkpoints when present (default)",
     )
     resume_group.add_argument(
         "--no-resume",
         dest="resume",
         action="store_false",
-        help="Ignore existing checkpoints and start fresh",
+        help="Ignore checkpoints and start fresh",
     )
+    parser.add_argument("--verbose", action="store_true", help="DEBUG logging")
     parser.add_argument(
         "--baselines",
         action="store_true",
-        default=False,
-        help=(
-            "After the final blind eval, run scripts/run_baselines.py on this "
-            "output dir (native-reward PPO, best Stage-II genome, ORCA/Linear). "
-            "Off by default."
-        ),
+        help="After the run, invoke scripts/run_baselines.py on this output dir",
     )
     return parser
 
@@ -454,131 +122,80 @@ def main() -> int:
     ensure_utf8_stdio()
     args = build_parser().parse_args()
 
-    if args.robot_kinematics is None:
-        args.robot_kinematics = (
-            str(load_env_config(args.env_config).action_space.kinematics)
-            if args.env_config
-            else _DEFAULTS.robot_kinematics
+    try:
+        raise_cfg = resolve_config(
+            config_path=args.config,
+            set_overrides=tuple(args.set or ()),
         )
+    except (ValueError, TypeError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
 
     if args.print_config:
-        for k, v in sorted(vars(args).items()):
-            print(f"{k}={v!r}")
+        print(json.dumps(config_to_dict(raise_cfg), indent=2, sort_keys=True))
         return 0
-
-    if (
-        not args.fast
-        and str(args.llm).strip().lower() == "seed"
-        and not args.allow_seed_llm
-    ):
-        print(
-            "Refusing to run a non-fast pipeline with the seed (no real LLM) "
-            "provider - pass --llm groq|ollama|vllm explicitly, or pass "
-            "--allow-seed-llm if this is intentional (e.g. debugging Stage II/III "
-            "wiring without LLM cost).",
-            file=sys.stderr,
-        )
-        return 2
 
     output_dir = args.output_dir or (
         "results/crowdnav_" + datetime.now().strftime("%Y%m%d_%H%M%S")
     )
-    cfg = RaiseRunConfig(
+
+    run_cfg = make_run_config(
+        raise_cfg,
         output_dir=output_dir,
-        seed=args.seed,
-        domain=args.domain,
-        llm_provider=args.llm,
-        llm_model=args.llm_model,
-        llm_max_tokens=args.llm_max_tokens,
-        llm_reasoning_effort=args.llm_reasoning_effort,
-        score1_mode="smoke" if args.fast else args.score1,
-        stage1_dataset_path=args.stage1_dataset,
-        population=args.population,
-        generations=args.generations,
-        stage2_train_steps=args.stage2_train_steps,
-        stage2_eval_episodes=args.stage2_eval_episodes,
-        stage2_eval_split=str(args.stage2_eval_split),
-        stage3_train_steps=args.stage3_train_steps,
-        stage3_eval_episodes=args.stage3_eval_episodes,
-        stage3_warm_start=bool(args.stage3_warm_start),
-        stage3_skip_collapsed=bool(args.stage3_skip_collapsed),
-        collapse_cr=float(args.collapse_cr),
-        stage3_seeds=max(1, int(args.stage3_seeds)),
-        stage3_top_k=(
-            None if args.stage3_top_k is None else max(1, int(args.stage3_top_k))
-        ),
-        final_eval_episodes=max(0, int(args.final_eval_episodes)),
-        eval_tied_finalists=bool(args.eval_tied_finalists),
-        use_stub=bool(args.fast),
-        elitism=bool(args.elitism),
-        n_crossover=args.n_crossover,
-        n_mutation=args.n_mutation,
-        n_random=args.n_random,
-        mutation_parents=args.mutation_parents,
-        mutation_exclude_collapsed=bool(args.mutation_exclude_collapsed),
-        stage2_successive_halving=bool(args.stage2_successive_halving),
         resume=bool(args.resume),
-        n_envs=max(1, int(args.n_envs)),
-        label_workers=max(1, int(args.label_workers)),
-        warm_start=bool(args.warm_start),
-        eval_mode=str(args.eval_mode),
-        action_mode=str(args.action_mode),
-        robot_kinematics=str(args.robot_kinematics),
-        action_speed_samples=int(args.action_speed_samples),
-        action_rotation_samples=int(args.action_rotation_samples),
-        env_config_path=args.env_config,
-        feedback=FeedbackCardConfig(
-            enabled=bool(args.feedback_card),
-            max_input_tokens=int(args.max_input_tokens),
-            target_input_tokens=int(args.target_input_tokens),
-            history_entries=int(args.feedback_history),
-            max_trajectories=int(args.feedback_trajectories),
-            random_calls=bool(args.feedback_random_calls),
-            training_dynamics=bool(args.feedback_training_dynamics),
-            component_instrumentation=bool(args.feedback_components),
-        ),
-        selection=SelectionConfig(
-            mode=str(args.selection_mode),
-            top_k=int(args.selection_top_k),
-            n_votes=int(args.selection_votes),
-            temperature=float(args.selection_temperature),
-            p_restart=float(args.selection_restart_probability),
-            guards=bool(args.selection_guards),
-            guard_success_threshold=float(args.selection_guard_success_threshold),
-            guard_min_path_length=float(args.selection_guard_min_path_length),
-            reflection_note_cap=int(args.selection_reflection_note_cap),
-            seed=int(args.selection_seed if args.selection_seed is not None else args.seed),
-        ),
-        device=args.device,
-        torch_threads=max(0, int(args.torch_threads)),
+        allow_config_drift=bool(args.allow_config_drift),
+        use_stub=bool(args.dry_run),
+        fast=bool(args.dry_run),
     )
-    if args.fast:
-        cfg.apply_fast_profile()
+
+    if (
+        not args.dry_run
+        and str(run_cfg.llm_provider).strip().lower() == "seed"
+        and not args.allow_seed_llm
+    ):
+        print(
+            "Refusing a non-dry run with llm.provider=seed — set "
+            "--set llm.provider=groq|ollama|vllm or pass --allow-seed-llm.",
+            file=sys.stderr,
+        )
+        return 2
+
     try:
-        operators = cfg.operators()
+        operators = run_cfg.operators()
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 2
-    console.configure_run_logging(verbose=bool(args.verbose), output_dir=cfg.output_dir)
 
+    try:
+        ensure_config_snapshot(
+            output_dir,
+            raise_cfg,
+            resume=bool(args.resume),
+            allow_config_drift=bool(args.allow_config_drift),
+        )
+    except RuntimeError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
+    console.configure_run_logging(verbose=bool(args.verbose), output_dir=run_cfg.output_dir)
     logging.info(
-        "RAISE -> %s (fast=%s, N=%d, G=%d, K2=%d, K3=%d, operators=%s)",
-        cfg.output_dir,
-        cfg.fast,
-        cfg.population,
-        cfg.generations,
-        cfg.stage2_train_steps,
-        cfg.stage3_train_steps,
+        "RAISE -> %s (dry_run=%s, N=%d, G=%d, K2=%d, K3=%d, operators=%s)",
+        run_cfg.output_dir,
+        run_cfg.fast,
+        run_cfg.population,
+        run_cfg.generations,
+        run_cfg.stage2_train_steps,
+        run_cfg.stage3_train_steps,
         operators.to_dict(),
     )
-    artifacts = RaisePipeline(cfg).run()
+    artifacts = RaisePipeline(run_cfg).run()
     logging.info("Done. Final candidate: %s", artifacts.best_stage3.candidate_id)
     logging.info("Artifacts: %s", artifacts.output_dir)
-    report = os.path.join(cfg.output_dir, "closed_loop", "REPORT.txt")
+    report = os.path.join(run_cfg.output_dir, "closed_loop", "REPORT.txt")
     if os.path.isfile(report):
         with open(report, encoding="utf-8") as fh:
             print("\n--- closed_loop/REPORT.txt ---\n" + fh.read())
-    if bool(getattr(args, "baselines", False)):
+    if bool(args.baselines):
         import importlib.util
 
         bas_path = os.path.join(_ROOT, "scripts", "run_baselines.py")
@@ -588,9 +205,9 @@ def main() -> int:
             return 1
         bas = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(bas)
-        logging.info("Running P1-1 baselines on %s", cfg.output_dir)
-        bas.run_baselines(cfg.output_dir)
-        logging.info("Baselines written to %s", os.path.join(cfg.output_dir, "baselines.json"))
+        logging.info("Running baselines on %s", run_cfg.output_dir)
+        bas.run_baselines(run_cfg.output_dir)
+        logging.info("Baselines written to %s", os.path.join(run_cfg.output_dir, "baselines.json"))
     return 0
 
 

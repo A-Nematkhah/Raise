@@ -7,9 +7,8 @@ strings (no RewardCandidate pool required).
 
 from __future__ import annotations
 
-from typing import Optional, Sequence, Tuple
+from typing import List, Optional, Sequence, Tuple
 
-from raise_core.llm import normalize_to_compute_reward
 from raise_core.sandbox.ast_policy import (
     check_interface,
     check_structure,
@@ -22,6 +21,7 @@ from raise_core.sandbox.runtime import (
     compile_compute_reward,
     smoke_test_compute,
 )
+from raise_core.source_normalize import normalize_to_compute_reward_with_report
 
 
 class RewardValidator:
@@ -33,13 +33,20 @@ class RewardValidator:
         smoke_states: Sequence[object] = (),
         *,
         allow_components: bool = False,
+        allow_unrestricted: bool = False,
     ) -> None:
         self.config = config if config is not None else SandboxConfig()
         self.smoke_states = tuple(smoke_states)
         if not self.smoke_states:
             raise ValueError("RewardValidator needs domain smoke_states")
+        if self.config.allowed_attributes is None and not allow_unrestricted:
+            raise ValueError(
+                "SandboxConfig.allowed_attributes is None; pass a domain "
+                "allowlist or set allow_unrestricted=True explicitly"
+            )
         # The domain validator sets True (tuple returns allowed).
         self.allow_components = bool(allow_components)
+        self.last_source_repairs: List[str] = []
 
     def validate_code(self, code: str) -> SandboxedReward:
         """
@@ -52,7 +59,8 @@ class RewardValidator:
 
         # Normalize aliases / missing memory arg before AST checks so prompt
         # examples and LLM outputs share one sandbox contract.
-        code = normalize_to_compute_reward(str(code))
+        code, repairs = normalize_to_compute_reward_with_report(str(code))
+        self.last_source_repairs = list(repairs)
 
         tree = parse_reward_code(code, self.config)
         check_structure(tree, self.config)

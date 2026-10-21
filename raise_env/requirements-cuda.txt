@@ -1,0 +1,6 @@
+# CUDA-enabled PyTorch wheels (optional). Install after requirements.txt:
+#   pip install -r requirements-cuda.txt
+# Adjust the cu1xx suffix to match your local CUDA driver.
+
+torch==2.11.0+cu128
+--extra-index-url https://download.pytorch.org/whl/cu128

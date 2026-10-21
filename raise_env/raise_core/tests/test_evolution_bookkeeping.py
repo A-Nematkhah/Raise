@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from domains.crowdnav import feedback_card as crowdnav_feedback_card
 from domains.crowdnav import prompts as cn_prompts
 from domains.crowdnav.reward_checks import make_crowdnav_validator
 from raise_core.candidate import RewardCandidate
@@ -39,6 +40,7 @@ def test_generation_shares_one_retry_budget():
         config=StageIConfig(population_size=4, max_invalid_replacements=3),
         prompts=cn_prompts,
         feedback=FeedbackCardConfig(enabled=False),
+        feedback_card=crowdnav_feedback_card,
     )
     ranked = [_evaluated(f"ini_000{i}", float(i), 1.0 - 0.1 * i) for i in range(4)]
     gen1 = evo._next_generation(ranked)
@@ -54,6 +56,7 @@ def test_reflection_trend_comes_from_the_given_history():
         score_fn=lambda *_a, **_k: 0.0,
         validator=make_crowdnav_validator(),
         prompts=cn_prompts,
+        feedback_card=crowdnav_feedback_card,
     )
     note = evo._build_reflection([_evaluated("a", 1.0, 0.5)], generation=3,
                                  fitness_trend=[0.1, None, float("-inf"), 0.2])

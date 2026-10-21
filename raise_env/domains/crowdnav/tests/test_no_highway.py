@@ -28,7 +28,15 @@ import domains.crowdnav.adapter, domains.crowdnav.viz, domains.crowdnav.post_run
 
 pack = load_domain(DEFAULT_DOMAIN)
 RaisePipeline(RaiseRunConfig(fast=True))
-bad = sorted(m for m in sys.modules if "highway" in m)
+# Intentional precision (not a looseness of the no-highway guarantee):
+# matching the substring "highway" also hits sitecustomize / pep517 editable
+# finder modules such as ``__editable___highway_env_*_finder`` that appear in
+# sys.modules even when highway_env was never imported. Flag only real
+# highway_env package modules; import guard above still blocks any import.
+bad = sorted(
+    m for m in sys.modules
+    if m == "highway_env" or m.startswith("highway_env.")
+)
 print("DOMAINS", sorted(available_domains()), pack.name)
 print("HIGHWAY_MODULES", bad)
 """

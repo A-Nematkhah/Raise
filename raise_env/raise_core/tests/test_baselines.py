@@ -74,16 +74,11 @@ def test_vs_final_paired_delta_and_z():
     assert row["z"] is None or row["n"] == 10
 
 
-def test_baselines_cli_flag_default_off(monkeypatch, capsys):
-    script = _RAISE_ROOT / "scripts" / "run_raise.py"
-    monkeypatch.chdir(_RAISE_ROOT)
-    monkeypatch.setattr(sys, "argv", [str(script), "--print-config"])
-    try:
-        runpy.run_path(str(script), run_name="__main__")
-    except SystemExit as exc:
-        assert int(exc.code or 0) == 0
-    out = capsys.readouterr().out
-    assert "baselines=False" in out
+def test_baselines_cli_flag_default_off():
+    from scripts.run_raise import build_parser
+
+    args = build_parser().parse_args([])
+    assert args.baselines is False
 
 
 def _write_minimal_run(tmp_path: Path) -> Path:

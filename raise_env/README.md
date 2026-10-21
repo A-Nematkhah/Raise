@@ -19,6 +19,6 @@ python scripts/run_raise.py --llm seed --allow-seed-llm  # real PPO, no LLM cost
 A non-`--fast` run with the default `--llm seed` (no real LLM) is refused
 unless you pass `--allow-seed-llm` (debug only). Run budgets are CLI flags
 (`--population`, `--generations`, `--stage2-train-steps`,
-`--stage3-train-steps`, …); defaults live in `raise_core/pipeline.py`
+`--set budget.stage3.train_steps=…`, …); defaults live in `raise_config.py`
 (`RaiseRunConfig`). Install (including Python-RVO2), keys and run details:
 [`README_RAISE.md`](README_RAISE.md).

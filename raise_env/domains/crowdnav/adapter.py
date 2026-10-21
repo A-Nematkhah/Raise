@@ -539,9 +539,22 @@ class CrowdNavPPOTrainer:
             raise ValueError(f"Candidate {candidate.candidate_id} has no reward_fn")
 
         settings = set_settings(settings_from_config(config))
-        train_steps = int(getattr(config, "train_env_steps", 20_000))
+        from raise_config import CONFIG
+
+        if not hasattr(config, "train_env_steps"):
+            raise AttributeError(
+                "trainer config is missing required field 'train_env_steps' "
+                f"(expected Stage2Config/Stage3Config; default is "
+                f"{CONFIG.budget.stage2_train_steps})"
+            )
+        train_steps = int(config.train_env_steps)
         eval_episodes = int(getattr(config, "eval_episodes", 20))
-        seed = int(getattr(config, "seed", 425)) + int(round_index)
+        train_seed_index = kwargs.get("train_seed_index", None)
+        if train_seed_index is None:
+            # Legacy: PPO train seed confounded with round_index / candidate index.
+            seed = int(getattr(config, "seed", 425)) + int(round_index)
+        else:
+            seed = int(getattr(config, "seed", 425)) + int(train_seed_index)
         n_envs = _n_envs(config)
         eval_mode = _eval_mode(config)
         device = _resolve_device(config)
@@ -568,6 +581,11 @@ class CrowdNavPPOTrainer:
         train_env = _make_train_vec_env(
             candidate.reward_fn, seed=seed, n_envs=n_envs, settings=settings
         )
+        normalize_reward = bool(getattr(config, "ppo_normalize_reward", False))
+        if normalize_reward:
+            from stable_baselines3.common.vec_env import VecNormalize
+
+            train_env = VecNormalize(train_env, norm_obs=False, norm_reward=True)
         try:
             n_steps_cap = max(16, int(getattr(config, "ppo_n_steps", 256) or 256))
             n_steps = min(n_steps_cap, max(16, train_steps // max(1, n_envs)))
@@ -665,8 +683,12 @@ class CrowdNavPPOTrainer:
         # PPO rounds up to a multiple of n_envs * n_steps (e.g. 5_000_192).
         md["actual_train_steps"] = int(getattr(model, "num_timesteps", train_steps) or train_steps)
         md["train_seed"] = int(seed)
+        md["train_seed_index"] = (
+            None if train_seed_index is None else int(train_seed_index)
+        )
         md["ppo_n_steps"] = int(n_steps)
         md["ppo_gamma"] = float(ppo_gamma)
+        md["ppo_normalize_reward"] = bool(normalize_reward)
         md["train_wall_seconds"] = float(train_wall)
         md["train_steps_per_second"] = float(sps)
         if dynamics is not None:

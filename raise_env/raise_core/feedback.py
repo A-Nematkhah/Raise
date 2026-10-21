@@ -15,6 +15,17 @@ import json
 import os
 import re
 from dataclasses import dataclass, field
+
+from raise_core.config_defaults import (
+    feedback_component_instrumentation,
+    feedback_enabled,
+    feedback_history_entries,
+    feedback_max_input_tokens,
+    feedback_max_trajectories,
+    feedback_random_calls,
+    feedback_target_input_tokens,
+    feedback_training_dynamics,
+)
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 # Candidate metadata the card reads (all written by Stage I / Stage II).
@@ -52,17 +63,19 @@ _POP_EPOCH_RE = re.compile(r"pop_epoch_(\d+)\.json$")
 class FeedbackCardConfig:
     """Diagnostic feedback card + LLM input budget (budget applies even when disabled)."""
 
-    enabled: bool = True
-    max_input_tokens: int = 6000
-    target_input_tokens: int = 5500
-    history_entries: int = 3
-    max_trajectories: int = 3
+    enabled: bool = field(default_factory=feedback_enabled)
+    max_input_tokens: int = field(default_factory=feedback_max_input_tokens)
+    target_input_tokens: int = field(default_factory=feedback_target_input_tokens)
+    history_entries: int = field(default_factory=feedback_history_entries)
+    max_trajectories: int = field(default_factory=feedback_max_trajectories)
     # Random restarts get a "reference" card of the best evaluated genome;
     # off keeps them free of it (exploration not pulled towards the best).
-    random_calls: bool = True
+    random_calls: bool = field(default_factory=feedback_random_calls)
     # Stage II instrumentation feeding the card (no reward / PPO change).
-    training_dynamics: bool = True
-    component_instrumentation: bool = True
+    training_dynamics: bool = field(default_factory=feedback_training_dynamics)
+    component_instrumentation: bool = field(
+        default_factory=feedback_component_instrumentation
+    )
 
     def __post_init__(self) -> None:
         if int(self.max_input_tokens) < 1:

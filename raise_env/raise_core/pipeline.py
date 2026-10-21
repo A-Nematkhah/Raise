@@ -42,10 +42,35 @@ from raise_core.selection import (
     pick_best_trained,
     statistical_ties,
 )
+from raise_core.config_defaults import (
+    budget_final_eval_episodes,
+    budget_generations,
+    budget_population,
+    budget_stage1_dataset_path,
+    budget_stage2_eval_episodes,
+    budget_stage2_paired_seeds,
+    budget_stage2_seeds,
+    budget_stage2_train_steps,
+    budget_stage3_eval_episodes,
+    budget_stage3_train_steps,
+    env_action_mode,
+    env_kinematics,
+    env_rotation_samples,
+    env_speed_samples,
+    llm_provider,
+    ppo_device,
+    ppo_normalize_reward,
+    ppo_torch_threads,
+    run_seed,
+    selection_infra_error_policy,
+    selection_max_fallback_fraction,
+    selection_mutation_parents,
+    selection_strict_fallback,
+    upstream_env_config,
+)
 from raise_core.validate import (
     FINAL_EVAL_SEED_OFFSET,
     STAGE3_EVAL_SEED_OFFSET,
-    STAGE3_STEPS,
     Stage3Config,
     Stage3Runner,
 )
@@ -59,6 +84,7 @@ def _persist_run_config(output_dir: str, cfg: RaiseRunConfig) -> Dict[str, Any]:
     """
     path = os.path.join(output_dir, "config.json")
     payload = asdict(cfg)
+    payload.pop("env_config_obj", None)
     existing = read_json_dict(path) if bool(cfg.resume) else None
     if isinstance(existing, dict) and existing:
         stamp = utc_now_z().replace(":", "").replace("-", "")
@@ -101,29 +127,35 @@ class RaiseRunConfig:
     """End-to-end run settings (CrowdNav defaults)."""
 
     output_dir: str = "results/raise_run"
-    seed: int = 425
+    seed: int = field(default_factory=run_seed)
     domain: str = DEFAULT_DOMAIN
-    llm_provider: str = "seed"  # seed | groq | vllm | ollama | scripted
+    llm_provider: str = field(default_factory=llm_provider)  # seed | groq | vllm | ollama | scripted
     llm_model: Optional[str] = None
     # None → provider defaults (Groq: 3500; vLLM: 1500; Ollama: 4096).
     llm_max_tokens: Optional[int] = None
     # Groq gpt-oss only when set (e.g. low | medium | high); omitted otherwise.
     llm_reasoning_effort: Optional[str] = None
+    # None → use ``seed`` when wiring LLM ranking / selection seeds.
+    llm_seed: Optional[int] = None
     # Stage I Score1: "dataset" (default) | "smoke" (fast tests only)
     score1_mode: str = "dataset"
-    stage1_dataset_path: str = "domains/crowdnav/data/stage1_dataset"
+    stage1_dataset_path: str = field(default_factory=budget_stage1_dataset_path)
 
     # Closed loop: population N, generations G, Stage II budget per candidate.
-    population: int = 6
-    generations: int = 4
-    stage2_train_steps: int = 12_000
-    stage2_eval_episodes: int = 30
+    population: int = field(default_factory=budget_population)
+    generations: int = field(default_factory=budget_generations)
+    stage2_train_steps: int = field(default_factory=budget_stage2_train_steps)
+    stage2_eval_episodes: int = field(default_factory=budget_stage2_eval_episodes)
     # Stage II selection uses the held-out val scenarios.
     stage2_eval_split: str = "val"
+    # Shared per-generation PPO train seeds (decoupled from candidate index).
+    stage2_paired_seeds: bool = field(default_factory=budget_stage2_paired_seeds)
+    # Number of shared train seeds per Stage II candidate (K); fitness = mean.
+    stage2_seeds: int = field(default_factory=budget_stage2_seeds)
 
     # Stage III: long PPO on the final population.
-    stage3_train_steps: int = STAGE3_STEPS
-    stage3_eval_episodes: int = 30
+    stage3_train_steps: int = field(default_factory=budget_stage3_train_steps)
+    stage3_eval_episodes: int = field(default_factory=budget_stage3_eval_episodes)
     # Off: Stage III compares candidates at K3 steps each, and a warm start
     # would add the Stage II steps to some of them.
     stage3_warm_start: bool = False
@@ -135,7 +167,7 @@ class RaiseRunConfig:
     # After collapse filter, keep only top-k by Stage II fitness (None = all).
     stage3_top_k: Optional[int] = None
     # Episodes of the blind re-evaluation of the Stage III winner (0 = skip).
-    final_eval_episodes: int = 100
+    final_eval_episodes: int = field(default_factory=budget_final_eval_episodes)
     # Also blind-eval every Stage III statistical tie (report only; never select).
     eval_tied_finalists: bool = True
 
@@ -149,13 +181,22 @@ class RaiseRunConfig:
     n_mutation: Optional[int] = None
     n_random: Optional[int] = None
     # Mutation parents: lower (bottom half) | rank_weighted | tournament.
-    mutation_parents: str = "lower"
+    mutation_parents: str = field(default_factory=selection_mutation_parents)
     # Drop Stage-II CR>=collapse_cr genomes from the mutation parent pool.
     mutation_exclude_collapsed: bool = False
     # Successive-halving Stage II (off by default).
     stage2_successive_halving: bool = False
     # Crash-safe resume of closed loop + Stage III from output_dir.
     resume: bool = True
+    # Resume with differing result-changing config keys aborts unless True.
+    allow_config_drift: bool = False
+    # Infrastructure vs reward failure handling in Stage II labeling.
+    infra_error_policy: str = field(default_factory=selection_infra_error_policy)
+    # LLM fallback contamination threshold (fraction of population).
+    max_fallback_fraction: float = field(default_factory=selection_max_fallback_fraction)
+    strict_fallback: bool = field(default_factory=selection_strict_fallback)
+    # Optional PPO reward normalization (training VecEnv only).
+    ppo_normalize_reward: bool = field(default_factory=ppo_normalize_reward)
 
     # Trainer knobs.
     n_envs: int = 1
@@ -165,20 +206,25 @@ class RaiseRunConfig:
     warm_start: bool = False
     eval_mode: str = "holdout_only"
     # Robot / action space (domains.crowdnav.settings).
-    action_mode: str = "continuous"
-    robot_kinematics: str = "unicycle"
-    action_speed_samples: int = 5
-    action_rotation_samples: int = 16
+    action_mode: str = field(default_factory=env_action_mode)
+    robot_kinematics: str = field(default_factory=env_kinematics)
+    action_speed_samples: int = field(default_factory=env_speed_samples)
+    action_rotation_samples: int = field(default_factory=env_rotation_samples)
     env_config_path: Optional[str] = None
+    env_config_obj: Optional[Any] = field(default_factory=upstream_env_config, repr=False)
     # Diagnostic feedback card + LLM input-token budget.
     feedback: FeedbackCardConfig = field(default_factory=FeedbackCardConfig)
     selection: SelectionConfig = field(default_factory=SelectionConfig)
 
-    device: str = "cuda"
+    device: str = field(default_factory=ppo_device)
     # Intra-op CPU threads for torch / OpenMP / MKL (0 = library default).
     # The PPO MLPs are tiny; uncapped, torch keeps every core busy for no gain.
-    torch_threads: int = 1
+    torch_threads: int = field(default_factory=ppo_torch_threads)
     fast: bool = False
+
+    def effective_llm_seed(self) -> int:
+        """Seed used when wiring LLM ranking (defaults to the run seed)."""
+        return int(self.llm_seed if self.llm_seed is not None else self.seed)
 
     def apply_fast_profile(self) -> None:
         """Seconds-scale walk with stub trainers + tiny budgets."""
@@ -363,6 +409,15 @@ class RaisePipeline:
             kwargs["max_tokens"] = int(self.config.llm_max_tokens)
         if self.config.llm_reasoning_effort is not None:
             kwargs["reasoning_effort"] = str(self.config.llm_reasoning_effort)
+        if str(self.config.llm_provider).strip().lower() in (
+            "groq",
+            "vllm",
+            "local",
+            "gpt-oss",
+            "gpt-oss-120b",
+            "ollama",
+        ):
+            kwargs["seed"] = int(self.config.effective_llm_seed())
         return make_llm_client(self.config.llm_provider, **kwargs)
 
     def _closed_loop_config(self) -> ClosedLoopConfig:
@@ -385,10 +440,17 @@ class RaisePipeline:
             mutation_exclude_collapsed=bool(cfg.mutation_exclude_collapsed),
             collapse_cr=float(cfg.collapse_cr),
             resume=bool(cfg.resume),
+            allow_config_drift=bool(cfg.allow_config_drift),
             domain=str(self.domain_pack.name),
             eval_episodes=int(cfg.stage2_eval_episodes),
             stage2_eval_split=str(cfg.stage2_eval_split or "val"),
             stage2_successive_halving=bool(cfg.stage2_successive_halving),
+            stage2_paired_seeds=bool(cfg.stage2_paired_seeds),
+            stage2_seeds=max(1, int(cfg.stage2_seeds)),
+            infra_error_policy=str(cfg.infra_error_policy),
+            max_fallback_fraction=float(cfg.max_fallback_fraction),
+            strict_fallback=bool(cfg.strict_fallback),
+            ppo_normalize_reward=bool(cfg.ppo_normalize_reward),
             n_envs=max(1, int(cfg.n_envs or 1)),
             label_workers=max(1, int(cfg.label_workers or 1)),
             warm_start=bool(cfg.warm_start),
@@ -406,6 +468,7 @@ class RaisePipeline:
             "action_speed_samples": int(cfg.action_speed_samples),
             "action_rotation_samples": int(cfg.action_rotation_samples),
             "env_config_path": cfg.env_config_path,
+            "env_config_obj": cfg.env_config_obj,
         }
 
     def _stage3_config(self) -> Stage3Config:
@@ -517,7 +580,9 @@ class RaisePipeline:
         stage3_pop = s3_runner.run(stage2_pop)
         stage3_selection = s3_runner.selection_summary()
         stage3_rank = None
-        if cfg.selection.mode == "llm_rank" and stage3_pop:
+        measured_best = s3_runner.best_trained
+        selected_s3: Optional[RewardCandidate] = measured_best
+        if cfg.selection.mode == "llm_rank" and stage3_pop and measured_best is not None:
             stage3_archive = CandidateArchive()
             stage3_archive.add_population(
                 stage3_pop,
@@ -546,7 +611,7 @@ class RaisePipeline:
                 fallback_order=[
                     candidate.candidate_id for candidate in stage3_fallback
                 ],
-                seed=int(cfg.selection.seed) + 1_000_000,
+                seed=int(cfg.effective_llm_seed()) + 1_000_000,
                 stage="stage3",
                 generation=max(0, int(cfg.generations) - 1),
                 flags={
@@ -560,28 +625,46 @@ class RaisePipeline:
                 candidate.candidate_id: candidate for candidate in stage3_pop
             }
             stage3_pop = [
-                stage3_by_id[candidate_id] for candidate_id in stage3_rank.ranking
+                stage3_by_id[candidate_id]
+                for candidate_id in stage3_rank.ranking
+                if candidate_id in stage3_by_id
             ]
-            llm_selected = stage3_pop[0]
             fitness_best_id = stage3_selection.get("best_id")
-            fitness_best = stage3_by_id.get(str(fitness_best_id))
+            fitness_best = stage3_by_id.get(str(fitness_best_id)) or measured_best
+            fitness_tied_ids = list(stage3_selection.get("tied_ids") or [])
+            # LLM may only reorder within {measured best} ∪ statistical ties.
+            allowed_ids = {measured_best.candidate_id} | set(fitness_tied_ids)
+            trained_ids = {c.candidate_id for c in s3_runner.trained}
+            llm_top_id = stage3_rank.ranking[0] if stage3_rank.ranking else None
+            if (
+                llm_top_id is not None
+                and llm_top_id in allowed_ids
+                and llm_top_id in trained_ids
+            ):
+                selected_s3 = stage3_by_id[llm_top_id]
+                llm_accepted = True
+            else:
+                selected_s3 = measured_best
+                llm_accepted = False
             stage3_selection = {
                 **stage3_selection,
                 "fitness_best_id": fitness_best_id,
                 "fitness_best_fitness": (
                     candidate_fitness(fitness_best) if fitness_best is not None else None
                 ),
-                "fitness_tied_ids": list(stage3_selection.get("tied_ids") or []),
-                "best_id": stage3_rank.ranking[0],
-                "fitness": candidate_fitness(llm_selected),
-                "fitness_se": candidate_fitness_se(llm_selected),
-                "tied_ids": statistical_ties(s3_runner.trained, llm_selected),
+                "fitness_tied_ids": fitness_tied_ids,
+                "best_id": selected_s3.candidate_id,
+                "fitness": candidate_fitness(selected_s3),
+                "fitness_se": candidate_fitness_se(selected_s3),
+                "tied_ids": statistical_ties(s3_runner.trained, selected_s3),
                 "llm_ranking": stage3_rank.ranking,
                 "llm_scores": stage3_rank.scores,
                 "llm_weaknesses": stage3_rank.weaknesses,
                 "llm_rationale": stage3_rank.rationale,
                 "llm_fallback": stage3_rank.fallback,
                 "llm_fallback_reason": stage3_rank.fallback_reason,
+                "llm_restricted_to_ties": True,
+                "llm_pick_accepted": llm_accepted,
             }
             stage2_order = [
                 candidate.candidate_id for candidate in cl_result.population
@@ -595,6 +678,8 @@ class RaisePipeline:
                 top_k=cfg.selection.top_k,
             )
         final_eval: Optional[Dict[str, Any]] = None
+        stage3_status = "ok"
+        best_stage3_id: Optional[str] = None
         if s3_runner.best_trained is None:
             console.warn(
                 f"no Stage III candidate trained; falling back to the Stage II best "
@@ -602,12 +687,18 @@ class RaisePipeline:
                 stage="pipeline",
             )
             best_s3 = best_s2
+            stage3_status = "fallback_to_stage2"
+            best_s3.metadata = {
+                **(best_s3.metadata or {}),
+                "selection_stage": "stage2_fallback",
+            }
         else:
-            best_s3 = (
-                stage3_pop[0]
-                if stage3_rank is not None
-                else s3_runner.best_trained
-            )
+            best_s3 = selected_s3 if selected_s3 is not None else s3_runner.best_trained
+            best_stage3_id = best_s3.candidate_id
+            best_s3.metadata = {
+                **(best_s3.metadata or {}),
+                "selection_stage": "stage3",
+            }
             final_eval = s3_runner.final_eval(
                 best_s3,
                 episodes=int(cfg.final_eval_episodes),
@@ -623,7 +714,7 @@ class RaisePipeline:
             winner_final_eval=final_eval,
             episodes=int(cfg.final_eval_episodes),
             seed_base=int(cfg.seed) + FINAL_EVAL_SEED_OFFSET,
-            enabled=bool(cfg.eval_tied_finalists),
+            enabled=bool(cfg.eval_tied_finalists) and stage3_status == "ok",
         )
         if tied_final_evals is not None:
             write_json(
@@ -634,7 +725,8 @@ class RaisePipeline:
             os.path.join(cfg.output_dir, "stage3_population.json"),
             {
                 "population": [candidate_to_dict(c) for c in stage3_pop],
-                "best_trained_id": best_s3.candidate_id,
+                "best_trained_id": best_stage3_id,
+                "stage3_status": stage3_status,
                 "history": [r.as_dict() for r in s3_runner.history],
             },
         )
@@ -648,13 +740,14 @@ class RaisePipeline:
         )
         console.status(
             f"Stage III complete - best={best_s3.candidate_id} "
-            f"fitness={candidate_fitness(best_s3):.3f}",
+            f"fitness={candidate_fitness(best_s3):.3f} status={stage3_status}",
             stage="pipeline",
         )
 
         manifest["best_stage1_id"] = best_s1.candidate_id
         manifest["best_stage2_id"] = best_s2.candidate_id
-        manifest["best_stage3_id"] = best_s3.candidate_id
+        manifest["best_stage3_id"] = best_stage3_id
+        manifest["stage3_status"] = stage3_status
         manifest["stage3_selection"] = stage3_selection
         # Full metrics (per-episode rows) stay on final_candidate.json.
         manifest["final_eval"] = (

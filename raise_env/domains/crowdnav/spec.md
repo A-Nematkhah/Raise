@@ -71,15 +71,18 @@ robots). Humans (`state.humans`) is a tuple containing every human, each with
 configured robot sensing range and field of view.
 
 Step facts include `action`, `collision`, `reached_goal`, `timeout`, `danger`,
-`min_separation`, `discomfort_dist`, `goal_distance`, `progress`, `time_step`,
-`global_time`, and `time_limit`. `success_reward`, `collision_penalty`,
-`discomfort_penalty_factor`, `potential_delta`, and `potential_factor` carry
-the parameters needed to reproduce the configured native reward.
+`min_separation`, `min_separation_post`, `discomfort_dist`, `goal_distance`,
+`progress`, `time_step`, `global_time`, and `time_limit`. `success_reward`,
+`collision_penalty`, `discomfort_penalty_factor`, `potential_delta`, and
+`potential_factor` carry the parameters needed to reproduce the configured
+native reward.
 
-- `min_separation` is the smallest current robot-human boundary gap checked by
-  upstream reward calculation (negative on collision), not a swept-path
-  distance. In the native danger branch the penalty is
+- `min_separation` is the upstream pre-step `dmin`: the smallest robot-human
+  boundary gap at the start of the step (negative on collision), not a
+  swept-path distance. In the native danger branch the penalty is
   `(dmin - discomfort_dist) * discomfort_penalty_factor * time_step`.
+- `min_separation_post` is the same boundary gap recomputed from the
+  post-step `robot` / `humans` positions in the snapshot.
 - `danger` is the upstream `Danger` classification. In val/test, it can be
   based on predicted future human positions; the reward penalty still uses
   current `dmin`.

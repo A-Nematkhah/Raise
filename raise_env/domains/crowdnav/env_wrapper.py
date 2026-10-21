@@ -25,7 +25,7 @@ import sys
 import threading
 import types
 from contextlib import contextmanager
-from typing import Any, Dict, Iterator, List, Optional, Sequence
+from typing import Any, Dict, Iterator, List, Optional
 
 import gymnasium as gym
 import numpy as np
@@ -47,7 +47,12 @@ from domains.crowdnav.settings import (
     get_settings,
     validate_settings,
 )
-from domains.crowdnav.state import CrowdNavRewardState, HumanState, RobotState
+from domains.crowdnav.state import (
+    CrowdNavRewardState,
+    HumanState,
+    RobotState,
+    potential_factor_for,
+)
 from domains.crowdnav.watchdog import beat as watchdog_beat
 
 logger = logging.getLogger(__name__)
@@ -687,6 +692,7 @@ class RewardInjectedCrowdNavEnv(gym.Env):
         goal_distance = math.hypot(robot.gx - robot.px, robot.gy - robot.py)
         self._goal_distance = goal_distance
         self._trail.append((float(robot.px), float(robot.py)))
+        dmin_post = step_min_separation(self.sim)
         state = CrowdNavRewardState(
             robot=RobotState(
                 px=float(robot.px),
@@ -727,7 +733,8 @@ class RewardInjectedCrowdNavEnv(gym.Env):
             collision_penalty=float(self.sim.collision_penalty),
             discomfort_penalty_factor=float(self.sim.discomfort_penalty_factor),
             potential_delta=float(potential_delta),
-            potential_factor=3.0 if robot.kinematics == "unicycle" else 2.0,
+            potential_factor=potential_factor_for(str(robot.kinematics)),
+            min_separation_post=float(dmin_post),
         )
         self.last_state = state
 

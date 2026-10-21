@@ -2,22 +2,35 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import math
+
+from raise_core.config_defaults import (
+    run_seed,
+    selection_guard_min_path_length,
+    selection_guard_success_threshold,
+    selection_guards,
+    selection_mode,
+    selection_n_votes,
+    selection_p_restart,
+    selection_reflection_note_cap,
+    selection_temperature,
+    selection_top_k,
+)
 
 
 @dataclass
 class SelectionConfig:
-    mode: str = "legacy"
-    top_k: int = 2
-    n_votes: int = 3
-    temperature: float = 0.1
-    p_restart: float = 0.1
-    guards: bool = False
-    guard_success_threshold: float = 0.9
-    guard_min_path_length: float = 0.1
-    reflection_note_cap: int = 3
-    seed: int = 425
+    mode: str = field(default_factory=selection_mode)
+    top_k: int = field(default_factory=selection_top_k)
+    n_votes: int = field(default_factory=selection_n_votes)
+    temperature: float = field(default_factory=selection_temperature)
+    p_restart: float = field(default_factory=selection_p_restart)
+    guards: bool = field(default_factory=selection_guards)
+    guard_success_threshold: float = field(default_factory=selection_guard_success_threshold)
+    guard_min_path_length: float = field(default_factory=selection_guard_min_path_length)
+    reflection_note_cap: int = field(default_factory=selection_reflection_note_cap)
+    seed: int = field(default_factory=run_seed)
 
     def __post_init__(self) -> None:
         self.mode = str(self.mode).strip().lower()

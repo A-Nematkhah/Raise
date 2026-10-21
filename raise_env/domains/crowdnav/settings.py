@@ -5,6 +5,13 @@ from __future__ import annotations
 import math
 import os
 from dataclasses import dataclass, field, replace
+
+from raise_core.config_defaults import (
+    env_action_mode,
+    env_kinematics,
+    env_rotation_samples,
+    env_speed_samples,
+)
 from typing import Any, List, Optional, Tuple
 
 import numpy as np
@@ -26,10 +33,10 @@ DEFAULT_ENV_CONFIG_PATH = os.path.join(
 
 @dataclass(frozen=True)
 class CrowdNavSettings:
-    kinematics: str = "unicycle"
-    action_mode: str = "continuous"
-    speed_samples: int = 5
-    rotation_samples: int = 16
+    kinematics: str = field(default_factory=env_kinematics)
+    action_mode: str = field(default_factory=env_action_mode)
+    speed_samples: int = field(default_factory=env_speed_samples)
+    rotation_samples: int = field(default_factory=env_rotation_samples)
     env_config_path: Optional[str] = None
     env_config_obj: Any = field(default=None, repr=False, compare=False)
     human_num_override: Optional[int] = None

@@ -213,6 +213,7 @@ def _evolver(tmp_path, *, reply=_REPLY, archive=None, **cfg) -> StageIEvolver:
         config=StageIConfig(population_size=4),
         prompts=cn_prompts,
         feedback=FeedbackCardConfig(**cfg),
+        feedback_card=fc,
         llm_log_dir=str(tmp_path / "closed_loop"),
     )
     if archive is not None:
@@ -691,7 +692,7 @@ def test_disabled_card_sends_the_legacy_prompt_exactly(tmp_path):
     parent = _pop(archive)["mut_0009"]
     parent.metadata["proxy_feedback"] = "Holdout eval (30 episodes): SR=0.63"
     evo._try_mutate(parent, "note", phase="mutation", attempt=1)
-    weakness = f"Parent mut_0009.\nHoldout eval (30 episodes): SR=0.63\nGlobal reflection: note"
+    weakness = "Parent mut_0009.\nHoldout eval (30 episodes): SR=0.63\nGlobal reflection: note"
     expected = f"{cn_prompts.D1_SYSTEM_PROMPT}\n\n" + cn_prompts.format_d2_mutation(parent.code, weakness)
     assert evo.llm.prompts == [expected]
     req = _requests(tmp_path)[0]

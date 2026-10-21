@@ -14,10 +14,13 @@ from raise_core.sandbox.config import SandboxConfig
 from raise_core.sandbox.errors import RewardSandboxError
 from raise_core.sandbox.runtime import smoke_test_compute
 
+# ``while`` is rejected by the AST policy, but smoke_test_compute compiles
+# directly — use it so the child actually hangs past timeout_seconds.
+# (A huge ``range(...)`` is rejected immediately by the guarded range helper.)
 _HANG = """
 def compute_reward(state, memory):
     s = 0.0
-    for i in range(10**9):
+    while True:
         s = s + 1.0
     return float(s)
 """

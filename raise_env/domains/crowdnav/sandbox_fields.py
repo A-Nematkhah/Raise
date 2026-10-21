@@ -16,6 +16,7 @@ CROWDNAV_STATE_ATTRIBUTES: Tuple[str, ...] = (
     "reached_goal",
     "timeout",
     "min_separation",
+    "min_separation_post",
     "discomfort_dist",
     "goal_distance",
     "progress",

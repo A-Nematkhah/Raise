@@ -242,10 +242,13 @@ def test_score1_worker_matches_in_process_and_times_out(dataset_dir):
     )
     try:
         assert worker(seed).score == pytest.approx(score_crowdnav_dataset(seed, trajs).score)
+        # Nested ranges stay under sandbox max_range_length but still burn
+        # wall-clock so the Score1 worker timeout can fire.
         slow_code = _FN + (
             "    total = 0.0\n"
-            "    for i in range(5000000):\n"
-            "        total = total + 0.0\n"
+            "    for i in range(10000):\n"
+            "        for j in range(10000):\n"
+            "            total = total + 0.0\n"
             "    return total\n"
         )
         cfg = crowdnav_sandbox_config(max_call_seconds=1e6)

@@ -269,3 +269,60 @@ def test_single_api_key_uses_the_same_wait_logic(clock, monkeypatch):
     _pool_with(llm._key_manager, [_RateLimited(retry_after=9), _reply("```python\nx\n```")])
     assert llm.complete("p").startswith("```python")
     assert clock.slept == [pytest.approx(9.0)]
+
+
+def test_pacer_min_interval_without_holding_lock_across_sleep(monkeypatch):
+    """Two wait_turn callers respect min_interval; sleep is outside the lock."""
+    import threading
+
+    fake = _FakeClock()
+    pacer = GroqRateLimitPacer(min_interval_seconds=1.0)
+    lock_held_during_sleep: list[bool] = []
+
+    def _sleep_checking_lock(seconds: float) -> None:
+        # If wait_turn held the lock across sleep, try_acquire would fail.
+        acquired = pacer._lock.acquire(blocking=False)
+        lock_held_during_sleep.append(not acquired)
+        if acquired:
+            pacer._lock.release()
+        fake.sleep(seconds)
+
+    monkeypatch.setattr(
+        km,
+        "time",
+        types.SimpleNamespace(time=fake.time, sleep=_sleep_checking_lock),
+    )
+    barrier = threading.Barrier(2)
+    errors: list = []
+
+    def _worker() -> None:
+        try:
+            barrier.wait(timeout=2.0)
+            pacer.wait_turn()
+        except Exception as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    threads = [threading.Thread(target=_worker) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=5.0)
+    assert not errors
+    assert any(s >= 0.99 for s in fake.slept) or fake.now >= 1001.0
+    assert lock_held_during_sleep and all(held is False for held in lock_held_during_sleep)
+
+
+def test_last_attempts_are_thread_local(clock):
+    manager = GroqKeyManager(keys=[KEY_A])
+    _pool_with(manager, [_reply()])
+    manager.chat_completion(model="m", messages=[])
+    assert manager.last_attempts >= 1
+    seen = {}
+
+    def _other() -> None:
+        seen["attempts"] = manager.last_attempts
+
+    t = __import__("threading").Thread(target=_other)
+    t.start()
+    t.join()
+    assert seen["attempts"] == 0

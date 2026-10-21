@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import domains.crowdnav.prompts as cn_prompts
+from domains.crowdnav import feedback_card as crowdnav_feedback_card
 from domains.crowdnav.metrics import evidence_line
 from domains.crowdnav.prompts import D5_SEED_FUNCTION
 from domains.crowdnav.reward_checks import make_crowdnav_validator
@@ -58,6 +59,7 @@ def _evolver(*, card: bool = True) -> StageIEvolver:
         validator=make_crowdnav_validator(),
         prompts=cn_prompts,
         feedback=FeedbackCardConfig(enabled=card),
+        feedback_card=crowdnav_feedback_card,
     )
 
 
@@ -143,6 +145,7 @@ def test_batch_candidates_do_not_store_shared_preamble_as_diagnosis(tmp_path):
         validator=make_crowdnav_validator(),
         prompts=cn_prompts,
         feedback=FeedbackCardConfig(enabled=False),
+        feedback_card=crowdnav_feedback_card,
         config=StageIConfig(population_size=2),
         rejection_log_path=str(Path(tmp_path) / "rej.jsonl"),
     )

@@ -39,7 +39,7 @@ def test_run_raise_refuses_seed_without_fast(monkeypatch, capsys, tmp_path):
     )
     assert code == 2
     err = capsys.readouterr().err
-    assert "Refusing to run a non-fast pipeline" in err
+    assert "Refusing a non-dry run with llm.provider=seed" in err
     assert "--allow-seed-llm" in err
     assert not (out_dir / "manifest.json").exists()
     assert not (out_dir / "config.json").exists()
@@ -49,7 +49,7 @@ def test_run_raise_fast_still_allows_seed(monkeypatch, tmp_path):
     out_dir = tmp_path / "seed_fast_ok"
     code = _run_script(
         "run_raise.py",
-        ["--fast", "--output-dir", str(out_dir), "--device", "cpu"],
+        ["--dry-run", "--output-dir", str(out_dir)],
         monkeypatch,
     )
     assert code == 0
