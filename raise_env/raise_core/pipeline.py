@@ -10,7 +10,7 @@ from __future__ import annotations
 import os
 import sys
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -66,6 +66,11 @@ from raise_core.config_defaults import (
     selection_mutation_parents,
     selection_strict_fallback,
     upstream_env_config,
+)
+from raise_core.stage3_refine import (
+    merge_refine_populations,
+    propose_refined_candidates,
+    refine_round_count,
 )
 from raise_core.validate import (
     FINAL_EVAL_SEED_OFFSET,
@@ -165,6 +170,8 @@ class RaiseRunConfig:
     stage3_seeds: int = 1
     # After collapse filter, keep only top-k by Stage II fitness (None = all).
     stage3_top_k: Optional[int] = None
+    # EvoNav G3-style Stage III fidelity rounds (1 = single long train).
+    stage3_refine_rounds: int = 1
     # Episodes of the blind re-evaluation of the Stage III winner (0 = skip).
     final_eval_episodes: int = field(default_factory=budget_final_eval_episodes)
     # Also blind-eval every Stage III statistical tie (report only; never select).
@@ -235,6 +242,7 @@ class RaiseRunConfig:
         self.stage2_eval_episodes = 2
         self.stage3_train_steps = 8
         self.stage3_eval_episodes = 2
+        self.stage3_refine_rounds = 1
         self.final_eval_episodes = 2
         self.use_stub = True
         self.llm_provider = "seed"
@@ -570,14 +578,58 @@ class RaisePipeline:
             stage="pipeline",
         )
 
-        # ----- Stage III (long PPO on the final population) -----
+        # ----- Stage III (long PPO; optional G3 LLM refine rounds) -----
+        refine_rounds = refine_round_count(cfg.stage3_refine_rounds)
         s3_runner = Stage3Runner(
             make_stage3_trainer(pack, use_stub=bool(cfg.use_stub)),
             validator=self.validator,
             config=self._stage3_config(),
         )
         stage3_pop = s3_runner.run(stage2_pop)
+        for refine_i in range(1, refine_rounds):
+            parents = list(s3_runner.trained) or list(stage3_pop)
+            if not parents:
+                console.warn(
+                    f"Stage III refine round {refine_i + 1}/{refine_rounds}: "
+                    "no trained parents; stopping refine",
+                    stage="Stage III",
+                )
+                break
+            console.banner(
+                f"Stage III refine {refine_i + 1}/{refine_rounds} "
+                f"(LLM mutate + retrain)"
+            )
+            refined = propose_refined_candidates(
+                parents,
+                llm=llm,
+                validator=self.validator,
+                prompts=pack.prompts,
+                refine_round=refine_i,
+            )
+            round_cfg = replace(
+                self._stage3_config(),
+                output_root=os.path.join(
+                    cfg.output_dir, f"stage3_train_r{refine_i}"
+                ),
+                skip_collapsed=False,
+                top_k=None,
+                resume=bool(cfg.resume),
+            )
+            s3_runner = Stage3Runner(
+                make_stage3_trainer(pack, use_stub=bool(cfg.use_stub)),
+                validator=self.validator,
+                config=round_cfg,
+            )
+            retrained = s3_runner.run(refined)
+            stage3_pop = merge_refine_populations(parents, list(s3_runner.trained) or retrained)
+            s3_runner.trained = list(stage3_pop)
+            s3_runner.best_trained = pick_best_trained(stage3_pop)
         stage3_selection = s3_runner.selection_summary()
+        if refine_rounds > 1:
+            stage3_selection = {
+                **stage3_selection,
+                "refine_rounds": refine_rounds,
+            }
         stage3_rank = None
         measured_best = s3_runner.best_trained
         selected_s3: Optional[RewardCandidate] = measured_best
@@ -587,18 +639,21 @@ class RaisePipeline:
                 stage3_pop,
                 generation=max(0, int(cfg.generations) - 1),
             )
+            stage3_fallback = sorted(
+                stage3_pop, key=candidate_fitness, reverse=True
+            )
             stage3_cards = render_candidate_cards(
-                stage3_pop,
+                stage3_fallback,
                 archive=stage3_archive,
                 card_module=pack.feedback_card,
                 config=cfg.feedback,
                 population_note=" | ".join(
                     cl_result.manifest.get("selection_notes") or ()
                 ),
+                fit_to_input_budget=True,
+                provider=str(getattr(llm, "provider", "") or cfg.llm_provider),
             )
-            stage3_fallback = sorted(
-                stage3_pop, key=candidate_fitness, reverse=True
-            )
+            stage3_card_ids = {cid for cid, _ in stage3_cards}
             stage3_rank = LLMRanker(
                 llm,
                 cfg.selection,
@@ -608,7 +663,9 @@ class RaisePipeline:
             ).rank(
                 stage3_cards,
                 fallback_order=[
-                    candidate.candidate_id for candidate in stage3_fallback
+                    candidate.candidate_id
+                    for candidate in stage3_fallback
+                    if candidate.candidate_id in stage3_card_ids
                 ],
                 seed=int(cfg.effective_llm_seed()) + 1_000_000,
                 stage="stage3",
@@ -618,21 +675,37 @@ class RaisePipeline:
                         candidate, cfg.selection
                     )
                     for candidate in stage3_pop
+                    if candidate.candidate_id in stage3_card_ids
                 },
             )
             stage3_by_id = {
                 candidate.candidate_id: candidate for candidate in stage3_pop
             }
-            stage3_pop = [
+            stage3_ranked = [
                 stage3_by_id[candidate_id]
                 for candidate_id in stage3_rank.ranking
                 if candidate_id in stage3_by_id
             ]
+            stage3_tail = [
+                c for c in stage3_fallback if c.candidate_id not in stage3_card_ids
+            ]
+            stage3_pop = stage3_ranked + stage3_tail
             fitness_best_id = stage3_selection.get("best_id")
             fitness_best = stage3_by_id.get(str(fitness_best_id)) or measured_best
             fitness_tied_ids = list(stage3_selection.get("tied_ids") or [])
-            # LLM may only reorder within {measured best} ∪ statistical ties.
-            allowed_ids = {measured_best.candidate_id} | set(fitness_tied_ids)
+            # LLM may pick among the top-k trained by fitness (plus any ties).
+            llm_pool_k = max(1, int(cfg.selection.top_k))
+            trained_sorted = sorted(
+                s3_runner.trained,
+                key=candidate_fitness,
+                reverse=True,
+            )
+            top_k_ids = {
+                c.candidate_id for c in trained_sorted[:llm_pool_k]
+            }
+            allowed_ids = (
+                {measured_best.candidate_id} | top_k_ids | set(fitness_tied_ids)
+            )
             trained_ids = {c.candidate_id for c in s3_runner.trained}
             llm_top_id = stage3_rank.ranking[0] if stage3_rank.ranking else None
             if (
@@ -662,7 +735,10 @@ class RaisePipeline:
                 "llm_rationale": stage3_rank.rationale,
                 "llm_fallback": stage3_rank.fallback,
                 "llm_fallback_reason": stage3_rank.fallback_reason,
-                "llm_restricted_to_ties": True,
+                "llm_restricted_to_ties": False,
+                "llm_restricted_to_top_k": True,
+                "llm_pool_k": llm_pool_k,
+                "llm_pool_ids": sorted(allowed_ids),
                 "llm_pick_accepted": llm_accepted,
             }
             stage2_order = [

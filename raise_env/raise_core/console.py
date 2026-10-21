@@ -364,12 +364,28 @@ def final_run_summary(
         score = getattr(cand, "score", None)
         md = getattr(cand, "metadata", None) or {}
         last = md.get("last_metrics") or {}
+        final = md.get("final_eval") or {}
+        if isinstance(final, dict) and final.get("SR") is not None:
+            last = {**last, **{k: final[k] for k in final if k in (
+                "SR", "CR", "TR", "NT", "PL", "ITR", "SD", "fitness",
+                "nav_time", "path_length", "danger_freq", "min_dist_in_danger",
+            )}}
         extra = ""
         if last:
+            def _m(key: str, *aliases: str) -> float:
+                for k in (key, *aliases):
+                    if last.get(k) is not None:
+                        try:
+                            return float(last[k])
+                        except (TypeError, ValueError):
+                            pass
+                return 0.0
+
             extra = (
-                f"  SR={float(last.get('SR', 0)):.3f} "
-                f"CR={float(last.get('CR', 0)):.3f} "
-                f"TR={float(last.get('TR', 0)):.3f}"
+                f"  SR={_m('SR'):.3f} CR={_m('CR'):.3f} TR={_m('TR'):.3f} "
+                f"NT={_m('NT', 'nav_time'):.2f} PL={_m('PL', 'path_length'):.2f} "
+                f"ITR={_m('ITR', 'danger_freq'):.3f} "
+                f"SD={_m('SD', 'min_dist_in_danger'):.3f}"
             )
         elif score is not None:
             extra = f"  Score1={_fmt_score(score)}"

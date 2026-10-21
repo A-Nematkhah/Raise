@@ -29,22 +29,26 @@ _RAISE_ENV = Path(__file__).resolve().parents[2]
 _RUN_RAISE = _RAISE_ENV / "scripts" / "run_raise.py"
 
 GOLDEN = {
-    "population": 6,
-    "generations": 4,
-    "stage2_train_steps": 12_000,
-    "stage3_train_steps": 70_000,
+    "population": 8,
+    "generations": 8,
+    "stage2_train_steps": 18_000,
+    "stage3_train_steps": 100_000,
     "stage2_eval_episodes": 30,
     "stage3_eval_episodes": 30,
     "final_eval_episodes": 100,
-    "stage2_seeds": 1,
+    "stage2_seeds": 3,
     "stage2_paired_seeds": True,
-    "kinematics": "unicycle",
+    "kinematics": "holonomic",
     "collect_kinematics": "holonomic",
     "human_num": 10,
     "time_limit": 30.0,
     "time_step": 0.25,
     "val_size": 100,
     "test_size": 500,
+    "robot_visible": False,
+    "stage3_refine_rounds": 3,
+    "max_input_tokens": 4500,
+    "llm_max_tokens": 2000,
 }
 
 
@@ -90,7 +94,7 @@ def test_config_snapshot_written_and_drift(tmp_path):
     from dataclasses import replace
 
 
-    drifted = replace(cfg, budget=replace(cfg.budget, population_size=8))
+    drifted = replace(cfg, budget=replace(cfg.budget, population_size=9))
     with pytest.raises(RuntimeError, match="config drift"):
         ensure_config_snapshot(out, drifted, resume=True, allow_config_drift=False)
     ensure_config_snapshot(out, drifted, resume=True, allow_config_drift=True)
@@ -122,6 +126,15 @@ def test_golden_frozen_defaults():
     assert Stage3Config().train_env_steps == GOLDEN["stage3_train_steps"]
     assert StageIConfig().population_size == GOLDEN["population"]
     assert StageIConfig().generations == GOLDEN["generations"]
+    assert bool(upstream.robot.visible) is GOLDEN["robot_visible"]
+    assert bool(CONFIG.env.robot_visible) is GOLDEN["robot_visible"]
+    assert int(CONFIG.budget.stage3.refine_rounds) == GOLDEN["stage3_refine_rounds"]
+    assert int(run.stage3_refine_rounds) == GOLDEN["stage3_refine_rounds"]
+    assert int(CONFIG.selection.max_input_tokens) == GOLDEN["max_input_tokens"]
+    assert int(CONFIG.llm.max_tokens) == GOLDEN["llm_max_tokens"]
+    assert "humans_20" in CONFIG.evaluation_variants
+    assert "humans_20_random" in CONFIG.evaluation_variants
+    assert "generalization_17" not in CONFIG.evaluation_variants
 
 
 def test_config_to_dict_roundtrip():

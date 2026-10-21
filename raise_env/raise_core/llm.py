@@ -46,6 +46,99 @@ DEFAULT_CLIENT_SYSTEM = (
     "```python fenced block; any explanation must come before the fence."
 )
 
+# Groq free/on_demand often enforces tokens-per-minute == per-request cap
+# (prompt + max_tokens). Measured org limit: 8000. Soft cap keeps headroom for
+# tokenizer mismatch (heuristic vs Groq billable). Override after a TPM upgrade.
+_GROQ_ORG_TOKEN_LIMIT = int(os.environ.get("GROQ_ORG_TOKEN_LIMIT", "8000"))
+_GROQ_REQUEST_TOKEN_CAP = min(
+    int(os.environ.get("GROQ_REQUEST_TOKEN_CAP", "7500")),
+    max(512, int(_GROQ_ORG_TOKEN_LIMIT)),
+)
+# Inflate local prompt estimates so under-counting cannot push Requested > cap.
+_GROQ_PROMPT_TOKEN_MARGIN = float(os.environ.get("GROQ_PROMPT_TOKEN_MARGIN", "1.25"))
+# Minimum completion budget we still bother sending (else refuse the request).
+_GROQ_MIN_COMPLETION_TOKENS = 256
+
+
+def estimate_groq_prompt_tokens(system_prompt: str, user_prompt: str) -> int:
+    """Conservative prompt-token estimate (counter × safety margin)."""
+    import math
+
+    from raise_core.token_budget import make_token_counter
+
+    counter = make_token_counter("groq")
+    raw = counter.count_request([system_prompt, user_prompt])
+    margin = max(1.0, float(_GROQ_PROMPT_TOKEN_MARGIN))
+    return int(math.ceil(raw * margin))
+
+
+def groq_margined_input_budget(max_completion_tokens: int) -> int:
+    """Max *margined* prompt tokens so prompt+completion stays under the soft cap."""
+    cap = max(512, int(_GROQ_REQUEST_TOKEN_CAP))
+    out = max(1, int(max_completion_tokens))
+    return max(512, cap - out)
+
+
+def groq_raw_input_budget(max_completion_tokens: int) -> int:
+    """Max *raw* (unmargined) prompt tokens for ``fit_to_budget`` counters.
+
+    ``fit_to_budget`` / Stage I use the plain token counter. Clamp/estimate use
+    ``raw × margin``. So the raw hard limit must be ``floor(room / margin)`` or
+    a "fitted" prompt can still leave no safe completion room after margin.
+    """
+    import math
+
+    room = groq_margined_input_budget(max_completion_tokens)
+    margin = max(1.0, float(_GROQ_PROMPT_TOKEN_MARGIN))
+    return max(512, int(math.floor(room / margin)))
+
+
+def _clamp_groq_request_budget(
+    *,
+    system_prompt: str,
+    user_prompt: str,
+    max_tokens: int,
+) -> int:
+    """Shrink ``max_tokens`` so prompt+output stay under the soft TPM request cap.
+
+    Last line of defense for every Groq ``complete``: never request more than
+    ``_GROQ_REQUEST_TOKEN_CAP`` (≤ org limit) by our margined estimate.
+    """
+    from raise_core.token_budget import BudgetFit, PromptBudgetError
+
+    prompt_tokens = estimate_groq_prompt_tokens(system_prompt, user_prompt)
+    cap = max(512, int(_GROQ_REQUEST_TOKEN_CAP))
+    out = max(1, int(max_tokens))
+    if prompt_tokens + out <= cap:
+        return out
+    shrunk = cap - prompt_tokens
+    if shrunk < _GROQ_MIN_COMPLETION_TOKENS:
+        raise PromptBudgetError(
+            f"Groq request prompt is ~{prompt_tokens} tokens (with safety margin); "
+            f"soft cap {cap} (org ≤{_GROQ_ORG_TOKEN_LIMIT}) leaves no room for a "
+            f"completion (need >={_GROQ_MIN_COMPLETION_TOKENS}). "
+            f"Shrink selection.max_input_tokens or raise GROQ_REQUEST_TOKEN_CAP "
+            f"after a TPM upgrade.",
+            BudgetFit(
+                messages=[system_prompt, user_prompt],
+                tokens=prompt_tokens,
+                level=0,
+                steps=["groq_tpm_cap"],
+                info={"cap": cap, "org_limit": int(_GROQ_ORG_TOKEN_LIMIT)},
+                within_target=False,
+            ),
+        )
+    if shrunk < out:
+        logger.warning(
+            "Groq max_tokens clamped %d -> %d (prompt≈%d margined, cap=%d, org≤%d)",
+            out,
+            shrunk,
+            prompt_tokens,
+            cap,
+            int(_GROQ_ORG_TOKEN_LIMIT),
+        )
+    return int(shrunk)
+
 
 class LLMClient(ABC):
     """Minimal text-completion interface."""
@@ -169,10 +262,10 @@ class GroqLLMClient(LLMClient):
         *,
         model: str = DEFAULT_MODEL,
         temperature: float = 0.4,
-        # gpt-oss reasoning tokens count against max_tokens; short budgets
-        # truncated many calls in long runs. Override with --llm-max-tokens /
-        # --llm-reasoning-effort.
-        max_tokens: int = 3500,
+        # gpt-oss reasoning tokens count against max_tokens. Default leaves
+        # headroom under Groq on_demand TPM (often 8000 = prompt + max_tokens).
+        # Override with llm.max_tokens / --set llm.max_tokens=…
+        max_tokens: int = 2000,
         api_key: Optional[str] = None,
         system_prompt: Optional[str] = None,
         use_key_pool: bool = True,
@@ -200,6 +293,12 @@ class GroqLLMClient(LLMClient):
         self._key_manager = GroqKeyManager(keys=[key])
 
     def complete(self, prompt: str, *, max_tokens: Optional[int] = None) -> str:
+        out_budget = int(max_tokens) if max_tokens is not None else int(self.max_tokens)
+        out_budget = _clamp_groq_request_budget(
+            system_prompt=str(self.system_prompt or ""),
+            user_prompt=str(prompt or ""),
+            max_tokens=out_budget,
+        )
         create_kwargs: Dict[str, Any] = {
             "model": self.model,
             "messages": [
@@ -207,7 +306,7 @@ class GroqLLMClient(LLMClient):
                 {"role": "user", "content": prompt},
             ],
             "temperature": self.temperature,
-            "max_tokens": int(max_tokens) if max_tokens is not None else self.max_tokens,
+            "max_tokens": out_budget,
         }
         if self.reasoning_effort is not None and _gpt_oss_model(self.model):
             create_kwargs["reasoning_effort"] = self.reasoning_effort

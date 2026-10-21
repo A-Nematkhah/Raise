@@ -124,6 +124,7 @@ def make_run_config(
         collapse_cr=float(bud.collapse_cr),
         stage3_seeds=int(bud.stage3.n_seeds),
         stage3_top_k=bud.stage3.top_k,
+        stage3_refine_rounds=int(bud.stage3.refine_rounds),
         final_eval_episodes=int(bud.final_eval_episodes),
         eval_tied_finalists=bool(bud.eval_tied_finalists),
         use_stub=bool(use_stub),

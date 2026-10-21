@@ -53,7 +53,9 @@ METRICS: Tuple[MetricSpec, ...] = (
     MetricSpec("SD", "min_dist_in_danger", " m", +1, ".3f"),
 )
 FITNESS = MetricSpec("fitness", "fitness", "", +1, ".3f")
-_COMPACT_KEYS = ("SR", "CR", "TR", "NT", "fitness")
+# Compact / ranking-facing lines omit fitness so the LLM judges multi-objective
+# metrics; the scalar is still computed and shown as a secondary footnote in [A].
+_COMPACT_KEYS = ("SR", "CR", "TR", "NT", "PL", "ITR", "SD")
 _SPECS = {s.key: s for s in METRICS + (FITNESS,)}
 
 # Behaviour / diagnosis thresholds (card wording only; not used for selection).
@@ -443,8 +445,8 @@ class FeedbackCard:
             head,
             "Eval: " + "; ".join(bits) + ".",
             values,
-            f"fitness {fit_txt} (selection objective: mean outcome score; "
-            "+1 success, -1 collision, -0.5 timeout)",
+            # Keep short: long fitness prose was repeated on every ranking card.
+            f"(secondary) fitness {fit_txt} — not the ranking objective",
             f"Behaviour: {behaviour(rec)}",
         ]
 
@@ -498,8 +500,9 @@ class FeedbackCard:
 
     def _d(self) -> List[str]:
         legend = (
-            "better/worse by metric direction (higher SR/min_dist/fitness; lower CR/TR/"
-            "nav_time/path/danger_freq); 'within noise' = |delta| <= 2 SE"
+            "better/worse by metric direction (higher SR/min_dist; lower CR/TR/"
+            "nav_time/path/danger_freq; scalar fitness is secondary); "
+            "'within noise' = |delta| <= 2 SE"
         )
         if self.call_type == "crossover" and len(self.subjects) >= 2:
             a, b = self.subjects[0], self.subjects[1]

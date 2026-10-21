@@ -60,12 +60,26 @@ _RAISE_ENV_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 DEFAULT_GROQ_KEYS_PATH = os.path.join(_RAISE_ENV_ROOT, "groq_keys.json")
 
 
+def _is_request_too_large_error(exc: Exception) -> bool:
+    """Single request exceeds org TPM/request size (Groq often returns 413)."""
+    status = getattr(exc, "status_code", None)
+    text = str(exc).lower()
+    if status == 413:
+        return True
+    return "request too large" in text and (
+        "tokens per minute" in text or "tpm" in text or "rate_limit" in text
+    )
+
+
 def _is_rate_limit_error(exc: Exception) -> bool:
     status = getattr(exc, "status_code", None)
     if status == 429:
         return True
+    # 413 "request too large for TPM" is a size problem, not a wait-and-retry.
+    if _is_request_too_large_error(exc):
+        return False
     text = str(exc).lower()
-    return "rate limit" in text or "429" in text
+    return "rate limit" in text or "rate_limit" in text or "429" in text
 
 
 def _is_transient_error(exc: Exception) -> bool:
@@ -147,6 +161,8 @@ def _is_non_retryable_client_error(exc: Exception) -> bool:
     status = getattr(exc, "status_code", None)
     text = str(exc).lower()
     if status in (401, 403):
+        return True
+    if _is_request_too_large_error(exc):
         return True
     if status == 404 or "model_not_found" in text or "does not exist" in text:
         return True

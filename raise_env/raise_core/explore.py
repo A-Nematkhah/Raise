@@ -349,10 +349,16 @@ class StageIEvolver:
         code = extract_python_code(raw)
         return normalize_to_compute_reward(code, self.config.func_name)
 
-    @staticmethod
-    def _batch_max_tokens(population_size: int) -> int:
-        # Keep headroom above the Groq single-call default (3500) for N functions.
-        return max(7000, int(population_size) * 700)
+    def _batch_max_tokens(self, population_size: int) -> int:
+        """Completion budget for multi-function batch calls.
+
+        Must stay inside the Groq per-request TPM cap (prompt + max_tokens).
+        Large reserved completions (old default ``max(7000, N*700)``) caused
+        413 Request too large on 8k-TPM orgs; clamp to the client max_tokens.
+        """
+        llm_max = int(getattr(self.llm, "max_tokens", None) or 2000)
+        # Prefer one solid function over N truncated bodies under a tight TPM.
+        return max(256, min(llm_max, 2000))
 
     def _log_rejection(
         self,
@@ -461,15 +467,21 @@ class StageIEvolver:
     def render_selection_cards(
         self, candidates: Sequence[RewardCandidate]
     ) -> List[tuple[str, str]]:
-        """Render complete ranking cards with the existing domain card builder."""
+        """Render ranking cards, fitness-first, fitted to the input-token budget."""
         if not self.feedback.enabled:
             raise ValueError("selection.mode='llm_rank' requires feedback cards enabled")
+        from raise_core.selection import candidate_fitness
+
+        # Strongest first so budget shrink drops the weakest.
+        ordered = sorted(candidates, key=candidate_fitness, reverse=True)
         return render_candidate_cards(
-            candidates,
+            ordered,
             archive=self.archive,
             card_module=self._card_module,
             config=self.feedback,
             population_note=self.reflection.split(" || ")[-1] if self.reflection else "",
+            fit_to_input_budget=True,
+            provider=str(getattr(self.llm, "provider", "") or "groq"),
         )
 
     def _request(
@@ -513,6 +525,24 @@ class StageIEvolver:
             }
             return [client_system, f"{self.system_prompt}\n\n{user}"], trim.name, info
 
+        # Leave room for max_tokens under Groq per-request TPM (prompt+completion).
+        # Stage I fit_to_budget uses a RAW token counter; Groq clamp uses raw×margin.
+        # Use groq_raw_input_budget so a "fitted" prompt still leaves completion room.
+        llm_max = int(
+            max_tokens
+            if max_tokens is not None
+            else (getattr(self.llm, "max_tokens", None) or 2000)
+        )
+        provider = str(getattr(self.llm, "provider", "") or "").lower()
+        if provider == "groq":
+            from raise_core.llm import groq_raw_input_budget
+
+            tpm_room = groq_raw_input_budget(llm_max)
+        else:
+            tpm_room = 100_000
+        hard_input = min(int(self.feedback.max_input_tokens), tpm_room)
+        target_input = min(int(self.feedback.target_input_tokens), hard_input)
+
         call_id = self._call_log.next_call_id(call_type)
         record: Dict[str, Any] = {
             "call_id": call_id,
@@ -523,17 +553,17 @@ class StageIEvolver:
             "feedback_card": card is not None,
             "provider": str(getattr(self.llm, "provider", "") or ""),
             "model": getattr(self.llm, "model", None),
-            "max_output_tokens": max_tokens or getattr(self.llm, "max_tokens", None),
+            "max_output_tokens": llm_max,
             "token_method": self._token_counter.method,
-            "max_input_tokens": int(self.feedback.max_input_tokens),
-            "target_input_tokens": int(self.feedback.target_input_tokens),
+            "max_input_tokens": hard_input,
+            "target_input_tokens": target_input,
         }
         try:
             fit = fit_to_budget(
                 render,
                 self._token_counter,
-                max_input_tokens=int(self.feedback.max_input_tokens),
-                target_input_tokens=int(self.feedback.target_input_tokens),
+                max_input_tokens=hard_input,
+                target_input_tokens=target_input,
             )
         except PromptBudgetError as exc:
             self._call_log.write_request(

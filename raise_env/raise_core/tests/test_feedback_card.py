@@ -166,13 +166,27 @@ def _lineage_archive() -> CandidateArchive:
     return archive
 
 
+# Pin rich-card defaults so lean raise.yaml (history=1, traj=1, tight TPM)
+# does not shrink integration expectations in these unit tests.
+_FULL_CARD_CFG = dict(
+    history_entries=3,
+    max_trajectories=3,
+    max_input_tokens=6000,
+    target_input_tokens=5500,
+    training_dynamics=True,
+    component_instrumentation=True,
+    random_calls=True,
+)
+
+
 def _card(archive=None, call_type="mutation", subjects=("mut_0009",), **cfg) -> fc.FeedbackCard:
     archive = archive or _lineage_archive()
+    merged = {**_FULL_CARD_CFG, **cfg}
     return fc.FeedbackCard(
         call_type=call_type,
         subjects=[archive.get(s) for s in subjects],
         archive=archive,
-        config=FeedbackCardConfig(**cfg),
+        config=FeedbackCardConfig(**merged),
         population_note="Population(fitness desc): mut_0009: SR=0.63 ...",
     )
 
@@ -206,13 +220,14 @@ _BATCH_REPLY = (
 
 
 def _evolver(tmp_path, *, reply=_REPLY, archive=None, **cfg) -> StageIEvolver:
+    merged = {**_FULL_CARD_CFG, **cfg}
     evo = StageIEvolver(
         _RecordingLLM(reply),
         score_fn=lambda *_a, **_k: 0.0,
         validator=make_crowdnav_validator(),
         config=StageIConfig(population_size=4),
         prompts=cn_prompts,
-        feedback=FeedbackCardConfig(**cfg),
+        feedback=FeedbackCardConfig(**merged),
         feedback_card=fc,
         llm_log_dir=str(tmp_path / "closed_loop"),
     )
@@ -656,7 +671,9 @@ def test_tight_budget_truncates_and_logs_cuts(tmp_path):
     counter = make_token_counter("groq")
     render, _ = _render_fn(_card(archive), _mutation_user)
     limit = counter.count_request(render(0)[0]) - 400
-    evo.feedback = FeedbackCardConfig(max_input_tokens=limit, target_input_tokens=limit)
+    evo.feedback = FeedbackCardConfig(
+        **{**_FULL_CARD_CFG, "max_input_tokens": limit, "target_input_tokens": limit}
+    )
     evo._try_mutate(_pop(archive)["mut_0009"], "", phase="mutation", attempt=1)
     req = _requests(tmp_path)[0]
     assert req["input_tokens"] <= limit

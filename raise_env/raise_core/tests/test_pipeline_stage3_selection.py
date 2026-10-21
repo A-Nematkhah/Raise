@@ -86,20 +86,8 @@ class _FixedFitnessStage3:
         ).metrics
 
 
-def test_llm_ranker_cannot_pick_outside_tie_set(tmp_path, monkeypatch):
-    """Reversed LLM ranking must not beat the measured best when not tied."""
-
-    holder: dict = {}
-
-    def factory(pack, use_stub=False):
-        # After closed loop, Stage III trains the final pop; assign distinct fits
-        # so the tie set is empty. We intercept after population ids are known
-        # by returning a trainer that ranks by a stable hash gap.
-        trainer = _FixedFitnessStage3({})
-        holder["t"] = trainer
-        return trainer
-
-    monkeypatch.setattr(pipeline_mod, "make_stage3_trainer", factory)
+def test_llm_ranker_cannot_pick_outside_fitness_top_k(tmp_path, monkeypatch):
+    """Reversed LLM ranking must not beat the measured best when outside top-k."""
 
     def rank(_self, cards, *, fallback_order, stage, **kwargs):
         # Always reverse: LLM's favourite is the measured worst.
@@ -113,8 +101,6 @@ def test_llm_ranker_cannot_pick_outside_tie_set(tmp_path, monkeypatch):
 
     monkeypatch.setattr(LLMRanker, "rank", rank)
 
-    # Patch train_and_eval path: give each candidate a unique fitness by id order
-    # once we see them. Use a wrapper that sets decreasing fitness by call order.
     call_i = {"n": 0}
 
     class _Ordered(_FixedFitnessStage3):
@@ -144,7 +130,9 @@ def test_llm_ranker_cannot_pick_outside_tie_set(tmp_path, monkeypatch):
     )
     arts = RaisePipeline(cfg).run()
     sel = arts.manifest["stage3_selection"]
-    assert sel["llm_restricted_to_ties"] is True
+    assert sel["llm_restricted_to_top_k"] is True
+    assert sel["llm_pool_k"] == 1
+    assert sel["llm_restricted_to_ties"] is False
     assert sel["llm_pick_accepted"] is False
     # Measured best stays selected despite reversed LLM ranking.
     assert sel["best_id"] == arts.manifest["best_stage3_id"]
@@ -152,8 +140,61 @@ def test_llm_ranker_cannot_pick_outside_tie_set(tmp_path, monkeypatch):
     assert arts.manifest["stage3_status"] == "ok"
 
 
+def test_llm_ranker_may_pick_within_fitness_top_k(tmp_path, monkeypatch):
+    """LLM may choose the 2nd-best fitness candidate when top_k >= 2."""
+
+    call_i = {"n": 0}
+
+    class _Ordered(_FixedFitnessStage3):
+        def train_and_eval(self, candidate, *, round_index, config, **kwargs):
+            fit = 1.0 - 0.2 * call_i["n"]
+            call_i["n"] += 1
+            self.fits[candidate.candidate_id] = fit
+            return super().train_and_eval(
+                candidate, round_index=round_index, config=config, **kwargs
+            )
+
+    monkeypatch.setattr(
+        pipeline_mod,
+        "make_stage3_trainer",
+        lambda pack, use_stub=False: _Ordered({}),
+    )
+
+    def rank(_self, cards, *, fallback_order, stage, **kwargs):
+        # Prefer the second-best by fitness (index 1 in fitness-desc order).
+        ranking = list(fallback_order)
+        if len(ranking) >= 2:
+            ranking = [ranking[1], ranking[0], *ranking[2:]]
+        return RankResult(
+            ranking=ranking,
+            scores={cid: 0.5 for cid in ranking},
+            weaknesses={cid: [] for cid in ranking},
+            rationale={cid: "test" for cid in ranking},
+        )
+
+    monkeypatch.setattr(LLMRanker, "rank", rank)
+
+    cfg = RaiseRunConfig(output_dir=str(tmp_path / "llm_top_k"))
+    cfg.apply_fast_profile()
+    cfg.selection = SelectionConfig(
+        mode="llm_rank",
+        top_k=2,
+        n_votes=1,
+        p_restart=0.0,
+        seed=cfg.seed,
+    )
+    arts = RaisePipeline(cfg).run()
+    sel = arts.manifest["stage3_selection"]
+    assert sel["llm_restricted_to_top_k"] is True
+    assert sel["llm_pool_k"] == 2
+    assert sel["llm_pick_accepted"] is True
+    assert sel["best_id"] == sel["llm_ranking"][0]
+    assert sel["best_id"] != sel["fitness_best_id"]
+    assert arts.best_stage3.candidate_id == sel["best_id"]
+
+
 def test_llm_ranker_may_pick_within_tie_set(tmp_path, monkeypatch):
-    """When two candidates are statistical ties, LLM may choose the other one."""
+    """When candidates are statistical ties, LLM may choose any of them."""
 
     class _TiedTrainer(_FixedFitnessStage3):
         def train_and_eval(self, candidate, *, round_index, config, **kwargs):
@@ -200,8 +241,8 @@ def test_llm_ranker_may_pick_within_tie_set(tmp_path, monkeypatch):
     )
     arts = RaisePipeline(cfg).run()
     sel = arts.manifest["stage3_selection"]
-    assert sel["llm_restricted_to_ties"] is True
-    # With everyone tied, the reversed LLM top is allowed.
+    assert sel["llm_restricted_to_top_k"] is True
+    # With everyone tied, the reversed LLM top is allowed via tie set.
     assert sel["llm_pick_accepted"] is True
     assert sel["best_id"] == sel["llm_ranking"][0]
     assert arts.best_stage3.candidate_id == sel["best_id"]

@@ -16,6 +16,7 @@ from raise_core.evo_selection.config import SelectionConfig
 
 logger = logging.getLogger(__name__)
 MAX_INVALID_ATTEMPTS = 3
+# Default ranking completion budget; GroqLLMClient still clamps to TPM cap.
 MAX_OUTPUT_TOKENS = 1800
 
 
@@ -60,8 +61,17 @@ def ranking_prompt(cards: Sequence[tuple[str, str]], *, flags: Mapping[str, Sequ
     return (
         "Rank these reward-function candidates using the diagnostic cards below. "
         "Treat each card as the sole source of candidate evidence. Use a "
-        "multi-objective judgment of task success, safety, timeouts, navigation "
-        "quality, and evidence reliability; do not infer unreported metrics. "
+        "multi-objective judgment of SR (success), CR (collision), TR (timeout), "
+        "NT (nav time), PL (path length), ITR (danger_freq / discomfort intrusion), "
+        "and SD (min_dist_in_danger / clearance in the discomfort zone), plus "
+        "evidence reliability; do not infer unreported metrics. "
+        "Weight ITR and SD heavily when SR/CR/TR are similar — lower ITR and "
+        "higher SD are better. "
+        "Any scalar 'fitness' line on a card is secondary diagnostic only; "
+        "do not treat it as the ranking objective. "
+        "Card legend (applies to every candidate below): numbers/Observation are "
+        "measured; Hypothesis lines are unverified; 'unavailable' means missing "
+        "data — do not invent it. "
         "For every candidate, provide concrete weaknesses and one-sentence "
         "rationale. Rank best to worst. Return STRICT JSON only, with exactly "
         'these keys and no markdown: {"ranking":["A"],"scores":{"A":0.5},'
@@ -199,9 +209,13 @@ class LLMRanker:
                     rng.shuffle(shuffled)
                     prompt = ranking_prompt(shuffled, flags=label_flags)
                     try:
-                        raw = str(
-                            self.llm.complete(prompt, max_tokens=MAX_OUTPUT_TOKENS)
-                        )
+                        # Prefer the client's configured max_tokens when smaller
+                        # (YAML llm.max_tokens under tight Groq TPM).
+                        out_cap = MAX_OUTPUT_TOKENS
+                        client_max = getattr(self.llm, "max_tokens", None)
+                        if client_max is not None:
+                            out_cap = min(out_cap, int(client_max))
+                        raw = str(self.llm.complete(prompt, max_tokens=out_cap))
                     except Exception as exc:
                         self._log(
                             {

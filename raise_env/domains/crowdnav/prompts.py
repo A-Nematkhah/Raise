@@ -100,12 +100,13 @@ def _external_knowledge() -> str:
         + _task_description()
         + "\n## Selection objective (not the reward itself)\n"
         + _selection_objective()
-        + "\n## Metrics (as in the CrowdNav++ evaluation)\n"
+        + "\n## Metrics (as in the CrowdNav++ / EvoNav evaluation)\n"
         "- SR: success rate (goal reached); CR: collision rate; TR: timeout rate\n"
-        "- nav_time: mean navigation time of successful episodes (s); "
-        "path_length: mean path length of successful episodes (m)\n"
-        "- danger_freq: fraction of steps in danger; "
-        "min_dist_in_danger: upstream mean distance during those steps (m)"
+        "- NT / nav_time: mean navigation time of successful episodes (s)\n"
+        "- PL / path_length: mean path length of successful episodes (m)\n"
+        "- ITR / danger_freq: fraction of steps in the discomfort zone (lower better)\n"
+        "- SD / min_dist_in_danger: mean distance while in discomfort (higher better)\n"
+        "When SR/CR/TR are close, prefer lower ITR and higher SD."
     )
 
 

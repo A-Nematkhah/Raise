@@ -936,13 +936,18 @@ class ClosedLoopRunner:
             rank_consistency = None
             if ranker is not None:
                 evolver.archive.add_population(ranked, generation=g)
-                cards = evolver.render_selection_cards(ranked)
                 fallback_population = rank_population_for_evolution(ranked)
+                # Fitness-first render; may drop weak cards to fit input budget.
+                cards = evolver.render_selection_cards(fallback_population)
+                card_ids = {cid for cid, _ in cards}
+                fallback_order = [
+                    c.candidate_id
+                    for c in fallback_population
+                    if c.candidate_id in card_ids
+                ]
                 result = ranker.rank(
                     cards,
-                    fallback_order=[
-                        candidate.candidate_id for candidate in fallback_population
-                    ],
+                    fallback_order=fallback_order,
                     seed=int(selection_cfg.seed) + g,
                     stage="stage2",
                     generation=g,
@@ -951,10 +956,20 @@ class ClosedLoopRunner:
                             candidate, selection_cfg
                         )
                         for candidate in ranked
+                        if candidate.candidate_id in card_ids
                     },
                 )
                 by_id = {candidate.candidate_id: candidate for candidate in ranked}
-                ranked = [by_id[candidate_id] for candidate_id in result.ranking]
+                ranked_llm = [
+                    by_id[candidate_id]
+                    for candidate_id in result.ranking
+                    if candidate_id in by_id
+                ]
+                # Candidates dropped from the ranking prompt stay at the tail.
+                ranked_tail = [
+                    c for c in fallback_population if c.candidate_id not in card_ids
+                ]
+                ranked = ranked_llm + ranked_tail
                 note_candidates = [
                     f"{candidate_id}: {result.rationale[candidate_id]}"
                     for candidate_id in result.ranking[: min(3, len(result.ranking))]
@@ -965,7 +980,7 @@ class ClosedLoopRunner:
                         selection_notes
                         + [f"Gen {g} reflection: " + " | ".join(note_candidates)]
                     )[-selection_cfg.reflection_note_cap :]
-                for candidate in ranked:
+                for candidate in ranked_llm:
                     candidate.metadata = {
                         **(candidate.metadata or {}),
                         "llm_selection_rank": (

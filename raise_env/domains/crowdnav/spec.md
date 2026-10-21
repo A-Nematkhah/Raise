@@ -20,16 +20,16 @@ the wrapper adjusts the initial population into the configured interval before
 upstream finishes reset. `human_num_override` remains available for tests and
 sets a fixed count.
 The hard config uses a 30-second time limit, enables five-step constant-
-velocity human path prediction at 0.25-second intervals, and sets
-`robot.visible=True`:
-humans can observe the robot when
-it is within their sensor range/FOV and their ORCA policy responds to it.
-The PPO policy observation's `spatial_edges` contains each visible human's
-current relative position followed by five constant-velocity predicted
-positions, all relative to the robot's current position. The evolved reward
-state remains based on observed current human states, not predicted positions.
-The separate `crowdnav_generalization_17.py` config fixes the population at
-17 humans for out-of-distribution policy evaluation.
+velocity human path prediction at 0.25-second intervals, and defaults to
+`robot.visible=False` (EvoNav-style: humans ignore the robot; ORCA among
+humans only). Set `env.robot_visible: true` if humans should react to the
+robot. The PPO policy observation's `spatial_edges` contains each visible
+human's current relative position followed by five constant-velocity
+predicted positions, all relative to the robot's current position. The
+evolved reward state remains based on observed current human states, not
+predicted positions. Density generalization uses
+`evaluation_variants.humans_{10,15,20}` (plus `*_random` for randomized
+human traits / goal changes).
 
 The upstream simulator resets global NumPy state. The wrapper serializes
 simulator RNG access, restores the caller's global RNG after reset, and keeps

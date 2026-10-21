@@ -52,8 +52,10 @@ def _make_population(n: int = 2) -> list:
 
 
 def test_defaults_and_k3_constant():
+    from raise_config import CONFIG
+
     cfg = Stage3Config()
-    assert cfg.train_env_steps == STAGE3_STEPS == 70_000
+    assert cfg.train_env_steps == STAGE3_STEPS == int(CONFIG.budget.stage3.train_steps)
     assert cfg.eval_episodes == 30
     assert cfg.resume is True
 

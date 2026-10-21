@@ -36,7 +36,9 @@ def test_stub_trainer_is_deterministic():
 
 
 def test_stage2_defaults():
+    from raise_config import CONFIG
+
     cfg = Stage2Config()
-    assert cfg.train_env_steps == 12_000
+    assert cfg.train_env_steps == int(CONFIG.budget.stage2_train_steps)
     assert cfg.eval_episodes == 30
     assert cfg.eval_seed_base is None

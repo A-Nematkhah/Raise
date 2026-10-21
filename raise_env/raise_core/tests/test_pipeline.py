@@ -85,9 +85,8 @@ def test_pipeline_llm_rank_selects_stage3_winner_without_api_calls(
     assert stages == ["stage2", "stage2", "stage3"]
     assert artifacts.best_stage3.candidate_id == artifacts.manifest["best_stage3_id"]
     assert artifacts.manifest["stage3_selection"]["best_id"] == artifacts.best_stage3.candidate_id
-    # LLM may reorder only within {measured best} ∪ ties; a full reverse
-    # outside that set must keep the measured Stage III best.
-    assert artifacts.manifest["stage3_selection"]["llm_restricted_to_ties"] is True
+    # LLM may pick among fitness top-k (selection.top_k), not only ties.
+    assert artifacts.manifest["stage3_selection"]["llm_restricted_to_top_k"] is True
     assert "llm_ranking" in artifacts.manifest["stage3_selection"]
 
 

@@ -136,7 +136,8 @@ def test_upstream_python_config_and_human_override():
     assert upstream.sim.arena_size == 6
     assert upstream.robot.sensor_range == 5
     assert upstream.action_space.kinematics == "holonomic"
-    assert CrowdNavSettings().kinematics == "unicycle"
+    # Settings kinematics follow CONFIG.env; bare env still uses upstream Config (H=20).
+    assert CrowdNavSettings().kinematics == "holonomic"
 
     default_env = RewardInjectedCrowdNavEnv(settings=CrowdNavSettings())
     assert default_env.max_human_num == 20
@@ -165,8 +166,9 @@ def test_raise_config_upstream_is_loadable():
     assert config.sim.predict_method == "const_vel"
     assert config.sim.predict_steps == 5
     assert config.data.pred_timestep == 0.25
-    assert config.action_space.kinematics == "unicycle"
-    assert config.robot.visible is True
+    assert config.action_space.kinematics == "holonomic"
+    assert config.robot.visible is False
+    assert config.env.randomize_attributes is False
 
 
 def test_default_env_keeps_exactly_ten_holonomic_humans():
@@ -224,12 +226,12 @@ def test_default_env_observation_contains_constant_velocity_human_paths():
         env.close()
 
 
-def test_generalization_variant_uses_fixed_17_humans():
+def test_generalization_variant_humans_20_matches_evonav_protocol():
     from raise_config import CONFIG, build_upstream_config
 
-    upstream = build_upstream_config(CONFIG.env, variant="generalization_17", config=CONFIG)
+    upstream = build_upstream_config(CONFIG.env, variant="humans_20", config=CONFIG)
     settings = CrowdNavSettings(
-        kinematics="unicycle",
+        kinematics=str(CONFIG.env.kinematics),
         action_mode="continuous",
         env_config_obj=upstream,
     )
@@ -237,13 +239,26 @@ def test_generalization_variant_uses_fixed_17_humans():
     try:
         obs, _ = env.reset(options={"case": 12})
         assert env.time_limit == 30.0
-        assert env.human_num == 17
-        assert env.min_human_num == env.max_human_num == 17
-        assert len(env.sim.humans) == 17
-        assert env.sim.robot.visible
+        assert env.human_num == 20
+        assert env.min_human_num == env.max_human_num == 20
+        assert len(env.sim.humans) == 20
+        assert env.sim.robot.visible is False
+        assert getattr(env.sim, "randomize_attributes", None) is False
         assert env.observation_space.contains(obs)
     finally:
         env.close()
+
+
+def test_generalization_variant_humans_20_random_enables_traits():
+    from raise_config import CONFIG, build_upstream_config
+
+    upstream = build_upstream_config(
+        CONFIG.env, variant="humans_20_random", config=CONFIG
+    )
+    assert int(upstream.sim.human_num) == 20
+    assert bool(upstream.env.randomize_attributes) is True
+    assert bool(upstream.humans.random_goal_changing) is True
+    assert bool(upstream.robot.visible) is False
 
 
 def test_unicycle_respects_configured_variable_population_range_and_visibility():

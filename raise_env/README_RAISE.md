@@ -166,9 +166,9 @@ sha256) under `--output-dir`. Resume compares the snapshot unless
 | `--ppo-normalize-reward` | `ppo.normalize_reward` |
 | `--domain` | (CrowdNav-only entry point; domain fixed to `crowdnav`) |
 
-Environment presets: **`evaluation_variants.generalization_17`** replaces
-`configs/crowdnav_generalization_17.py` (17 humans). The default simulator
-matches former `configs/crowdnav_hard.py` fields now in `CONFIG.env`.
+Environment presets: **`evaluation_variants.humans_{10,15,20}`** (and
+`*_random` for the EvoNav w/ random protocol). Default simulator fields live
+in `CONFIG.env` / `configs/raise.yaml`.
 
 Resume: rerun with the same `--output-dir` (on by default; `--no-resume`
 starts fresh). Checkpoints: `closed_loop/checkpoint.json` (per trained
@@ -246,11 +246,12 @@ default).
 
 Robot / action options: `--set env.kinematics=…`, `--set env.action_mode=…`
 (discrete uses the wrapper action table). Default env: 30 s time limit, 10
-humans (`human_num=10`, `human_num_range=0`), unicycle kinematics,
-constant-velocity prediction (5 steps, 0.25 s), `robot.visible=True`.
-Stage I collection historically uses holonomic kinematics via
-`budget.stage1.collect_kinematics`. The wrapper corrects CrowdNav++'s unicycle
-reset sampling to honor the configured population range.
+humans (`human_num=10`, `human_num_range=0`), holonomic kinematics,
+constant-velocity prediction (5 steps, 0.25 s), `robot.visible=False`
+(EvoNav-style: humans ignore the robot). Stage III can run
+`budget.stage3.refine_rounds` LLM refine+retrain cycles (G3). Stage I
+collection uses `budget.stage1.collect_kinematics`. The wrapper corrects
+CrowdNav++'s unicycle reset sampling to honor the configured population range.
 Timeout is always reported independently as TR and as an episode outcome.
 
 Before a long evolution, train a PPO policy with CrowdNav++'s native reward

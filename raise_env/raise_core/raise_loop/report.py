@@ -65,12 +65,50 @@ def build_closed_loop_report(
             lines.append(f"manifest n_epochs: {manifest.get('n_epochs')}")
         if manifest.get("n_labeled_total") is not None:
             lines.append(f"manifest n_trained: {manifest.get('n_labeled_total')}")
+    final_line = _final_metrics_line(output_dir)
+    if final_line:
+        lines.append("-" * 60)
+        lines.append(final_line)
     lines.append("-" * 60)
     lines.append("files:")
     lines.append(f"  {os.path.join(output_dir, 'closed_loop', 'epochs.jsonl')}")
     lines.append(f"  {os.path.join(output_dir, 'closed_loop', 'REPORT.txt')}")
     lines.append(f"  {os.path.join(output_dir, 'closed_loop', 'manifest.json')}")
     return "\n".join(lines) + "\n"
+
+
+def _final_metrics_line(output_dir: str) -> Optional[str]:
+    """SR/CR/TR/NT/PL/ITR/SD from final_candidate.json when present."""
+    path = os.path.join(output_dir, "final_candidate.json")
+    if not os.path.isfile(path):
+        return None
+    try:
+        import json
+
+        payload = json.loads(open(path, encoding="utf-8").read())
+    except (OSError, ValueError, TypeError):
+        return None
+    md = payload.get("metadata") or {}
+    src = md.get("final_eval") or md.get("last_metrics") or {}
+    if not isinstance(src, dict) or not src:
+        return None
+
+    def _v(key: str, *aliases: str) -> str:
+        for k in (key, *aliases):
+            if src.get(k) is not None:
+                try:
+                    return f"{float(src[k]):.3f}"
+                except (TypeError, ValueError):
+                    pass
+        return "n/a"
+
+    return (
+        f"final: id={payload.get('candidate_id', '?')} "
+        f"SR={_v('SR')} CR={_v('CR')} TR={_v('TR')} "
+        f"NT={_v('NT', 'nav_time')} PL={_v('PL', 'path_length')} "
+        f"ITR={_v('ITR', 'danger_freq')} SD={_v('SD', 'min_dist_in_danger')} "
+        f"fitness={_v('fitness')}"
+    )
 
 
 def _score1_vs_fitness_line(output_dir: str) -> Optional[str]:

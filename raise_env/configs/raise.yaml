@@ -37,7 +37,8 @@
 #
 # Stage I dataset / generalization eval / smoke vendor:
 #   python scripts/collect_crowdnav_stage1_dataset.py
-#   python scripts/evaluate_crowdnav_generalization.py --run-dir <run-dir>
+#   python scripts/evaluate_crowdnav_generalization.py --run-dir <run-dir> --densities
+#   python scripts/evaluate_crowdnav_generalization.py --run-dir <run-dir> --all-variants
 #   python scripts/smoke_crowdnavpp.py
 #
 # Dev tools (scripts/dev/):
@@ -116,47 +117,60 @@ env:
   predict_method: const_vel     # none | const_vel
   predict_steps: 5
   pred_timestep: 0.25
-  robot_visible: true
+  robot_visible: false          # EvoNav: humans ignore robot (ORCA among humans)
   kinematics: holonomic          # train/eval: holonomic | unicycle
   action_mode: continuous       # discrete | continuous
   speed_samples: 5
   rotation_samples: 16
+  # Default train = "w/o random"; use evaluation_variants humans_*_random for w/ random.
+  randomize_attributes: false
+  random_goal_changing: false
+  random_radii: false
+  random_v_pref: false
 
+# ~48h wall-clock profile (GPU + Groq llm_rank). Approx train env-steps:
+#   Stage II: 8 gens * 8 cands * 18000 * 3 seeds ≈ 3.46M
+#   Stage III: top_k=4 * 100000 * 3 seeds * refine_rounds ≈ 1.20M × G3
+# Plus holdout/final eval + LLM → typically ~36–55h at refine_rounds=1;
+# refine_rounds=3 adds ~2× Stage III + LLM mutation cost.
+# Too slow: drop stage2_seeds to 2, generations to 6, or refine_rounds to 1.
+# Too fast (<36h): raise stage2_train_steps to 22000 or generations to 10.
 budget:
-  population_size: 6
-  generations: 4
-  stage2_train_steps: 12000     # K2 PPO env steps per candidate
+  population_size: 8
+  generations: 8
+  stage2_train_steps: 18000     # K2 PPO env steps per candidate
   stage2_eval_episodes: 30
-  stage2_seeds: 1
+  stage2_seeds: 3
   stage2_paired_seeds: true
   stage2_successive_halving: false
-  n_envs: 1
-  label_workers: 1
-  final_eval_episodes: 100      # 0 = skip blind test re-eval
+  n_envs: 4                     # wall-clock; keep K2 >= n_envs * ppo.n_steps
+  label_workers: 1              # keep 1 with CUDA
+  final_eval_episodes: 100
   eval_tied_finalists: true
   stall_seconds: 0.0
   elitism: true
-  n_crossover: null             # null → default operator split
+  n_crossover: null             # null → default operator split for N=8
   n_mutation: null
   n_random: null
-  mutation_exclude_collapsed: false
+  mutation_exclude_collapsed: true
   collapse_cr: 0.8
   stage2_eval_split: val
-  eval_mode: holdout_only       # both | holdout_only
-  warm_start: false             # Stage II parent warm-start
+  eval_mode: holdout_only
+  warm_start: false
   stage1:
     dataset_path: domains/crowdnav/data/stage1_dataset
-    collect_kinematics: holonomic   # dataset collect (may differ from env.kinematics)
+    collect_kinematics: holonomic
     collect_episodes: 40
     max_invalid_replacements: 16
     behavioral_dedup: true
   stage3:
-    top_k: null                 # null = all survivors after collapse filter
-    train_steps: 70000          # K3
+    top_k: 4
+    train_steps: 100000         # K3
     eval_episodes: 30
-    n_seeds: 1
+    n_seeds: 3
     warm_start: false
     skip_collapsed: true
+    refine_rounds: 3            # EvoNav G3: train → LLM refine reward → retrain
 
 ppo:
   n_steps: 256
@@ -165,38 +179,41 @@ ppo:
   learning_rate: 0.0003
   ent_coef: 0.0
   normalize_reward: false
-  device: cuda                  # cpu | cuda
-  torch_threads: 1              # 0 = library default
+  device: cuda
+  torch_threads: 1
 
 llm:
-  provider: seed                # seed | groq | vllm | ollama | scripted
-  model: null
+  provider: groq
+  model: openai/gpt-oss-120b    # Groq gpt-oss 120B
   temperature: 0.1
-  max_tokens: null
-  reasoning_effort: null        # Groq gpt-oss: none|low|medium|high
-  seed: null                    # null → use top-level seed
+  # Groq on_demand TPM for this org is 8000 (prompt + max_tokens). Keep headroom.
+  max_tokens: 2000
+  reasoning_effort: null
+  seed: null
 
 selection:
-  mode: legacy                  # legacy | llm_rank
+  mode: llm_rank
   top_k: 2
-  n_votes: 3
+  n_votes: 3                    # each vote burns TPM; keep modest on 8k TPM tier
   temperature: 0.1
   p_restart: 0.1
-  guards: false
+  guards: true
   guard_success_threshold: 0.9
   guard_min_path_length: 0.1
   reflection_note_cap: 3
-  mutation_parents: lower       # lower | rank_weighted | tournament
+  mutation_parents: lower
   keep_runtime_elite: true
   behavioral_dedup: true
   max_fallback_fraction: 0.5
   strict_fallback: false
-  infra_error_policy: retry_then_abort   # retry_then_abort | abort | penalize
+  infra_error_policy: retry_then_abort
   feedback_card: true
-  max_input_tokens: 6000
-  target_input_tokens: 5500
-  feedback_history: 3
-  feedback_trajectories: 3
+  # Measured: org TPM Limit 8000/request-minute. Cap INPUT so input+max_tokens < 8000.
+  # Safe: 4500 + 2000 = 6500. Raise only after upgrading Groq Dev Tier / TPM.
+  max_input_tokens: 4500
+  target_input_tokens: 4000
+  feedback_history: 1          # keep ranking/mutation prompts lean
+  feedback_trajectories: 1
   feedback_random_calls: true
   feedback_training_dynamics: true
   feedback_components: true
@@ -220,9 +237,41 @@ safety:
   max_sequence_repeat: 10000
   max_factorial_arg: 1000
 
-# Named env overlays (e.g. generalization eval with 17 humans)
+# Generalization densities H ∈ {10, 15, 20}; *_random = EvoNav "w/ random".
 evaluation_variants:
-  generalization_17:
+  humans_10:
+    env:
+      human_num: 10
+      human_num_range: 0
+  humans_15:
     env:
       human_num: 15
       human_num_range: 0
+  humans_20:
+    env:
+      human_num: 20
+      human_num_range: 0
+  humans_20_random:
+    env:
+      human_num: 20
+      human_num_range: 0
+      randomize_attributes: true
+      random_goal_changing: true
+      random_radii: true
+      random_v_pref: true
+  humans_15_random:
+    env:
+      human_num: 15
+      human_num_range: 0
+      randomize_attributes: true
+      random_goal_changing: true
+      random_radii: true
+      random_v_pref: true
+  humans_10_random:
+    env:
+      human_num: 10
+      human_num_range: 0
+      randomize_attributes: true
+      random_goal_changing: true
+      random_radii: true
+      random_v_pref: true

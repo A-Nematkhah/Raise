@@ -39,12 +39,18 @@ class EnvConfig:
     predict_method: str = "const_vel"  # none | const_vel
     predict_steps: int = 5  # const-vel prediction horizon (steps)
     pred_timestep: float = 0.25  # seconds; prediction interval base
-    robot_visible: bool = True  # humans react to the robot
-    # Train / Stage II / Stage III robot kinematics (effective default today).
-    kinematics: str = "unicycle"  # holonomic | unicycle
+    # EvoNav-style: humans ignore the robot (ORCA among humans only).
+    robot_visible: bool = False
+    # Train / Stage II / Stage III robot kinematics.
+    kinematics: str = "holonomic"  # holonomic | unicycle
     action_mode: str = "continuous"  # discrete | continuous
     speed_samples: int = 5  # discrete action table speeds
     rotation_samples: int = 16  # discrete action table headings
+    # EvoNav "w/ random" protocol (off = fixed traits / no mid-episode goal flips).
+    randomize_attributes: bool = False
+    random_goal_changing: bool = False
+    random_radii: bool = False
+    random_v_pref: bool = False
 
 
 @dataclass(frozen=True)
@@ -69,6 +75,9 @@ class Stage3Budget:
     n_seeds: int = 1  # independent PPO train seeds per finalist
     warm_start: bool = False
     skip_collapsed: bool = True
+    # EvoNav-style G3: train → LLM reward refine → retrain, repeated.
+    # 1 = single long train (legacy); 3 ≈ paper G3 fidelity rounds.
+    refine_rounds: int = 1
 
 
 @dataclass(frozen=True)
@@ -190,10 +199,22 @@ class RaiseConfig:
     llm: LlmConfig = field(default_factory=LlmConfig)
     selection: SelectionSection = field(default_factory=SelectionSection)
     safety: SafetyConfig = field(default_factory=SafetyConfig)
-    # Named env overrides (replaces configs/crowdnav_generalization_17.py).
+    # Named env overlays for generalization eval (H ∈ {10, 15, 20} ± random).
     evaluation_variants: Dict[str, Dict[str, Any]] = field(
         default_factory=lambda: {
-            "generalization_17": {"env": {"human_num": 17, "human_num_range": 0}},
+            "humans_10": {"env": {"human_num": 10, "human_num_range": 0}},
+            "humans_15": {"env": {"human_num": 15, "human_num_range": 0}},
+            "humans_20": {"env": {"human_num": 20, "human_num_range": 0}},
+            "humans_20_random": {
+                "env": {
+                    "human_num": 20,
+                    "human_num_range": 0,
+                    "randomize_attributes": True,
+                    "random_goal_changing": True,
+                    "random_radii": True,
+                    "random_v_pref": True,
+                }
+            },
         }
     )
 
@@ -233,6 +254,8 @@ def validate(config: RaiseConfig) -> RaiseConfig:
         raise ValueError("K2/K3 train_steps must be >= 1")
     if bud.stage2_seeds < 1 or bud.stage3.n_seeds < 1:
         raise ValueError("stage2_seeds and stage3.n_seeds must be >= 1")
+    if int(bud.stage3.refine_rounds) < 1:
+        raise ValueError("budget.stage3.refine_rounds must be >= 1")
     if bud.stage2_successive_halving and bud.stage2_seeds > 1:
         raise ValueError("stage2_successive_halving cannot combine with stage2_seeds > 1")
     if bud.n_envs < 1 or bud.label_workers < 1:
@@ -339,6 +362,10 @@ def build_upstream_config(env: EnvConfig, *, variant: Optional[str] = None, conf
     cfg.data.pred_timestep = float(active.pred_timestep)
     cfg.action_space.kinematics = str(active.kinematics)
     cfg.robot.visible = bool(active.robot_visible)
+    cfg.env.randomize_attributes = bool(active.randomize_attributes)
+    cfg.humans.random_goal_changing = bool(active.random_goal_changing)
+    cfg.humans.random_radii = bool(active.random_radii)
+    cfg.humans.random_v_pref = bool(active.random_v_pref)
     return cfg
 
 
