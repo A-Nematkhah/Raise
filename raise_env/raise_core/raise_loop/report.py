@@ -77,7 +77,7 @@ def _score1_vs_fitness_line(output_dir: str) -> Optional[str]:
     """One-line Spearman summary; never fails the report writer."""
     try:
         # Imported lazily so stub/fast tests need no scipy/numpy beyond metrics.
-        from scripts.analyze_score1_vs_fitness import analyze_run, format_report_line
+        from raise_core.score1_fitness import analyze_run, format_report_line
 
         return format_report_line(analyze_run(__import__("pathlib").Path(output_dir)))
     except Exception as exc:  # noqa: BLE001

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import glob
-import json
 import logging
 import os
 from pathlib import Path
@@ -19,13 +18,9 @@ from stable_baselines3 import PPO
 
 from domains.crowdnav.env_wrapper import RewardInjectedCrowdNavEnv, eval_cases
 from raise_core.domains import get_pack, make_validator
+from raise_core.json_io import read_json_dict
 
 logger = logging.getLogger(__name__)
-
-
-def _load_json(path: str) -> Dict[str, Any]:
-    with open(path, encoding="utf-8") as fh:
-        return json.load(fh)
 
 
 def _resolve_checkpoint(run_dir: str, cand: Dict[str, Any]) -> Optional[str]:
@@ -59,7 +54,8 @@ def _pick_best_candidate(run_dir: str) -> Optional[Dict[str, Any]]:
     for name in ("best_stage3.json", "final_candidate.json", "best_stage2.json"):
         path = os.path.join(run_dir, name)
         if os.path.isfile(path):
-            return _load_json(path)
+            data = read_json_dict(path)
+            return data if data is not None else None
     return None
 
 

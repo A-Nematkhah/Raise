@@ -318,9 +318,6 @@ class GroqKeyManager:
     def last_errors(self, value: list) -> None:
         self._local.last_errors = list(value)
 
-    def _current_key(self) -> str:
-        return self.keys[self.index]
-
     def _advance(self) -> None:
         with self._lock:
             self.index = (self.index + 1) % len(self.keys)

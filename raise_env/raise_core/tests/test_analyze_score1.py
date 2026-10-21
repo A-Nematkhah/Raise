@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from scripts.analyze_score1_vs_fitness import analyze_run, format_report_line, main
+from raise_core.score1_fitness import analyze_run, format_report_line
 
 
 def _write_pop(path: Path, rows):
@@ -52,4 +52,3 @@ def test_analyze_score1_vs_fitness_on_synthetic_run(tmp_path: Path):
     assert summary["collapsed_cr_ge_0.8_score1"]["n"] == 1
     line = format_report_line(summary)
     assert "Spearman=" in line
-    assert main([str(tmp_path)]) == 0

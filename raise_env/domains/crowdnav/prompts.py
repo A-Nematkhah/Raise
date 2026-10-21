@@ -9,8 +9,6 @@ from raise_core.sandbox.config import (
     SandboxConfig,
 )
 
-DOMAIN_NAME = "crowdnav"
-
 _MAGNITUDE_RULE = (
     f"Keep every per-step total reward within +/-{SandboxConfig().max_abs_reward:g} "
     "(larger values are rejected)."
@@ -219,14 +217,6 @@ state.robot.speed     # compute (state.robot.vx ** 2 + state.robot.vy ** 2) ** 0
 {reflection_block}
 {external_knowledge_block}
 """
-
-PROMPT_MEMORY_EXAMPLE = '''def compute_reward(state, memory):
-    prev = memory.get("prev_goal_distance")
-    progress = 0.0 if prev is None else float(prev) - float(state.goal_distance)
-    memory["prev_goal_distance"] = float(state.goal_distance)
-    total = float(progress)
-    return total, {"progress_term": total}
-'''
 
 _REWARD_STATE_ACCESS = """\
 CrowdNavRewardState access (dot notation only — never getattr/hasattr/__import__); snapshot AFTER the step:

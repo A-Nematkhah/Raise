@@ -39,7 +39,6 @@ __all__ = [
     "paired_difference",
 ]
 
-OUTCOMES = ("success", "collision", "timeout")
 OUTCOME_SCORES = {"success": 1.0, "collision": -1.0, "timeout": -0.5}
 
 

@@ -13,30 +13,29 @@ Examples::
 
 from __future__ import annotations
 
-import os as _os, sys as _sys
-_ROOT = _os.path.abspath(_os.path.join(_os.path.dirname(__file__), ".."))
-if _ROOT not in _sys.path:
-    _sys.path.insert(0, _ROOT)
+import os as _os
+import sys as _sys
+
+_RAISE_ROOT = _os.path.abspath(_os.path.join(_os.path.dirname(__file__), ".."))
+if _RAISE_ROOT not in _sys.path:
+    _sys.path.insert(0, _RAISE_ROOT)
+
+from raise_core.script_utils import bootstrap_raise_env
+
+bootstrap_raise_env(chdir=True)
 import argparse
-import json
 import os
 import sys
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from raise_core.console import ensure_utf8_stdio
-
-os.chdir(_ROOT)
-
-
-def _load_json(path: str) -> Dict[str, Any]:
-    with open(path, encoding="utf-8") as f:
-        return json.load(f)
+from raise_core.json_io import read_json_dict
 
 
 def _optional_json(path: str) -> Optional[Dict[str, Any]]:
     if not os.path.isfile(path):
         return None
-    return _load_json(path)
+    return read_json_dict(path)
 
 
 def _scalar(m: Dict[str, Any]) -> float:

@@ -18,7 +18,11 @@ _RAISE_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _load_script(name: str):
-    path = _RAISE_ROOT / "scripts" / f"{name}.py"
+    if name == "run_baselines":
+        import raise_core.post_run_baselines as mod
+
+        return mod
+    path = _RAISE_ROOT / "scripts" / "dev" / f"{name}.py"
     spec = importlib.util.spec_from_file_location(f"{name}_under_test", path)
     assert spec is not None and spec.loader is not None
     mod = importlib.util.module_from_spec(spec)

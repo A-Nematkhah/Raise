@@ -7,10 +7,16 @@ Usage (from raise_env/):
 
 from __future__ import annotations
 
-import os as _os, sys as _sys
-_ROOT = _os.path.abspath(_os.path.join(_os.path.dirname(__file__), ".."))
-if _ROOT not in _sys.path:
-    _sys.path.insert(0, _ROOT)
+import os as _os
+import sys as _sys
+
+_RAISE_ROOT = _os.path.abspath(_os.path.join(_os.path.dirname(__file__), ".."))
+if _RAISE_ROOT not in _sys.path:
+    _sys.path.insert(0, _RAISE_ROOT)
+
+from raise_core.script_utils import bootstrap_raise_env
+
+bootstrap_raise_env()
 import argparse  # noqa: E402
 import os  # noqa: E402
 import sys  # noqa: E402

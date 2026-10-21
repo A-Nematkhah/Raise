@@ -34,6 +34,7 @@ from domains.crowdnav.watchdog import StallWatchdog, stall_seconds_from_config
 from raise_core import console
 from raise_core.refine import ProxyMetrics, StubPolicyTrainer
 from raise_core.sandbox.runtime import MAX_REWARD_COMPONENT_KEYS
+from raise_core.seeds import HOLDOUT_SEED_OFFSET, TRAIN_EVAL_SEED_OFFSET
 from raise_core.validate import StubPolicyTrainer as Stage3StubTrainer
 from raise_core.validate import TrainEvalBundle
 
@@ -48,10 +49,6 @@ warnings.filterwarnings(
 )
 
 EVAL_SPLITS = ("val", "test")
-# Seed offsets of the training-scenario eval (``eval_mode=both``) and of the
-# stochastic-policy action sampling, relative to the eval seed base.
-TRAIN_EVAL_SEED_OFFSET = 10_003
-HOLDOUT_SEED_OFFSET = 50_003
 
 
 class CrowdNavAdapter:
@@ -313,23 +310,6 @@ def _eval_metrics(
     def _step(obs: Any) -> Any:
         action, _ = model.predict(obs, deterministic=deterministic)
         return env.step(action)
-
-    return _eval_with_step(
-        env, _step, cases=cases, record_components=record_components
-    )
-
-
-def eval_act_fn_metrics(
-    env: RewardInjectedCrowdNavEnv,
-    act_fn: Any,
-    *,
-    cases: Sequence[int],
-    record_components: bool = False,
-) -> ProxyMetrics:
-    """Same metrics as ``_eval_metrics``, but ``act_fn()`` returns an upstream action."""
-
-    def _step(_obs: Any) -> Any:
-        return env.step_upstream(act_fn())
 
     return _eval_with_step(
         env, _step, cases=cases, record_components=record_components

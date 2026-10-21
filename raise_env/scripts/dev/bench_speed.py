@@ -12,22 +12,25 @@ no-Monitor variants) is applied at runtime inside the worker process only.
 
 Usage (from ``raise_env/``)::
 
-    python scripts/bench_speed.py --phase info 0 1 2 3 4 5 report
-    python scripts/bench_speed.py --phase 1 --only p1.threads.t4      # rerun one row
-    python scripts/bench_speed.py --phase all --resume                # skip finished rows
-    python scripts/bench_speed.py --phase 0 1 --quick                 # smoke-size budgets
-    python scripts/bench_speed.py --list                              # print all rows
+    python scripts/dev/bench_speed.py --phase info 0 1 2 3 4 5 report
+    python scripts/dev/bench_speed.py --phase 1 --only p1.threads.t4
+    python scripts/dev/bench_speed.py --phase all --resume
+    python scripts/dev/bench_speed.py --phase 0 1 --quick
+    python scripts/dev/bench_speed.py --list
 """
 
 from __future__ import annotations
 
-import os
-import sys
+import os as _os
+import sys as _sys
 
-_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-if _ROOT not in sys.path:
-    sys.path.insert(0, _ROOT)
-os.chdir(_ROOT)
+_RAISE_ROOT = _os.path.abspath(_os.path.join(_os.path.dirname(__file__), "..", ".."))
+if _RAISE_ROOT not in _sys.path:
+    _sys.path.insert(0, _RAISE_ROOT)
+
+from raise_core.script_utils import bootstrap_raise_env
+
+bootstrap_raise_env(chdir=True)
 
 import argparse  # noqa: E402
 import base64  # noqa: E402
@@ -1927,7 +1930,10 @@ def _spec_hash(row: Row, repeats: int, warmup: int, quick: bool) -> str:
 
 
 def _row_cmd(row: Row, quick: bool) -> str:
-    return f"python scripts/bench_speed.py --phase {row.phase} --only {row.row_id}" + (" --quick" if quick else "")
+    return (
+        f"python scripts/dev/bench_speed.py --phase {row.phase} --only {row.row_id}"
+        + (" --quick" if quick else "")
+    )
 
 
 def _complete_rows(quick: bool) -> Dict[str, str]:

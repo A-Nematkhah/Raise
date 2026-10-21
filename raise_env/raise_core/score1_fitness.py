@@ -1,15 +1,9 @@
-#!/usr/bin/env python3
-"""Print Spearman(Score1, Stage II fitness) for a RAISE run directory (P1-6).
-
-Does not change Score1 weights. Safe to call from the closed-loop report writer.
-"""
+"""Spearman correlation between Stage I Score1 and Stage II fitness for a run."""
 
 from __future__ import annotations
 
-import argparse
 import json
 import math
-import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -18,7 +12,7 @@ def _spearman(xs: Sequence[float], ys: Sequence[float]) -> Optional[float]:
     n = len(xs)
     if n < 2:
         return None
-    # Average ranks for ties.
+
     def ranks(vals: Sequence[float]) -> List[float]:
         order = sorted(range(n), key=lambda i: vals[i])
         out = [0.0] * n
@@ -124,26 +118,4 @@ def format_report_line(summary: Dict[str, Any]) -> str:
     )
 
 
-def main(argv: Optional[Sequence[str]] = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("run_dir", type=str, help="RAISE output directory")
-    parser.add_argument(
-        "--json",
-        action="store_true",
-        help="Print the full summary dict as JSON",
-    )
-    args = parser.parse_args(list(argv) if argv is not None else None)
-    run_dir = Path(args.run_dir)
-    if not run_dir.is_dir():
-        print(f"not a directory: {run_dir}", file=sys.stderr)
-        return 2
-    summary = analyze_run(run_dir)
-    if args.json:
-        print(json.dumps(summary, indent=2))
-    else:
-        print(format_report_line(summary))
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
+__all__ = ["analyze_run", "format_report_line"]

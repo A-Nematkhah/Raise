@@ -1,0 +1,14 @@
+Licenses for this repository
+============================
+
+This repository contains original RAISE experiment code under `raise_env/` and
+vendored third-party software.
+
+- RAISE experiment tree (`raise_env/`, excluding `third_party/`): see
+  `raise_env/LICENSE` and `raise_env/NOTICE.md`.
+- Vendored CrowdNav++ simulator: `raise_env/third_party/crowdnavpp/LICENSE`
+  (MIT, Copyright (c) 2023 Shuijing Liu). Upstream notes:
+  `raise_env/third_party/crowdnavpp/UPSTREAM.md` and
+  `raise_env/third_party/crowdnavpp/NOTICE.md`.
+
+When redistributing, include the notices above with the corresponding trees.

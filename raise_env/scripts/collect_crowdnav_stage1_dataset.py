@@ -27,18 +27,14 @@ Robot behaviours:
 from __future__ import annotations
 
 import os as _os
-import sys as _sys
 
 _ROOT = _os.path.abspath(_os.path.join(_os.path.dirname(__file__), ".."))
-if _ROOT not in _sys.path:
-    _sys.path.insert(0, _ROOT)
-import raise_paths  # noqa: E402,F401
+import raise_paths  # noqa: F401
 import argparse  # noqa: E402
-import copy  # noqa: E402
 import math  # noqa: E402
 import sys  # noqa: E402
 from collections import Counter  # noqa: E402
-from typing import Any, Callable, Dict, List, Tuple  # noqa: E402
+from typing import Any, Dict, List  # noqa: E402
 
 import numpy as np  # noqa: E402
 
@@ -47,126 +43,43 @@ from domains.crowdnav.env_wrapper import (  # noqa: E402
     eval_cases,
     load_env_config,
 )
+from crowd_sim.envs.utils.action import ActionRot, ActionXY  # noqa: E402,F401
+from domains.crowdnav.reference_controllers import (  # noqa: E402
+    BEHAVIOURS,
+    joint_state as _joint_state,  # noqa: F401
+    make_controller,
+)
 from domains.crowdnav.settings import (  # noqa: E402
     DEFAULT_ENV_CONFIG_PATH,
     CrowdNavSettings,
-    UNICYCLE_ROTATION_DELTA_MAX,
-    UNICYCLE_SPEED_DELTA_MAX,
-    UNICYCLE_SPEED_DELTA_MIN,
+    UNICYCLE_ROTATION_DELTA_MAX,  # noqa: F401
+    UNICYCLE_SPEED_DELTA_MAX,  # noqa: F401
+    UNICYCLE_SPEED_DELTA_MIN,  # noqa: F401
 )
+
+_make_controller = make_controller
 from domains.crowdnav.stage1 import (  # noqa: E402
     DEFAULT_STAGE1_DATASET,
     CrowdNavTrajectoryRecord,
     save_crowdnav_dataset,
 )
+from raise_config import CONFIG  # noqa: E402
 from raise_core.console import ensure_utf8_stdio  # noqa: E402
-from crowd_nav.policy.orca import ORCA  # noqa: E402
-from crowd_sim.envs.utils.action import ActionRot, ActionXY  # noqa: E402
-from crowd_sim.envs.utils.state import JointState  # noqa: E402
 
 UPSTREAM_COMMIT = "390773137be04ed14e27620dc5fd7c5e1a5b1f62"
-# (safety_space m, speed scale, time_horizon s). None time_horizon -> ORCA default (5 s).
-_ORCA_SPECS: Dict[str, Tuple[float, float, float | None]] = {
-    "orca": (0.0, 1.0, None),
-    "orca_ss005": (0.05, 1.0, None),
-    "orca_ss010": (0.10, 1.0, None),
-    "orca_cautious": (0.15, 1.0, None),
-    "orca_ss025": (0.25, 1.0, None),
-    "orca_slow08": (0.0, 0.8, None),
-    "orca_slow06": (0.0, 0.6, None),
-    "orca_reckless": (0.0, 1.0, 1.0),
+_ORCA_SPECS = {
+    k: {"safety_space": s, "speed_scale": v, "time_horizon": th}
+    for k, (s, v, th) in (
+        ("orca", (0.0, 1.0, None)),
+        ("orca_ss005", (0.05, 1.0, None)),
+        ("orca_ss010", (0.10, 1.0, None)),
+        ("orca_cautious", (0.15, 1.0, None)),
+        ("orca_ss025", (0.25, 1.0, None)),
+        ("orca_slow08", (0.0, 0.8, None)),
+        ("orca_slow06", (0.0, 0.6, None)),
+        ("orca_reckless", (0.0, 1.0, 1.0)),
+    )
 }
-BEHAVIOURS = tuple(_ORCA_SPECS) + ("linear", "linear_slow", "stop", "random")
-_SLOW_FRACTION = 0.3
-
-
-def _joint_state(env: RewardInjectedCrowdNavEnv) -> JointState:
-    visibility = env.sim.human_visibility
-    if len(visibility) != len(env.sim.humans):
-        raise RuntimeError("CrowdNav++ visibility flags do not match its human population")
-    return JointState(
-        env.sim.robot.get_full_state(),
-        [
-            human.get_observable_state()
-            for human, visible in zip(env.sim.humans, visibility)
-            if visible
-        ],
-    )
-
-
-def _velocity_action(
-    env: RewardInjectedCrowdNavEnv, vx: float, vy: float
-) -> Any:
-    if env.settings.kinematics == "holonomic":
-        return ActionXY(float(vx), float(vy))
-
-    robot = env.sim.robot
-    speed = min(math.hypot(vx, vy), float(robot.v_pref))
-    target_heading = math.atan2(vy, vx) if speed > 0.0 else float(robot.theta)
-    heading_delta = (target_heading - float(robot.theta) + math.pi) % (2.0 * math.pi) - math.pi
-    speed_delta = speed - float(env.sim.desiredVelocity[0])
-    return ActionRot(
-        float(np.clip(speed_delta, UNICYCLE_SPEED_DELTA_MIN, UNICYCLE_SPEED_DELTA_MAX)),
-        float(np.clip(heading_delta, -UNICYCLE_ROTATION_DELTA_MAX, UNICYCLE_ROTATION_DELTA_MAX)),
-    )
-
-
-def _stop_action(env: RewardInjectedCrowdNavEnv) -> Any:
-    if env.settings.kinematics == "holonomic":
-        return ActionXY(0.0, 0.0)
-    speed = float(env.sim.desiredVelocity[0])
-    return ActionRot(
-        float(np.clip(-speed, UNICYCLE_SPEED_DELTA_MIN, UNICYCLE_SPEED_DELTA_MAX)),
-        0.0,
-    )
-
-
-def _make_controller(
-    behaviour: str, env: RewardInjectedCrowdNavEnv, rng: np.random.Generator
-) -> Callable[[], Any]:
-    """Per-step upstream action for ``behaviour`` (called after ``env.reset``)."""
-    if behaviour in _ORCA_SPECS:
-        safety, speed_scale, time_horizon = _ORCA_SPECS[behaviour]
-        config = copy.deepcopy(env.env_config)
-        config.orca.safety_space = float(safety)
-        if time_horizon is not None:
-            config.orca.time_horizon = float(time_horizon)
-        policy = ORCA(config)
-        policy.time_step = env.time_step
-        policy.safety_space = float(safety)
-
-        def _orca() -> Any:
-            desired = policy.predict(_joint_state(env))
-            return _velocity_action(
-                env, desired.vx * speed_scale, desired.vy * speed_scale
-            )
-
-        return _orca
-    if behaviour in ("linear", "linear_slow"):
-        scale = 1.0 if behaviour == "linear" else _SLOW_FRACTION
-
-        def _linear() -> Any:
-            robot = env.sim.robot
-            dx = float(robot.gx - robot.px)
-            dy = float(robot.gy - robot.py)
-            distance = math.hypot(dx, dy)
-            speed = float(robot.v_pref) * scale
-            if distance == 0.0:
-                return _stop_action(env)
-            return _velocity_action(env, dx * speed / distance, dy * speed / distance)
-
-        return _linear
-    if behaviour == "stop":
-        return lambda: _stop_action(env)
-    if behaviour == "random":
-        if env.settings.kinematics == "holonomic":
-            table = env.action_table
-            return lambda: ActionXY(*table[int(rng.integers(len(table)))])
-        return lambda: ActionRot(
-            float(rng.uniform(UNICYCLE_SPEED_DELTA_MIN, UNICYCLE_SPEED_DELTA_MAX)),
-            float(rng.uniform(-UNICYCLE_ROTATION_DELTA_MAX, UNICYCLE_ROTATION_DELTA_MAX)),
-        )
-    raise ValueError(f"unknown behaviour {behaviour!r}")
 
 
 def collect(
@@ -189,7 +102,7 @@ def collect(
     for behaviour in behaviours:
         for ep, case in enumerate(cases):
             env.reset(options={"case": case})
-            act = _make_controller(behaviour, env, rng)
+            act = make_controller(behaviour, env, rng)
             states = []
             native: List[float] = []
             done = False
@@ -230,7 +143,12 @@ def main(argv: List[str] | None = None) -> int:
     ensure_utf8_stdio()
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--out", default=DEFAULT_STAGE1_DATASET, help="dataset directory")
-    parser.add_argument("--episodes", type=int, default=40, help="episodes per behaviour")
+    parser.add_argument(
+        "--episodes",
+        type=int,
+        default=int(CONFIG.budget.stage1.collect_episodes),
+        help="episodes per behaviour",
+    )
     parser.add_argument("--seed", type=int, default=7, help="scenario selection seed")
     parser.add_argument(
         "--env-config",
@@ -240,8 +158,8 @@ def main(argv: List[str] | None = None) -> int:
     parser.add_argument(
         "--kinematics",
         choices=("holonomic", "unicycle"),
-        default="holonomic",
-        help="robot kinematics for collected rollouts (default: holonomic)",
+        default=str(CONFIG.budget.stage1.collect_kinematics),
+        help="robot kinematics for collected rollouts (default from raise_config)",
     )
     parser.add_argument(
         "--behaviours", default=",".join(BEHAVIOURS), help=f"comma list from {BEHAVIOURS}"
@@ -284,14 +202,7 @@ def main(argv: List[str] | None = None) -> int:
             "seed": int(args.seed),
             "episodes_per_behaviour": int(args.episodes),
             "behaviours": behaviours,
-            "orca_specs": {
-                k: {
-                    "safety_space": s,
-                    "speed_scale": v,
-                    "time_horizon": th,
-                }
-                for k, (s, v, th) in _ORCA_SPECS.items()
-            },
+            "orca_specs": _ORCA_SPECS,
 
         },
     )
@@ -305,4 +216,7 @@ def main(argv: List[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
+    from raise_core.script_utils import bootstrap_raise_env
+
+    bootstrap_raise_env()
     sys.exit(main())

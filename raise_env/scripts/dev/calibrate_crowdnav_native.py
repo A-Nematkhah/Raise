@@ -5,21 +5,21 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
-import sys
 import time
 from pathlib import Path
 
-_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-if _ROOT not in sys.path:
-    sys.path.insert(0, _ROOT)
+import os as _os
+import sys as _sys
+
+_RAISE_ROOT = _os.path.abspath(_os.path.join(_os.path.dirname(__file__), "..", ".."))
+if _RAISE_ROOT not in _sys.path:
+    _sys.path.insert(0, _RAISE_ROOT)
 import raise_paths  # noqa: E402,F401
 
 import torch  # noqa: E402
 from stable_baselines3 import PPO  # noqa: E402
 
 from domains.crowdnav.adapter import (  # noqa: E402
-    HOLDOUT_SEED_OFFSET,
     _crowdnav_policy_kwargs,
     _eval_metrics,
     _make_train_vec_env,
@@ -30,8 +30,9 @@ from domains.crowdnav.env_wrapper import (  # noqa: E402
     eval_cases,
 )
 from domains.crowdnav.settings import CrowdNavSettings  # noqa: E402
-from raise_config import build_upstream_config  # noqa: E402
+from raise_config import build_upstream_config, resolve_config  # noqa: E402
 from raise_core.console import ensure_utf8_stdio  # noqa: E402
+from raise_core.seeds import HOLDOUT_SEED_OFFSET  # noqa: E402
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -80,8 +81,6 @@ def main(argv: list[str] | None = None) -> int:
         raise ValueError("--torch-threads cannot be negative")
     if args.eval_only and args.resume_from:
         raise ValueError("--eval-only and --resume-from cannot be used together")
-
-    from raise_config import resolve_config
 
     raise_cfg = resolve_config(set_overrides=tuple(args.set or ()))
     upstream = build_upstream_config(raise_cfg.env, config=raise_cfg)

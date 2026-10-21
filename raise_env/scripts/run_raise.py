@@ -17,9 +17,13 @@ from __future__ import annotations
 import os as _os
 import sys as _sys
 
-_ROOT = _os.path.abspath(_os.path.join(_os.path.dirname(__file__), ".."))
-if _ROOT not in _sys.path:
-    _sys.path.insert(0, _ROOT)
+_RAISE_ROOT = _os.path.abspath(_os.path.join(_os.path.dirname(__file__), ".."))
+if _RAISE_ROOT not in _sys.path:
+    _sys.path.insert(0, _RAISE_ROOT)
+
+from raise_core.script_utils import bootstrap_raise_env
+
+bootstrap_raise_env(chdir=True)
 import argparse  # noqa: E402
 import json  # noqa: E402
 import logging  # noqa: E402
@@ -32,8 +36,7 @@ from raise_core import console  # noqa: E402
 from raise_core.config_factory import ensure_config_snapshot, make_run_config  # noqa: E402
 from raise_core.console import ensure_utf8_stdio  # noqa: E402
 from raise_core.pipeline import RaisePipeline  # noqa: E402
-
-os.chdir(_ROOT)
+from raise_core.post_run_baselines import run_baselines  # noqa: E402
 
 _MIGRATION_HINT = (
     "Removed run_raise flags map to --set keys; see README_RAISE.md Configuration."
@@ -196,17 +199,8 @@ def main() -> int:
         with open(report, encoding="utf-8") as fh:
             print("\n--- closed_loop/REPORT.txt ---\n" + fh.read())
     if bool(args.baselines):
-        import importlib.util
-
-        bas_path = os.path.join(_ROOT, "scripts", "run_baselines.py")
-        spec = importlib.util.spec_from_file_location("run_baselines", bas_path)
-        if spec is None or spec.loader is None:
-            logging.error("Could not load %s", bas_path)
-            return 1
-        bas = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(bas)
         logging.info("Running baselines on %s", run_cfg.output_dir)
-        bas.run_baselines(run_cfg.output_dir)
+        run_baselines(run_cfg.output_dir)
         logging.info("Baselines written to %s", os.path.join(run_cfg.output_dir, "baselines.json"))
     return 0
 

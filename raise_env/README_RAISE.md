@@ -254,7 +254,7 @@ Before a long evolution, train a PPO policy with CrowdNav++'s native reward
 and evaluate it on 100 held-out validation cases:
 
 ```bash
-python scripts/calibrate_crowdnav_native.py --train-steps 300000 --eval-episodes 100 --seed 425 --n-envs 4 --device cpu
+python scripts/dev/calibrate_crowdnav_native.py --train-steps 300000 --eval-episodes 100 --seed 425 --n-envs 4 --device cpu
 ```
 
 To continue training from an existing native-reward PPO checkpoint, use
@@ -262,7 +262,7 @@ To continue training from an existing native-reward PPO checkpoint, use
 additional budget; the checkpoint's timestep counter is preserved:
 
 ```bash
-python scripts/calibrate_crowdnav_native.py --output-dir results/calibration_600k --train-steps 300000 --eval-episodes 100 --seed 425 --n-envs 4 --device cpu --resume-from results/calibration/native_reward_ppo.zip
+python scripts/dev/calibrate_crowdnav_native.py --output-dir results/calibration_600k --train-steps 300000 --eval-episodes 100 --seed 425 --n-envs 4 --device cpu --resume-from results/calibration/native_reward_ppo.zip
 ```
 
 The optional fixed-17-human generalization config can evaluate a completed
@@ -279,11 +279,11 @@ navigation time, path length and minimum separation.
 
 ```bash
 # CrowdNav++ ORCA baseline report on the test split
-python scripts/check_orca_reference.py --out results/orca_report.json
+python scripts/dev/check_orca_reference.py --out results/orca_report.json
 # Baselines on a finished run; --seeds applies to native-reward PPO (A)
 python scripts/run_baselines.py --run-dir <run-dir> --seeds 3 --skip-b --skip-c
 # PPO discount sweep: fixed rewards and blind eval, K3 per (reward, gamma, seed)
-python scripts/run_gamma_sweep.py --run-dir <run-dir> --gammas matched,0.99,0.995 --rewards native,final --seeds 2
+python scripts/dev/run_gamma_sweep.py --run-dir <run-dir> --gammas matched,0.99,0.995 --rewards native,final --seeds 2
 ```
 
 CrowdNav++ native episode return is retained as a diagnostic. RAISE selection

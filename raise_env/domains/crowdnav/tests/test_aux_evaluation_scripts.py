@@ -1,5 +1,5 @@
 
-from scripts.evaluate_crowdnav_generalization import _checkpoint_path
+from raise_core.generalization_eval import resolve_stage3_checkpoint as _checkpoint_path
 
 
 def test_generalization_checkpoint_path_accepts_run_and_project_relative_paths(

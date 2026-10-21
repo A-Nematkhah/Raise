@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib.util
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -18,11 +17,8 @@ _RAISE_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _load_baselines_mod():
-    path = _RAISE_ROOT / "scripts" / "run_baselines.py"
-    spec = importlib.util.spec_from_file_location("run_baselines_under_test", path)
-    assert spec is not None and spec.loader is not None
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    import raise_core.post_run_baselines as mod
+
     return mod
 
 
@@ -175,7 +171,7 @@ def test_run_baselines_writes_expected_schema(tmp_path, monkeypatch):
     def _fake_reeval(self, candidate, *, round_index, config):
         return _fake_train(self, candidate, round_index=round_index, config=config)
 
-    def _fake_controller(behaviour, *, cases, run_cfg, collect_mod):
+    def _fake_controller(behaviour, *, cases, run_cfg):
         eps = [{"case": int(c), "task_return": 0.02} for c in cases]
         return {
             "controller": behaviour,

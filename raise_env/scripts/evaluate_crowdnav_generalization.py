@@ -5,15 +5,8 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
-import sys
 from pathlib import Path
-from typing import Any
-
-_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-if _ROOT not in sys.path:
-    sys.path.insert(0, _ROOT)
-import raise_paths  # noqa: E402,F401
+import raise_paths  # noqa: F401
 
 from domains.crowdnav.adapter import (  # noqa: E402
     CrowdNavPPOTrainer,
@@ -22,22 +15,8 @@ from domains.crowdnav.adapter import (  # noqa: E402
 from domains.crowdnav.reward_checks import make_crowdnav_validator  # noqa: E402
 from raise_core.candidate import RewardCandidate  # noqa: E402
 from raise_config import CONFIG, build_upstream_config  # noqa: E402
-from raise_core.validate import Stage3Config  # noqa: E402
-
-
-def _checkpoint_path(raw: Any, run_dir: Path) -> Path:
-    if not raw:
-        raise ValueError("final_candidate.json has no Stage III checkpoint_path")
-    path = Path(str(raw))
-    candidates = [path] if path.is_absolute() else [Path.cwd() / path, run_dir / path]
-    for candidate in candidates:
-        resolved = candidate.resolve()
-        if resolved.is_file():
-            return resolved
-    raise FileNotFoundError(
-        "Stage III PPO checkpoint not found; checked: "
-        + ", ".join(str(candidate.resolve()) for candidate in candidates)
-    )
+from raise_core.generalization_eval import resolve_stage3_checkpoint
+from raise_core.validate import Stage3Config
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -70,7 +49,7 @@ def main(argv: list[str] | None = None) -> int:
     candidate_id = str(payload.get("candidate_id") or "final_candidate")
     metadata = dict(payload.get("metadata") or {})
     metadata["checkpoint_path"] = str(
-        _checkpoint_path(metadata.get("checkpoint_path"), run_dir)
+        resolve_stage3_checkpoint(metadata.get("checkpoint_path"), run_dir)
     )
     reward_fn, error = make_crowdnav_validator().try_validate(code)
     if reward_fn is None:
@@ -132,4 +111,13 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
+    import os as _os
+    import sys as _sys
+
+    _root = _os.path.abspath(_os.path.join(_os.path.dirname(__file__), ".."))
+    if _root not in _sys.path:
+        _sys.path.insert(0, _root)
+    from raise_core.script_utils import bootstrap_raise_env
+
+    bootstrap_raise_env()
     raise SystemExit(main())

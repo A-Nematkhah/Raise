@@ -8,7 +8,7 @@ vita-epfl CrowdNav environment.
 
 Example (from ``raise_env/``)::
 
-    python scripts/check_orca_reference.py --out results/orca_report.json
+    python scripts/dev/check_orca_reference.py --out results/orca_report.json
 """
 
 from __future__ import annotations
@@ -16,29 +16,21 @@ from __future__ import annotations
 import os as _os
 import sys as _sys
 
-_ROOT = _os.path.abspath(_os.path.join(_os.path.dirname(__file__), ".."))
-if _ROOT not in _sys.path:
-    _sys.path.insert(0, _ROOT)
+_RAISE_ROOT = _os.path.abspath(_os.path.join(_os.path.dirname(__file__), "..", ".."))
+if _RAISE_ROOT not in _sys.path:
+    _sys.path.insert(0, _RAISE_ROOT)
 
 import argparse  # noqa: E402
-import importlib.util  # noqa: E402
 import os  # noqa: E402
 from typing import Any, Dict, List, Optional, Sequence  # noqa: E402
 
 import numpy as np  # noqa: E402
 
 from domains.crowdnav.env_wrapper import RewardInjectedCrowdNavEnv  # noqa: E402
+from domains.crowdnav.reference_controllers import make_controller  # noqa: E402
 from domains.crowdnav.settings import CrowdNavSettings, set_settings  # noqa: E402
 from raise_core.console import ensure_utf8_stdio  # noqa: E402
 from raise_core.json_io import atomic_write_json  # noqa: E402
-
-def _load_collect_module() -> Any:
-    path = os.path.join(_ROOT, "scripts", "collect_crowdnav_stage1_dataset.py")
-    spec = importlib.util.spec_from_file_location("collect_crowdnav_stage1_dataset", path)
-    assert spec is not None and spec.loader is not None
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
 
 
 def run_orca_check(
@@ -49,7 +41,6 @@ def run_orca_check(
     behaviour: str = "orca",
 ) -> Dict[str, Any]:
     """ORCA robot on cases ``0..n_cases-1`` of ``phase``; report episode metrics."""
-    collect = _load_collect_module()
     settings = set_settings(CrowdNavSettings(env_config_path=env_config_path))
     env = RewardInjectedCrowdNavEnv(None, phase=phase, settings=settings)
     try:
@@ -64,7 +55,7 @@ def run_orca_check(
         discomfort_steps = total_steps = 0
         for case in range(n):
             env.reset(options={"case": case})
-            act = collect._make_controller(behaviour, env, np.random.default_rng(0))
+            act = make_controller(behaviour, env, np.random.default_rng(0))
             native: List[float] = []
             done = False
             info: Dict[str, Any] = {}

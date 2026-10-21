@@ -15,8 +15,8 @@ finished runs are skipped on restart.
 
 Examples (from ``raise_env/``)::
 
-    python scripts/run_gamma_sweep.py --run-dir <run-dir>
-    python scripts/run_gamma_sweep.py --run-dir <run-dir> \\
+    python scripts/dev/run_gamma_sweep.py --run-dir <run-dir>
+    python scripts/dev/run_gamma_sweep.py --run-dir <run-dir> \\
         --gammas matched,0.99,0.995 --rewards native,final --seeds 3
 """
 
@@ -25,12 +25,11 @@ from __future__ import annotations
 import os as _os
 import sys as _sys
 
-_ROOT = _os.path.abspath(_os.path.join(_os.path.dirname(__file__), ".."))
-if _ROOT not in _sys.path:
-    _sys.path.insert(0, _ROOT)
+_RAISE_ROOT = _os.path.abspath(_os.path.join(_os.path.dirname(__file__), "..", ".."))
+if _RAISE_ROOT not in _sys.path:
+    _sys.path.insert(0, _RAISE_ROOT)
 
 import argparse  # noqa: E402
-import importlib.util  # noqa: E402
 import logging  # noqa: E402
 import math  # noqa: E402
 import os  # noqa: E402
@@ -48,8 +47,10 @@ from domains.crowdnav.prompts import D5_SEED_FUNCTION  # noqa: E402
 from domains.crowdnav.reward_checks import make_crowdnav_validator  # noqa: E402
 from raise_core.candidate import RewardCandidate  # noqa: E402
 from raise_core.console import ensure_utf8_stdio  # noqa: E402
+from raise_core import post_run_baselines as rb  # noqa: E402
 from raise_core.json_io import atomic_write_json, read_json_dict  # noqa: E402
-from raise_core.validate import FINAL_EVAL_SEED_OFFSET, FINAL_EVAL_SPLIT, STAGE3_STEPS  # noqa: E402
+from raise_core.seeds import FINAL_EVAL_SEED_OFFSET  # noqa: E402
+from raise_core.validate import FINAL_EVAL_SPLIT, STAGE3_STEPS  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -57,15 +58,6 @@ DEFAULT_GAMMAS = "matched,0.99,0.995"
 DEFAULT_REWARDS = "native,final"
 OUT_NAME = "gamma_sweep.json"
 TRAIN_SUBDIR = "gamma_sweep_train"
-
-
-def _load_baselines_module() -> Any:
-    path = os.path.join(_ROOT, "scripts", "run_baselines.py")
-    spec = importlib.util.spec_from_file_location("run_baselines", path)
-    assert spec is not None and spec.loader is not None
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
 
 
 def matched_gamma(env_config_path: Optional[str]) -> float:
@@ -176,7 +168,6 @@ def run_gamma_sweep(
     reference_gamma: float = PPO_GAMMA,
     out_name: str = OUT_NAME,
 ) -> Dict[str, Any]:
-    rb = _load_baselines_module()
     run_dir = os.path.abspath(run_dir)
     run_cfg = read_json_dict(os.path.join(run_dir, "config.json")) or {}
     seed = int(run_cfg.get("seed", 425))

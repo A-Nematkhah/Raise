@@ -5,14 +5,21 @@ from __future__ import annotations
 
 from collections import Counter
 from pathlib import Path
-import sys
 from typing import Any, Dict
 
 import numpy as np
 
+import os as _os
+import sys as _sys
+
+_RAISE_ROOT = _os.path.abspath(_os.path.join(_os.path.dirname(__file__), ".."))
+if _RAISE_ROOT not in _sys.path:
+    _sys.path.insert(0, _RAISE_ROOT)
+
+from raise_core.script_utils import bootstrap_raise_env
+
+bootstrap_raise_env()
 _ROOT = Path(__file__).resolve().parents[1]
-if str(_ROOT) not in sys.path:
-    sys.path.insert(0, str(_ROOT))
 
 import raise_paths
 import crowd_sim

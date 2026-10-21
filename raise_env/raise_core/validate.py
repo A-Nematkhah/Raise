@@ -52,6 +52,7 @@ from raise_core.selection import (
     pick_best_trained,
     statistical_ties,
 )
+from raise_core.seeds import FINAL_EVAL_SEED_OFFSET, STAGE3_EVAL_SEED_OFFSET
 from raise_core.stage3_checkpoint import (
     build_checkpoint,
     load_checkpoint,
@@ -63,11 +64,6 @@ logger = logging.getLogger(__name__)
 
 # K3 default (environment steps per candidate) lives in ``raise_config.CONFIG``.
 STAGE3_STEPS = budget_stage3_train_steps()
-
-# Eval seed bases relative to the run seed. Closed-loop generation g uses
-# ``seed + g * 1000``, so these stay clear of any realistic G.
-STAGE3_EVAL_SEED_OFFSET: int = 10_000_000
-FINAL_EVAL_SEED_OFFSET: int = 20_000_000
 # Scenario split of the final blind evaluation (never used for selection).
 FINAL_EVAL_SPLIT: str = "test"
 
