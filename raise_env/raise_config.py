@@ -6,8 +6,7 @@ All budget and simulator numeric defaults live here — nowhere else.
 
 from __future__ import annotations
 
-from copy import deepcopy
-from dataclasses import asdict, dataclass, field, fields, is_dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 from typing import Any, Dict, Mapping, Optional, Tuple
 
 

@@ -1265,7 +1265,7 @@ def k_label(p: Dict[str, Any], st: Dict[str, Any], rep: int) -> Dict[str, Any]:
 
 def k_gen0(p: Dict[str, Any], st: Dict[str, Any], rep: int) -> Dict[str, Any]:
     """Gen0 proposal + validation of N seed-LLM candidates, then Score1 cold / warm."""
-    from raise_core.domains import load_domain, make_validator_for_domain
+    from raise_core.domains import get_pack, make_validator
     from raise_core.explore import StageIConfig, StageIEvolver
     from raise_core.feedback import FeedbackCardConfig
     from raise_core.llm import make_llm_client
@@ -1274,8 +1274,8 @@ def k_gen0(p: Dict[str, Any], st: Dict[str, Any], rep: int) -> Dict[str, Any]:
     out_dir = os.path.join(WORK_DIR, "p4_gen0", str(p["_row_id"]), f"rep{rep}")
     shutil.rmtree(out_dir, ignore_errors=True)
     os.makedirs(out_dir, exist_ok=True)
-    pack = load_domain("crowdnav")
-    validator = make_validator_for_domain(pack)
+    pack = get_pack()
+    validator = make_validator(pack)
     durations: List[float] = []
     orig = validator.try_validate
 

@@ -1,8 +1,7 @@
 """
-Sandbox configuration.
+Sandbox configuration for CrowdNav++ reward candidates.
 
-Ported from mobile_robot_env.rewards.sandbox.config. Candidates receive the
-domain reward state as an argument named ``state``.
+Candidates receive the CrowdNav reward state as an argument named ``state``.
 """
 
 from __future__ import annotations

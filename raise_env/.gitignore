@@ -6,9 +6,6 @@ domains/crowdnav/data/stage1_dataset/
 domains/crowdnav/data/stage1_dataset_*/
 !domains/crowdnav/data/README.md
 
-# Local datasets of the removed HighwayEnv domain (not used by the code)
-domains/highway/
-
 # Legacy path aliases (if someone still writes under raise_env/data/)
 data/stage1_dataset/
 

@@ -1,8 +1,7 @@
 """
-Reward validation pipeline.
+Reward validation pipeline for CrowdNav++ LLM proposals.
 
-Ported from mobile_robot_env.rewards.sandbox.validator; operates on source
-strings (no RewardCandidate pool required).
+Operates on source strings (no RewardCandidate pool required).
 """
 
 from __future__ import annotations

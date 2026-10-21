@@ -11,7 +11,7 @@ from domains.crowdnav.reward_checks import make_crowdnav_validator
 from raise_core import pipeline as pipeline_mod
 from raise_core import validate as validate_mod
 from raise_core.candidate import RewardCandidate
-from raise_core.domains import make_stage3_trainer_for_domain
+from raise_core.domains import make_stage3_trainer
 from raise_core.pipeline import RaisePipeline, RaiseRunConfig
 from raise_core.selection import candidate_fitness_se, statistical_ties
 from raise_core.validate import (
@@ -65,11 +65,11 @@ def _run_fast(tmp_path, monkeypatch, **trainer_kwargs):
 
     def factory(pack, use_stub=False):
         holder["t"] = _Recording(
-            make_stage3_trainer_for_domain(pack, use_stub=use_stub), **trainer_kwargs
+            make_stage3_trainer(pack, use_stub=use_stub), **trainer_kwargs
         )
         return holder["t"]
 
-    monkeypatch.setattr(pipeline_mod, "make_stage3_trainer_for_domain", factory)
+    monkeypatch.setattr(pipeline_mod, "make_stage3_trainer", factory)
     out = tmp_path / "run"
     cfg = RaiseRunConfig(output_dir=str(out))
     cfg.apply_fast_profile()

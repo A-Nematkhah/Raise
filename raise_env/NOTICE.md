@@ -51,5 +51,5 @@ This directory started as a local copy of the MIT-licensed
 **CrowdNav_Prediction_AttnGraph** repository
 (https://github.com/Shuijing725/CrowdNav_Prediction_AttnGraph); only the
 minimal simulator runtime described above is vendored again under
-`third_party/crowdnavpp/`. RAISE previously targeted HighwayEnv and then the
-vita-epfl CrowdNav simulator.
+`third_party/crowdnavpp/`. Earlier revisions also used the vita-epfl CrowdNav
+simulator; the only supported target today is CrowdNav++ in this tree.

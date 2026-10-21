@@ -36,7 +36,6 @@ from raise_core.config_defaults import (
     budget_population,
     budget_stage1_behavioral_dedup,
     budget_stage1_max_invalid,
-    run_seed,
     selection_max_fallback_fraction,
     selection_mutation_parents,
     selection_strict_fallback,
@@ -255,7 +254,7 @@ class StageIEvolver:
             )
         if validator is None:
             raise ValueError(
-                "StageIEvolver requires validator= (make_validator_for_domain(pack))."
+                "StageIEvolver requires validator= (make_validator(pack))."
             )
         self.score_fn = score_fn
         self.validator = validator
@@ -264,7 +263,7 @@ class StageIEvolver:
             raise ValueError(
                 "StageIEvolver requires prompts= and feedback_card= from the domain "
                 "pack (e.g. pack.prompts / pack.feedback_card). Construct via the "
-                "closed-loop runner or pass them explicitly; silent load_domain "
+                "closed-loop runner or pass them explicitly; silent get_pack() "
                 "defaults are no longer used."
             )
         self._prompts = prompts

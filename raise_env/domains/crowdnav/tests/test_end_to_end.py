@@ -15,7 +15,7 @@ from domains.crowdnav.adapter import CrowdNavPPOTrainer
 from domains.crowdnav.env_wrapper import load_env_config
 from domains.crowdnav.tests.conftest import RAISE_ENV_ROOT
 from raise_core.candidate import RewardCandidate
-from raise_core.domains import load_domain, make_validator_for_domain
+from raise_core.domains import get_pack, make_validator
 from raise_core.validate import Stage3Config
 
 pytestmark = pytest.mark.slow
@@ -103,7 +103,7 @@ def test_reevaluate_saved_policy_is_reproducible(run_dir, tmp_path):
     cand = RewardCandidate(
         candidate_id=best["candidate_id"],
         code=best["code"],
-        reward_fn=make_validator_for_domain(load_domain("crowdnav")).validate_code(best["code"]),
+        reward_fn=make_validator(get_pack()).validate_code(best["code"]),
         valid=True,
         metadata=dict(best["metadata"]),
     )

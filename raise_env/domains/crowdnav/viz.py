@@ -18,7 +18,7 @@ from PIL import Image
 from stable_baselines3 import PPO
 
 from domains.crowdnav.env_wrapper import RewardInjectedCrowdNavEnv, eval_cases
-from raise_core.domains import load_domain, make_validator_for_domain
+from raise_core.domains import get_pack, make_validator
 
 logger = logging.getLogger(__name__)
 
@@ -270,8 +270,8 @@ def visualize_best_policy(
     if not code.strip():
         return {"ok": False, "reason": "empty reward code"}
 
-    pack = load_domain("crowdnav")
-    validator = make_validator_for_domain(pack)
+    pack = get_pack()
+    validator = make_validator(pack)
     reward_fn, err = validator.try_validate(code)
     if reward_fn is None:
         return {"ok": False, "reason": f"reward invalid: {err}"}

@@ -8,7 +8,7 @@ import os
 import torch
 
 from raise_core import pipeline as pipeline_mod
-from raise_core.domains import make_stage3_trainer_for_domain
+from raise_core.domains import make_stage3_trainer
 from raise_core.evo_selection.config import SelectionConfig
 from raise_core.evo_selection.llm_ranker import LLMRanker, RankResult
 from raise_core.pipeline import RaisePipeline, RaiseRunConfig
@@ -129,9 +129,9 @@ class _MetadataReassigningStage3:
 def test_stage3_does_not_mutate_stage2_metadata(tmp_path, monkeypatch):
     monkeypatch.setattr(
         pipeline_mod,
-        "make_stage3_trainer_for_domain",
+        "make_stage3_trainer",
         lambda pack, use_stub=False: _MetadataReassigningStage3(
-            make_stage3_trainer_for_domain(pack, use_stub=use_stub)
+            make_stage3_trainer(pack, use_stub=use_stub)
         ),
     )
     out = tmp_path / "run_hw"
@@ -150,9 +150,9 @@ def test_stage3_receives_trainer_config(tmp_path, monkeypatch):
     seen = []
     monkeypatch.setattr(
         pipeline_mod,
-        "make_stage3_trainer_for_domain",
+        "make_stage3_trainer",
         lambda pack, use_stub=False: _MetadataReassigningStage3(
-            make_stage3_trainer_for_domain(pack, use_stub=use_stub), seen
+            make_stage3_trainer(pack, use_stub=use_stub), seen
         ),
     )
     cfg = RaiseRunConfig(output_dir=str(tmp_path / "run_hw_cfg"))

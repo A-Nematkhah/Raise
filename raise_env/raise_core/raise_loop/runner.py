@@ -16,11 +16,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from raise_core import console
-from raise_core.domains import (
-    load_domain,
-    make_stage2_trainer_for_domain,
-    make_validator_for_domain,
-)
+from raise_core.domains import get_pack, make_stage2_trainer, make_validator
 from raise_core.candidate import RewardCandidate, evaluation_fields, genome_fingerprint
 from raise_core.explore import StageIConfig, StageIEvolver
 from raise_core.feedback import ArchiveRecord, CandidateArchive, component_diversity
@@ -42,7 +38,6 @@ from raise_core.raise_loop.logging_io import (
     write_json,
 )
 from raise_core.raise_loop.parallel_label import (
-    LabelAbortError,
     attach_warm_start_checkpoints,
     label_candidates_parallel,
 )
@@ -363,7 +358,7 @@ class ClosedLoopRunner:
         ckpt = _load_ckpt(cfg.output_dir) if bool(cfg.resume) else None
         resumed = ckpt is not None
 
-        pack = load_domain(cfg.domain)
+        pack = get_pack()
         pack.apply_config(cfg)
 
         score1_mode = "smoke" if cfg.use_stub else "dataset"
@@ -373,9 +368,9 @@ class ClosedLoopRunner:
                 dataset_path=None if score1_mode == "smoke" else cfg.stage1_dataset_path,
             )
         if self.trainer is None:
-            self.trainer = make_stage2_trainer_for_domain(pack, use_stub=cfg.use_stub)
+            self.trainer = make_stage2_trainer(pack, use_stub=cfg.use_stub)
         if self.validator is None:
-            self.validator = make_validator_for_domain(pack)
+            self.validator = make_validator(pack)
         if self.llm is None:
             self.llm = make_llm_client(
                 cfg.llm_provider,

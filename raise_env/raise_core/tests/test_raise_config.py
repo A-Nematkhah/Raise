@@ -52,7 +52,6 @@ def test_build_upstream_config_tracks_env_edits():
     base = build_upstream_config(CONFIG.env)
     from dataclasses import replace
 
-    from raise_config import RaiseConfig
 
     edited = replace(CONFIG, env=replace(CONFIG.env, human_num=12, time_limit=25.0))
     built = build_upstream_config(edited.env, config=edited)
@@ -90,7 +89,6 @@ def test_config_snapshot_written_and_drift(tmp_path):
 
     from dataclasses import replace
 
-    from raise_config import RaiseConfig
 
     drifted = replace(cfg, budget=replace(cfg.budget, population_size=8))
     with pytest.raises(RuntimeError, match="config drift"):

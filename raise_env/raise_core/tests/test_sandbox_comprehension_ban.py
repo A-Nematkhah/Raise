@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from domains.crowdnav.prompts import D5_SEED_FUNCTION as HW_SEED
-from raise_core.domains import load_domain, make_validator_for_domain
+from domains.crowdnav.prompts import D5_SEED_FUNCTION as SEED_REWARD
+from raise_core.domains import get_pack, make_validator
 from raise_core.sandbox.errors import RewardSandboxError
 
 
@@ -31,8 +31,7 @@ from raise_core.sandbox.errors import RewardSandboxError
     ],
 )
 def test_crowdnav_rejects_comprehensions(kind: str, body: str):
-    pack = load_domain("crowdnav")
-    v = make_validator_for_domain(pack)
+    v = make_validator(get_pack())
     code = f"def compute_reward(state, memory):\n    {body}\n"
     with pytest.raises(RewardSandboxError) as ei:
         v.validate_code(code)
@@ -42,8 +41,8 @@ def test_crowdnav_rejects_comprehensions(kind: str, body: str):
 
 
 def test_explicit_for_loop_still_ok():
-    hw = make_validator_for_domain(load_domain("crowdnav"))
-    hw_ok = """
+    validator = make_validator(get_pack())
+    ok_code = """
 def compute_reward(state, memory):
     nearest = 50.0
     for h in state.humans:
@@ -52,8 +51,8 @@ def compute_reward(state, memory):
             nearest = d
     return float(state.progress + 0.01 * nearest)
 """
-    assert hw.validate_code(hw_ok) is not None
+    assert validator.validate_code(ok_code) is not None
 
 
-def test_domain_seed_still_validates():
-    assert make_validator_for_domain(load_domain("crowdnav")).validate_code(HW_SEED)
+def test_crowdnav_seed_still_validates():
+    assert make_validator(get_pack()).validate_code(SEED_REWARD)

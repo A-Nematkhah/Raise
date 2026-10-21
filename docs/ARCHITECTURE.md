@@ -15,7 +15,7 @@ raise_env/
 │   ├── refine.py               # Stage II config / metrics / stub trainer
 │   ├── validate.py             # Stage III runner (long PPO, best by fitness)
 │   ├── pipeline.py             # RaisePipeline: closed loop → Stage III → artifacts
-│   └── domains/                # DomainPack + registry / factories
+│   └── domains/                # DomainPack + get_pack() wiring to CrowdNav++
 ├── domains/
 │   └── crowdnav/               # CrowdNav++ pack (see domains/crowdnav/spec.md)
 │       ├── pack, prompts, adapter, env_wrapper, stage1, state, metrics, feedback_card, viz
@@ -41,7 +41,7 @@ raise_env/
 ```text
 scripts/run_raise.py
   → RaiseRunConfig → raise_core.pipeline.RaisePipeline
-  → load_domain("crowdnav") → CrowdNav++ DomainPack (prompts, Score1, trainers, smoke states)
+  → get_pack() → CrowdNav++ DomainPack (prompts, Score1, trainers, smoke states)
   → ClosedLoopRunner: Gen0 → for each generation:
         Score1 → PPO train (train cases) + eval new candidates (val cases) → rank by fitness
         → archive → LLM crossover / mutation / random (+ elite), each prompt

@@ -17,7 +17,7 @@ from domains.crowdnav.sandbox_fields import (
 )
 from domains.crowdnav.settings import CrowdNavSettings, action_space_prompt_block
 from domains.crowdnav.state import CrowdNavRewardState, default_smoke_states, fingerprint_smoke_states
-from raise_core.domains import load_domain, make_validator_for_domain
+from raise_core.domains import get_pack, make_validator
 from raise_core.llm import SeedVariantLLMClient, extract_python_code
 from raise_core.rejection_log import categorize_validation_error
 from raise_core.sandbox.errors import RewardSandboxError
@@ -28,7 +28,7 @@ _FAST = _FN + "    return float(state.progress)\n"
 
 
 def _validator():
-    return make_validator_for_domain(load_domain("crowdnav"))
+    return make_validator(get_pack())
 
 
 # ------------------------------------------------------------------ allowlist
@@ -181,11 +181,6 @@ def test_prompts_describe_the_crowdnav_state_and_objective():
     assert "def compute_reward(state, memory)" in D5_SEED_FUNCTION
     for name in ("format_d1_initial_batch", "format_d2_crossover", "format_d2_mutation"):
         assert callable(getattr(prompts, name))
-    low = (user + prompts.D1_SYSTEM_PROMPT + prompts.D4_EXTERNAL_KNOWLEDGE).lower()
-    for word in ("highway", "lane", "vehicle", "overtake"):
-        assert word not in low, word
-
-
 def test_prompts_read_active_crowdnav_python_config():
     from domains.crowdnav.env_wrapper import load_env_config
     from domains.crowdnav.settings import get_settings, set_settings

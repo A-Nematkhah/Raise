@@ -33,7 +33,7 @@ class _CloseTrackingVec:
 
 
 def test_normalize_stored_path_uses_posix():
-    raw = "results\\crowdnav_16h\\closed_loop\\stage2_train\\r00_x\\model.zip"
+    raw = "results\\crowdnav_run\\closed_loop\\stage2_train\\r00_x\\model.zip"
     assert "\\" not in _normalize_stored_path(raw)
     assert _normalize_stored_path(raw).endswith("model.zip")
 

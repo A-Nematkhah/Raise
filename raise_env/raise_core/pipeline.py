@@ -16,13 +16,12 @@ from typing import Any, Dict, List, Optional
 
 from raise_core import console
 from raise_core.domains import (
-    DEFAULT_DOMAIN,
     DomainPack,
-    load_domain,
-    make_score_fn_for_domain,
-    make_stage2_trainer_for_domain,
-    make_stage3_trainer_for_domain,
-    make_validator_for_domain,
+    get_pack,
+    make_score_fn,
+    make_stage2_trainer,
+    make_stage3_trainer,
+    make_validator,
 )
 from raise_core.candidate import RewardCandidate
 from raise_core.evo_selection import LLMRanker, SelectionConfig
@@ -128,7 +127,7 @@ class RaiseRunConfig:
 
     output_dir: str = "results/raise_run"
     seed: int = field(default_factory=run_seed)
-    domain: str = DEFAULT_DOMAIN
+    domain: str = "crowdnav"
     llm_provider: str = field(default_factory=llm_provider)  # seed | groq | vllm | ollama | scripted
     llm_model: Optional[str] = None
     # None → provider defaults (Groq: 3500; vLLM: 1500; Ollama: 4096).
@@ -390,10 +389,10 @@ class RaisePipeline:
         self.config = config or RaiseRunConfig()
         self.llm = llm
         limit_cpu_threads(int(self.config.torch_threads))
-        self.domain_pack = domain_pack or load_domain(self.config.domain)
+        self.domain_pack = domain_pack or get_pack()
         # Smoke states read the active action space (int vs tuple action).
         self.domain_pack.apply_config(self.config)
-        self.validator = make_validator_for_domain(self.domain_pack)
+        self.validator = make_validator(self.domain_pack)
 
     def _build_llm(self) -> LLMClient:
         if self.llm is not None:
@@ -530,10 +529,10 @@ class RaisePipeline:
         cl_result = ClosedLoopRunner(
             cl_cfg,
             llm=llm,
-            score_fn=make_score_fn_for_domain(
+            score_fn=make_score_fn(
                 pack, mode=cfg.score1_mode, dataset_path=cfg.stage1_dataset_path
             ),
-            trainer=make_stage2_trainer_for_domain(pack, use_stub=bool(cfg.use_stub)),
+            trainer=make_stage2_trainer(pack, use_stub=bool(cfg.use_stub)),
             validator=self.validator,
         ).run()
 
@@ -573,7 +572,7 @@ class RaisePipeline:
 
         # ----- Stage III (long PPO on the final population) -----
         s3_runner = Stage3Runner(
-            make_stage3_trainer_for_domain(pack, use_stub=bool(cfg.use_stub)),
+            make_stage3_trainer(pack, use_stub=bool(cfg.use_stub)),
             validator=self.validator,
             config=self._stage3_config(),
         )

@@ -8,7 +8,6 @@ import pytest
 
 from domains.crowdnav.state import default_smoke_states
 from raise_core.sandbox.config import SandboxConfig
-from raise_core.sandbox.errors import RewardSandboxError
 from raise_core.sandbox.validator import RewardValidator
 
 

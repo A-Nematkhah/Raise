@@ -28,7 +28,6 @@ from domains.crowdnav.adapter import (  # noqa: E402
 from domains.crowdnav.env_wrapper import (  # noqa: E402
     RewardInjectedCrowdNavEnv,
     eval_cases,
-    load_env_config,
 )
 from domains.crowdnav.settings import CrowdNavSettings  # noqa: E402
 from raise_config import build_upstream_config  # noqa: E402

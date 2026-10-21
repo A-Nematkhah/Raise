@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import math
 import warnings
-from pathlib import Path
 
 import gymnasium as gym
 import numpy as np

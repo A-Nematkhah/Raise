@@ -1,4 +1,4 @@
-# Post–crowdnav_16h follow-ups
+# RAISE follow-up features (implemented)
 
 The four items that lived here as design sketches are now implemented (flags
 with safe defaults). This file keeps the “why” and the knobs.
@@ -28,8 +28,8 @@ with safe defaults). This file keeps the “why” and the knobs.
 - A short curriculum with fewer humans is **still deferred** (needs env-config
   changes and a fairness story vs Stage III).
 
-## Exclude collapsed candidates from mutation parents
+## Other notes
 
-- `--mutation-exclude-collapsed` (default **off**).
-- Drops Stage-II holdout CR ≥ `--collapse-cr` from the mutation parent pool.
-- If the filtered pool is empty, falls back to the unfiltered pool.
+See `raise_env/README_RAISE.md` for current CLI flags and `raise_config.py`
+for defaults. Run artifacts live under `<run-dir>` (typically
+`raise_env/results/crowdnav_<timestamp>/`).

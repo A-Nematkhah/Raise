@@ -27,7 +27,7 @@ class _FailAllStage3:
 def test_fallback_to_stage2_clears_best_stage3_id(tmp_path, monkeypatch):
     monkeypatch.setattr(
         pipeline_mod,
-        "make_stage3_trainer_for_domain",
+        "make_stage3_trainer",
         lambda pack, use_stub=False: _FailAllStage3(),
     )
     out = tmp_path / "fallback"
@@ -99,7 +99,7 @@ def test_llm_ranker_cannot_pick_outside_tie_set(tmp_path, monkeypatch):
         holder["t"] = trainer
         return trainer
 
-    monkeypatch.setattr(pipeline_mod, "make_stage3_trainer_for_domain", factory)
+    monkeypatch.setattr(pipeline_mod, "make_stage3_trainer", factory)
 
     def rank(_self, cards, *, fallback_order, stage, **kwargs):
         # Always reverse: LLM's favourite is the measured worst.
@@ -129,7 +129,7 @@ def test_llm_ranker_cannot_pick_outside_tie_set(tmp_path, monkeypatch):
 
     monkeypatch.setattr(
         pipeline_mod,
-        "make_stage3_trainer_for_domain",
+        "make_stage3_trainer",
         lambda pack, use_stub=False: _Ordered({}),
     )
 
@@ -174,7 +174,7 @@ def test_llm_ranker_may_pick_within_tie_set(tmp_path, monkeypatch):
 
     monkeypatch.setattr(
         pipeline_mod,
-        "make_stage3_trainer_for_domain",
+        "make_stage3_trainer",
         lambda pack, use_stub=False: _TiedTrainer({}),
     )
 

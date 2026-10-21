@@ -1,7 +1,5 @@
 """
-Restricted execution of validated reward source.
-
-Ported from mobile_robot_env.rewards.sandbox.runtime.
+Restricted execution of validated CrowdNav++ reward source.
 
 Episode memory contract (option a — function-only stateful rewards):
   ``compute_reward(state, memory)`` where ``memory`` is a plain ``dict``

@@ -1,7 +1,5 @@
 """
-AST / structural policy for LLM-generated reward code.
-
-Ported from mobile_robot_env.rewards.sandbox.ast_policy.
+AST / structural policy for LLM-generated CrowdNav++ reward code.
 """
 
 from __future__ import annotations

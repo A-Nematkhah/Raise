@@ -1,8 +1,8 @@
 """
-Domain pack contract for pluggable simulation / training backends.
+Domain pack contract for CrowdNav++ (RAISE simulation / training surface).
 
-A Domain Pack is a package under ``domains/`` that supplies everything the
-reward-search algorithm needs for one environment family.
+The loaded pack (``domains.crowdnav``) supplies everything the reward-search
+algorithm needs: prompts, Score1, sandbox smoke states, and PPO trainers.
 """
 
 from __future__ import annotations

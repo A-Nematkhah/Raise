@@ -1,8 +1,8 @@
 """
-Research-grade reward sandbox / validator (ported from mobile_robot_env).
+Research-grade reward sandbox / validator for CrowdNav++ LLM reward code.
 
 Not a security-grade sandbox. AST checks + restricted exec + smoke tests
-filter obviously bad LLM reward code before expensive RL.
+filter obviously bad LLM reward code before expensive PPO training.
 """
 
 from raise_core.sandbox.config import SandboxConfig
