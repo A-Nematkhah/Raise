@@ -1,4 +1,4 @@
-"""raise_config.py is the single source for env + budget defaults."""
+"""configs/raise.yaml is the single source for env + budget defaults."""
 
 from __future__ import annotations
 

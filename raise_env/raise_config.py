@@ -1,13 +1,19 @@
-"""Single editable RAISE configuration (CrowdNav++ environment + budgets).
+"""RAISE config schema + loader.
 
-Edit ``CONFIG`` below (or pass ``--config path.py`` / ``--set section.key=value``).
-All budget and simulator numeric defaults live here — nowhere else.
+**Edit experiment values in** ``configs/raise.yaml`` (not this file).
+This module defines dataclasses, validation, and ``CONFIG`` loaded from that YAML.
+Override at runtime with ``--config other.yaml`` or ``--set section.key=value``.
 """
 
 from __future__ import annotations
 
+import os
 from dataclasses import asdict, dataclass, field, replace
+from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Tuple
+
+_RAISE_ENV_ROOT = Path(__file__).resolve().parent
+DEFAULT_CONFIG_PATH = _RAISE_ENV_ROOT / "configs" / "raise.yaml"
 
 
 # ---------------------------------------------------------------------------
@@ -192,10 +198,6 @@ class RaiseConfig:
     )
 
 
-# The object users edit. Prefer ``replace(CONFIG, ...)`` / ``--set`` over mutation.
-CONFIG = RaiseConfig()
-
-
 # ---------------------------------------------------------------------------
 # Validation / upstream builder / overlays
 # ---------------------------------------------------------------------------
@@ -360,7 +362,7 @@ def apply_set_overrides(config: RaiseConfig, assignments: Mapping[str, str]) -> 
         if len(parts) < 2:
             raise ValueError(
                 f"--set expects section.key[=value], got {key!r}; "
-                "see raise_config.py and the README migration table"
+                "see configs/raise.yaml header and the README migration table"
             )
         cursor: Any = data
         for part in parts[:-1]:
@@ -431,10 +433,28 @@ def _dict_to_raise_config(data: Dict[str, Any]) -> RaiseConfig:
     )
 
 
+def load_config_yaml(path: str | os.PathLike[str]) -> RaiseConfig:
+    """Load a YAML file with the same sections as ``configs/raise.yaml``."""
+    try:
+        import yaml
+    except ImportError as exc:
+        raise ImportError(
+            "PyYAML is required to load configs/*.yaml; "
+            "pip install pyyaml"
+        ) from exc
+    path = Path(path).resolve()
+    if not path.is_file():
+        raise FileNotFoundError(f"config file not found: {path}")
+    with path.open(encoding="utf-8") as fh:
+        data = yaml.safe_load(fh)
+    if not isinstance(data, dict):
+        raise TypeError(f"{path} must contain a YAML mapping, got {type(data)!r}")
+    return validate(_dict_to_raise_config(data))
+
+
 def load_config_module(path: str) -> RaiseConfig:
     """Load a Python file that exports ``CONFIG`` (a ``RaiseConfig``)."""
     import importlib.util
-    import os
 
     path = os.path.abspath(path)
     spec = importlib.util.spec_from_file_location("_raise_user_config", path)
@@ -448,22 +468,36 @@ def load_config_module(path: str) -> RaiseConfig:
     return validate(cfg)
 
 
+def load_config_file(path: str | os.PathLike[str]) -> RaiseConfig:
+    """Load ``.yaml`` / ``.yml`` or a ``.py`` module exporting ``CONFIG``."""
+    path_str = os.fspath(path)
+    lower = path_str.lower()
+    if lower.endswith((".yaml", ".yml")):
+        return load_config_yaml(path_str)
+    if lower.endswith(".py"):
+        return load_config_module(path_str)
+    raise ValueError(
+        f"unsupported config type {path_str!r}; use .yaml / .yml or .py"
+    )
+
+
 def resolve_config(
     *,
     config_path: Optional[str] = None,
     set_overrides: Optional[Tuple[str, ...]] = None,
 ) -> RaiseConfig:
-    """Precedence: built-in CONFIG < --config file < --set overrides."""
+    """Precedence: ``configs/raise.yaml`` < ``--config`` file < ``--set``."""
     cfg = CONFIG
     if config_path:
-        cfg = load_config_module(config_path)
+        cfg = load_config_file(config_path)
     if set_overrides:
         parsed: Dict[str, str] = {}
         for item in set_overrides:
             if "=" not in item:
                 raise ValueError(
                     f"--set requires section.key=value, got {item!r}. "
-                    "Removed CLI flags map to --set keys; see README Configuration."
+                    "Removed CLI flags map to --set keys; see configs/raise.yaml "
+                    "header and README Configuration."
                 )
             k, v = item.split("=", 1)
             parsed[k.strip()] = v.strip()
@@ -471,9 +505,14 @@ def resolve_config(
     return validate(cfg)
 
 
+# Loaded from configs/raise.yaml at import (the file users edit).
+CONFIG = load_config_yaml(DEFAULT_CONFIG_PATH)
+
+
 __all__ = [
     "BudgetConfig",
     "CONFIG",
+    "DEFAULT_CONFIG_PATH",
     "EnvConfig",
     "LlmConfig",
     "PpoConfig",
@@ -485,7 +524,9 @@ __all__ = [
     "apply_set_overrides",
     "build_upstream_config",
     "config_to_dict",
+    "load_config_file",
     "load_config_module",
+    "load_config_yaml",
     "resolve_config",
     "validate",
 ]

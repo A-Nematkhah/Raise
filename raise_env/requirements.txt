@@ -26,5 +26,8 @@ groq>=1.0.0
 # conservative estimate is used; the vocabulary downloads once on first use).
 tiktoken>=0.9
 
+# Editable experiment config (configs/raise.yaml)
+PyYAML>=6.0
+
 # Development / CI
 pytest>=7.0.0

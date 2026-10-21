@@ -69,13 +69,16 @@ The server URL defaults to `http://localhost:11434/v1`; override it with
 
 ## Configuration
 
-All simulator and budget defaults live in **`raise_config.py`** (`CONFIG`).
-Edit that file, or override at runtime:
+All simulator and budget defaults live in **`configs/raise.yaml`**.
+Open that file to edit values; its header lists run commands and the old-flag
+→ key map. Schema/validation is in `raise_config.py` (not for editing numbers).
 
-- **`--config path.py`** — file must export `CONFIG: RaiseConfig`
+Override at runtime:
+
+- **`--config path.yaml`** — alternate YAML (or `.py` exporting `CONFIG`)
 - **`--set section.key=value`** — repeatable; nested keys use dots (e.g.
   `budget.stage3.train_steps=50000`)
-- Precedence: built-in `CONFIG` < `--config` < `--set`
+- Precedence: `configs/raise.yaml` < `--config` < `--set`
 
 On run start, `scripts/run_raise.py` writes **`config_snapshot.json`** (with
 sha256) under `--output-dir`. Resume compares the snapshot unless
@@ -138,7 +141,7 @@ sha256) under `--output-dir`. Resume compares the snapshot unless
 | `--robot-kinematics` | `env.kinematics` |
 | `--action-speed-samples` | `env.speed_samples` |
 | `--action-rotation-samples` | `env.rotation_samples` |
-| `--env-config` | edit `raise_config.py` `CONFIG.env` (or `--set env.human_num=…`) |
+| `--env-config` | edit `configs/raise.yaml` `env:` (or `--set env.human_num=…`) |
 | `--feedback-card` | `selection.feedback_card` |
 | `--max-input-tokens` | `selection.max_input_tokens` |
 | `--target-input-tokens` | `selection.target_input_tokens` |

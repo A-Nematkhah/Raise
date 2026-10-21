@@ -2,8 +2,8 @@
 """
 Single entry point for RAISE on CrowdNav++ CrowdSimVarNum.
 
-Edit ``raise_config.py`` or pass ``--config`` / ``--set section.key=value``.
-See README_RAISE.md Configuration for migrated CLI flags.
+Edit ``configs/raise.yaml`` (commands and flag map are in that file's header),
+or pass ``--config`` / ``--set section.key=value``.
 
 Examples (from ``raise_env/``)::
 
@@ -59,14 +59,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--config",
         type=str,
         default=None,
-        help="Python file exporting CONFIG: RaiseConfig (overrides raise_config.py)",
+        help="YAML config (default: configs/raise.yaml); or .py exporting CONFIG",
     )
     parser.add_argument(
         "--set",
         action="append",
         default=[],
         metavar="SECTION.KEY=VALUE",
-        help="Override raise_config (repeatable); e.g. budget.population_size=8",
+        help="Override config key (repeatable); e.g. budget.population_size=8",
     )
     parser.add_argument(
         "--print-config",
