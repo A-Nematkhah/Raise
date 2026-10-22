@@ -1,0 +1,7 @@
+# Copy this file to xai_key (no extension) and put your key on one line:
+#   copy xai_key.example xai_key
+#
+# Then replace the line below with your real key from https://console.x.ai/
+# Never commit xai_key (it is gitignored).
+
+xai-REPLACE_WITH_YOUR_KEY

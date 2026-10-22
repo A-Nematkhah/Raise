@@ -1,0 +1,283 @@
+# =============================================================================
+# RAISE — editable experiment config (CrowdNav++)
+# =============================================================================
+# THIS is the file to review and edit. Schema/validation lives in raise_config.py;
+# do not put experiment numbers there.
+#
+# Working directory for all commands below:  raise_env/
+#
+# -----------------------------------------------------------------------------
+# How to run
+# -----------------------------------------------------------------------------
+# Print effective config (after this file + any --set):
+#   python scripts/run_raise.py --print-config
+#
+# Dry / wiring check (stub PPO + smoke Score1, seconds):
+#   python scripts/run_raise.py --dry-run --output-dir results/raise_fast
+#
+# Real run (edit llm.provider below, or override with --set):
+#   python scripts/run_raise.py --output-dir results/crowdnav_run
+#   python scripts/run_raise.py --set llm.provider=groq --output-dir results/crowdnav_run
+#
+# Alternate config file / one-off overrides:
+#   python scripts/run_raise.py --config configs/raise.yaml
+#   python scripts/run_raise.py --set budget.population_size=4 --set env.human_num=12
+#   python scripts/run_raise.py --set ppo.device=cpu --set budget.stage2_train_steps=8000
+#
+# Resume / ignore checkpoints / allow config drift on resume:
+#   python scripts/run_raise.py --output-dir results/crowdnav_run --resume
+#   python scripts/run_raise.py --output-dir results/crowdnav_run --no-resume
+#   python scripts/run_raise.py --output-dir results/crowdnav_run --allow-config-drift
+#
+# After a run: baselines, report, plots:
+#   python scripts/run_raise.py --baselines --output-dir results/crowdnav_run
+#   python scripts/run_baselines.py --run-dir results/crowdnav_run
+#   python scripts/print_raise_report.py --run-dir results/crowdnav_run
+#   python scripts/plot_raise_run.py --run-dir results/crowdnav_run
+#
+# Stage I dataset / generalization eval / smoke vendor:
+#   python scripts/collect_crowdnav_stage1_dataset.py
+#   python scripts/evaluate_crowdnav_generalization.py --run-dir <run-dir> --densities
+#   python scripts/evaluate_crowdnav_generalization.py --run-dir <run-dir> --all-variants
+#   python scripts/smoke_crowdnavpp.py
+#
+# Dev tools (scripts/dev/):
+#   python scripts/dev/bench_speed.py
+#   python scripts/dev/calibrate_crowdnav_native.py
+#   python scripts/dev/check_orca_reference.py
+#   python scripts/dev/run_gamma_sweep.py --run-dir <run-dir>
+#   python scripts/dev/analyze_score1_vs_fitness.py --run-dir <run-dir>
+#
+# -----------------------------------------------------------------------------
+# CLI flags kept on run_raise.py (everything else is a key below or --set)
+# -----------------------------------------------------------------------------
+#   --config PATH          YAML (or .py exporting CONFIG); default: this file
+#   --set section.key=val  Override any key below (repeatable)
+#   --output-dir / --run-dir
+#   --resume / --no-resume
+#   --allow-config-drift
+#   --dry-run / --fast
+#   --print-config
+#   --verbose
+#   --baselines
+#   --allow-seed-llm
+#
+# Precedence: this file  <  --config other.yaml  <  --set …
+# Each run writes config_snapshot.json (+ sha256) under the run directory.
+#
+# -----------------------------------------------------------------------------
+# Old flag → key in this file (use --set KEY=… or edit here)
+# -----------------------------------------------------------------------------
+#   --seed                         → seed
+#   --llm                          → llm.provider
+#   --llm-model                    → llm.model
+#   --llm-max-tokens               → llm.max_tokens
+#   --llm-reasoning-effort         → llm.reasoning_effort
+#   --llm-seed                     → llm.seed
+#   --device                       → ppo.device
+#   --torch-threads                → ppo.torch_threads
+#   --population                   → budget.population_size
+#   --generations                  → budget.generations
+#   --stage2-train-steps           → budget.stage2_train_steps
+#   --stage2-eval-episodes         → budget.stage2_eval_episodes
+#   --stage2-seeds                 → budget.stage2_seeds
+#   --stage2-paired-seeds          → budget.stage2_paired_seeds
+#   --stage2-successive-halving    → budget.stage2_successive_halving
+#   --stage3-train-steps           → budget.stage3.train_steps
+#   --stage3-eval-episodes         → budget.stage3.eval_episodes
+#   --stage3-seeds                 → budget.stage3.n_seeds
+#   --stage3-top-k                 → budget.stage3.top_k
+#   --final-eval-episodes          → budget.final_eval_episodes
+#   --n-envs                       → budget.n_envs
+#   --label-workers                → budget.label_workers
+#   --action-mode                  → env.action_mode
+#   --robot-kinematics             → env.kinematics
+#   --selection-mode               → selection.mode
+#   --infra-error-policy           → selection.infra_error_policy
+#   --ppo-normalize-reward         → ppo.normalize_reward
+#   --env-config / crowdnav_hard   → edit env: section (or evaluation_variants)
+#   --domain                       → removed (CrowdNav-only)
+# Full table: README_RAISE.md → Configuration
+# =============================================================================
+
+seed: 425
+
+env:
+  time_limit: 30.0              # seconds; episode horizon
+  time_step: 0.25               # seconds per sim step
+  val_size: 100                 # held-out val scenarios
+  test_size: 500                # blind test scenarios
+  success_reward: 1.0
+  collision_penalty: -0.25
+  discomfort_dist: 0.2          # metres
+  discomfort_penalty_factor: 0.5
+  circle_radius: 6.0            # metres; spawn circle
+  human_num: 10
+  human_num_range: 0            # must be < human_num
+  predict_method: const_vel     # none | const_vel
+  predict_steps: 5
+  pred_timestep: 0.25
+  robot_visible: false          # EvoNav: humans ignore robot (ORCA among humans)
+  kinematics: holonomic          # train/eval: holonomic | unicycle
+  action_mode: continuous       # discrete | continuous
+  speed_samples: 5
+  rotation_samples: 16
+  # Default train = "w/o random"; use evaluation_variants humans_*_random for w/ random.
+  randomize_attributes: false
+  random_goal_changing: false
+  random_radii: false
+  random_v_pref: false
+
+# ~2h wall-clock smoke (GPU + Groq llm_rank + EvoNav Score_1).
+# Scaled from the 48h profile so crossover/Score_1/Stage III still exercise.
+# Approx train env-steps (order of magnitude):
+#   Stage II: ~4 gens × ~4–6 trains × 8000 × 2 seeds ≈ 0.3–0.4M
+#   Stage III: top_k=2 × 40000 × 2 seeds × refine_rounds=1 ≈ 0.16M
+# Expect ~1.5–2.5h on a mid/high GPU; too slow → cut stage2_train_steps to 6000
+# or generations to 3; too fast → raise stage2_train_steps to 12000.
+#
+# Run (from raise_env/, GPU machine with dataset + CUDA torch):
+#   python scripts/collect_crowdnav_stage1_dataset.py
+#   python scripts/run_raise.py --config configs/raise_2h.yaml \
+#       --output-dir results/crowdnav_2h --no-resume
+budget:
+  population_size: 6
+  generations: 4
+  stage2_train_steps: 8000      # K2
+  stage2_eval_episodes: 20
+  stage2_seeds: 2
+  stage2_paired_seeds: true
+  stage2_successive_halving: false
+  n_envs: 4
+  label_workers: 1
+  final_eval_episodes: 50
+  eval_tied_finalists: true
+  stall_seconds: 0.0
+  elitism: true
+  n_crossover: null
+  n_mutation: null
+  n_random: null
+  mutation_exclude_collapsed: true
+  collapse_cr: 0.8
+  stage2_eval_split: val
+  eval_mode: holdout_only
+  warm_start: false
+  stage1:
+    dataset_path: domains/crowdnav/data/stage1_dataset
+    collect_kinematics: holonomic
+    collect_episodes: 40
+    max_invalid_replacements: 16
+    behavioral_dedup: true
+  stage3:
+    top_k: 2
+    train_steps: 40000          # K3
+    eval_episodes: 20
+    n_seeds: 2
+    warm_start: false
+    skip_collapsed: true
+    refine_rounds: 1            # no G3 refine in the 2h smoke
+
+ppo:
+  n_steps: 256
+  n_epochs: 10
+  gamma: 0.99
+  learning_rate: 0.0003
+  ent_coef: 0.0
+  normalize_reward: false
+  device: cuda
+  torch_threads: 1
+
+llm:
+  # xAI Grok — put key in raise_env/xai_key (see xai_key.example).
+  # Switch back to Groq with: provider: groq / model: openai/gpt-oss-120b
+  provider: xai
+  model: grok-4.20-0309-reasoning
+  temperature: 0.1
+  max_tokens: 2000
+  reasoning_effort: null
+  seed: null
+
+selection:
+  mode: llm_rank
+  top_k: 2
+  n_votes: 2                    # 2h smoke: fewer ranking votes than full run
+  temperature: 0.1
+  p_restart: 0.1
+  guards: true
+  guard_success_threshold: 0.9
+  guard_min_path_length: 0.1
+  reflection_note_cap: 3
+  mutation_parents: lower
+  keep_runtime_elite: true
+  behavioral_dedup: true
+  max_fallback_fraction: 0.34   # ~1/3 slots; was 0.5 and hid crossover clone runs
+  strict_fallback: false
+  infra_error_policy: retry_then_abort
+  feedback_card: true
+  # xAI: no Groq TPM clamp — room for fuller feedback cards (Grok context ≫ this).
+  # If switching back to Groq, drop to ~4500/4000 so input+max_tokens stays under ~8k TPM.
+  max_input_tokens: 12000
+  target_input_tokens: 10000
+  feedback_history: 2
+  feedback_trajectories: 2
+  feedback_random_calls: true
+  feedback_training_dynamics: true
+  feedback_components: true
+
+safety:
+  timeout_seconds: 5.0
+  startup_timeout_seconds: 120.0
+  max_code_length: 20000
+  max_call_seconds: 1.0
+  max_mean_call_seconds: 0.02
+  mean_call_window: 100
+  smoke_max_call_seconds: 0.1
+  max_abs_reward: 10000.0
+  max_range_length: 10000
+  max_memory_keys: 64
+  max_memory_value_len: 10000
+  smoke_rlimit_as_bytes: 2147483648   # 2 GiB POSIX smoke child
+  max_pow_exponent: 64
+  max_pow_bits: 64
+  max_shift_bits: 64
+  max_sequence_repeat: 10000
+  max_factorial_arg: 1000
+
+# Generalization densities H ∈ {10, 15, 20}; *_random = EvoNav "w/ random".
+evaluation_variants:
+  humans_10:
+    env:
+      human_num: 10
+      human_num_range: 0
+  humans_15:
+    env:
+      human_num: 15
+      human_num_range: 0
+  humans_20:
+    env:
+      human_num: 20
+      human_num_range: 0
+  humans_20_random:
+    env:
+      human_num: 20
+      human_num_range: 0
+      randomize_attributes: true
+      random_goal_changing: true
+      random_radii: true
+      random_v_pref: true
+  humans_15_random:
+    env:
+      human_num: 15
+      human_num_range: 0
+      randomize_attributes: true
+      random_goal_changing: true
+      random_radii: true
+      random_v_pref: true
+  humans_10_random:
+    env:
+      human_num: 10
+      human_num_range: 0
+      randomize_attributes: true
+      random_goal_changing: true
+      random_radii: true
+      random_v_pref: true

@@ -25,12 +25,12 @@ from domains.crowdnav.sandbox_fields import crowdnav_sandbox_config
 from domains.crowdnav.score1_worker import Score1TimeoutWorker
 from domains.crowdnav.settings import CrowdNavSettings
 from domains.crowdnav.env_wrapper import load_env_config
+from domains.crowdnav.score1 import score_crowdnav_dataset
 from domains.crowdnav.stage1 import (
     load_crowdnav_dataset,
     make_smoke_score_fn,
     read_dataset_manifest,
     save_crowdnav_dataset,
-    score_crowdnav_dataset,
     with_settings,
 )
 from raise_core.sandbox.runtime import SandboxedReward, compile_compute_reward
@@ -209,28 +209,27 @@ def test_unicycle_view_of_holonomic_actions(dataset_dir):
 # ------------------------------------------------------------------ Score1
 
 
-def test_seed_reward_scores_positive_on_real_rollouts(dataset_dir):
+def test_seed_reward_scores_finite_on_real_rollouts(dataset_dir):
     result = score_crowdnav_dataset(_validated(D5_SEED_FUNCTION), load_crowdnav_dataset(dataset_dir))
     assert not result.rejected
-    assert result.scenario_scores["safety"] > 0.0 and result.score > 0.0
+    assert result.per_scenario and math.isfinite(result.score)
+    assert result.n_frames > 0
 
 
-def test_score1_rejects_failure_seeking_and_constant_rewards(dataset_dir):
+def test_score1_constant_near_zero_on_real_dataset(dataset_dir):
     trajs = load_crowdnav_dataset(dataset_dir)
-    crash = _validated(
-        _FN
-        + "    if state.collision or state.timeout:\n        return 1.0\n"
-        "    if state.reached_goal:\n        return -1.0\n"
-        "    return 0.0\n"
-    )
-    assert score_crowdnav_dataset(crash, trajs).reject_reason == "prefers_failure"
     const = _validated(_FN + "    return 0.0\n")
-    assert score_crowdnav_dataset(const, trajs).reject_reason == "no_signal"
+    result = score_crowdnav_dataset(const, trajs)
+    assert not result.rejected
+    # Constant ranks → NaN Spearmans → nan_policy=zero → score near 0.
+    assert abs(result.score) < 0.25
+    assert result.n_nan_frames == result.n_frames > 0
 
 
 def test_smoke_score_never_rejects():
     result = make_smoke_score_fn()(_validated(_FN + "    return 0.0\n"))
     assert not result.rejected
+    assert math.isfinite(result.score)
 
 
 def test_score1_worker_matches_in_process_and_times_out(dataset_dir):

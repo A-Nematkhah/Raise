@@ -527,17 +527,33 @@ class StageIEvolver:
 
         # Leave room for max_tokens under Groq per-request TPM (prompt+completion).
         # Stage I fit_to_budget uses a RAW token counter; Groq clamp uses raw×margin.
-        # Use groq_raw_input_budget so a "fitted" prompt still leaves completion room.
+        # Prefer keeping feedback.max_input_tokens: shrink the *sizing* completion
+        # reserve first (send-time clamp still enforces prompt+max_tokens ≤ cap).
+        # Otherwise llm.max_tokens=3500 starves crossover (raw room → 3200).
         llm_max = int(
             max_tokens
             if max_tokens is not None
             else (getattr(self.llm, "max_tokens", None) or 2000)
         )
         provider = str(getattr(self.llm, "provider", "") or "").lower()
+        sizing_completion = llm_max
         if provider == "groq":
-            from raise_core.llm import groq_raw_input_budget
+            from raise_core.llm import (
+                groq_raw_input_budget,
+                groq_sizing_completion_tokens,
+            )
 
-            tpm_room = groq_raw_input_budget(llm_max)
+            desired_in = int(self.feedback.max_input_tokens)
+            sizing_completion = groq_sizing_completion_tokens(desired_in, llm_max)
+            tpm_room = groq_raw_input_budget(sizing_completion)
+            if sizing_completion < llm_max:
+                logger.warning(
+                    "[Stage I] Groq TPM sizing uses completion reserve %d "
+                    "(requested max_tokens=%d) so input can reach %d raw tokens",
+                    sizing_completion,
+                    llm_max,
+                    tpm_room,
+                )
         else:
             tpm_room = 100_000
         hard_input = min(int(self.feedback.max_input_tokens), tpm_room)
@@ -554,6 +570,7 @@ class StageIEvolver:
             "provider": str(getattr(self.llm, "provider", "") or ""),
             "model": getattr(self.llm, "model", None),
             "max_output_tokens": llm_max,
+            "sizing_completion_tokens": sizing_completion,
             "token_method": self._token_counter.method,
             "max_input_tokens": hard_input,
             "target_input_tokens": target_input,
@@ -896,6 +913,17 @@ class StageIEvolver:
             "fallback_fraction": fraction,
         }
         max_frac = float(getattr(self.config, "max_fallback_fraction", 0.5) or 0.5)
+        # Warn early: >1/4 slots already means evolution is drifting toward clones.
+        if fraction > 0.25:
+            logger.warning(
+                "high fallback fraction: %d/%d slots (%.2f); "
+                "crossover/mutation LLM may be failing (budget or validation)",
+                n_fb,
+                n,
+                fraction,
+            )
+            if self.run_status == "ok":
+                self.run_status = "degraded"
         if fraction > max_frac:
             msg = (
                 f"fallback contamination: {n_fb}/{n} slots "
@@ -1085,51 +1113,44 @@ class StageIEvolver:
                 # The smoke states cannot cover every dataset frame; a reward
                 # that fails on one is rejected like a Stage II training failure.
                 raw = Score1Result(
-                    score=-1.0,
-                    degenerate_fraction=1.0,
+                    score=float("-inf"),
                     rejected=True,
                     reject_reason=f"score1_error: {type(exc).__name__}: {exc}"[:300],
+                    error=f"{type(exc).__name__}: {exc}"[:300],
                 )
             except Exception as exc:  # noqa: BLE001
                 console.fail(
-                    f"Score1 crashed for {cand.candidate_id}: {exc}",
+                    f"Score_1 crashed for {cand.candidate_id}: {exc}",
                     stage="Stage I",
                 )
                 raise
             meta = dict(cand.metadata or {})
             # Score1Result (preferred) or plain float (smoke / test helpers).
-            if hasattr(raw, "score") and hasattr(raw, "degenerate_fraction"):
+            if hasattr(raw, "score"):
                 value = float(raw.score)
-                meta["degenerate_fraction"] = float(raw.degenerate_fraction)
-                meta["score1_n_pairs"] = int(getattr(raw, "n_pairs", 0) or 0)
-                meta["score1_n_degenerate"] = int(
-                    getattr(raw, "n_degenerate", 0) or 0
-                )
-                if isinstance(raw, Score1Result) and raw.scenario_scores:
-                    meta["score1_scenario_scores"] = dict(raw.scenario_scores)
+                n_nan = int(getattr(raw, "n_nan_frames", 0) or 0)
+                n_fr = int(getattr(raw, "n_frames", 0) or 0)
+                meta["score1_n_nan_frames"] = n_nan
+                meta["score1_n_frames"] = n_fr
+                if isinstance(raw, Score1Result) and raw.per_scenario:
+                    meta["score1_per_scenario"] = dict(raw.per_scenario)
+                if getattr(raw, "error", None):
+                    meta["score1_error"] = str(raw.error)
                 if getattr(raw, "rejected", False):
                     meta["score1_rejected"] = True
                     meta["score1_reject_reason"] = getattr(raw, "reject_reason", None)
                     value = float("-inf")
                     console.warn(
-                        f"{cand.candidate_id}: Score1 hard-reject "
-                        f"({getattr(raw, 'reject_reason', 'unknown')}; "
-                        f"degen={float(raw.degenerate_fraction):.2%})",
+                        f"{cand.candidate_id}: Score_1 hard-reject "
+                        f"({getattr(raw, 'reject_reason', 'unknown')})",
                         stage="Stage I",
                     )
-                elif float(raw.degenerate_fraction) >= 0.5:
+                elif n_fr > 0 and (n_nan / float(n_fr)) >= 0.5:
                     console.warn(
-                        f"{cand.candidate_id}: high Score1 degeneracy "
-                        f"({float(raw.degenerate_fraction):.2%} of pairs "
-                        f"had undefined Spearman)",
+                        f"{cand.candidate_id}: high Score_1 NaN-frame rate "
+                        f"({n_nan}/{n_fr} frames; nan_policy applied)",
                         stage="Stage I",
                     )
-                if getattr(raw, "holdout_score", None) is not None:
-                    meta["score1_holdout"] = float(raw.holdout_score)
-                if getattr(raw, "train_score", None) is not None:
-                    meta["score1_train"] = float(raw.train_score)
-                if getattr(raw, "raw_score", None) is not None:
-                    meta["score1_raw"] = float(raw.raw_score)
             else:
                 value = float(raw)
             scored.append(replace(cand, score=value, metadata=meta))

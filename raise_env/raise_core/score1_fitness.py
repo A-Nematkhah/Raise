@@ -40,34 +40,46 @@ def _spearman(xs: Sequence[float], ys: Sequence[float]) -> Optional[float]:
 def _load_trained(run_dir: Path) -> List[Dict[str, Any]]:
     rows: Dict[str, Dict[str, Any]] = {}
     cl = run_dir / "closed_loop"
-    for path in sorted(cl.glob("pop_epoch_*.json")):
-        data = json.loads(path.read_text(encoding="utf-8"))
-        for cand in data.get("candidates") or []:
-            md = cand.get("metadata") or {}
-            if md.get("fitness") is None:
-                continue
-            if md.get("score1_rejected"):
-                continue
-            cid = str(cand.get("candidate_id"))
-            hold = md.get("last_metrics") or {}
-            if isinstance(hold.get("holdout"), dict):
-                hold = hold["holdout"]
-            score = cand.get("score")
-            if score is None:
-                continue
-            try:
-                score_f = float(score)
-            except (TypeError, ValueError):
-                continue
-            if not math.isfinite(score_f):
-                continue
-            rows[cid] = {
-                "id": cid,
-                "score1": score_f,
-                "fitness": float(md["fitness"]),
-                "SR": float(hold.get("SR", hold.get("sr", 0.0)) or 0.0),
-                "CR": float(hold.get("CR", hold.get("cr", 0.0)) or 0.0),
-            }
+    # REPORT writers pass the run root; also accept a closed_loop/ path.
+    search_dirs = [cl]
+    if run_dir.name == "closed_loop":
+        search_dirs = [run_dir]
+    for folder in search_dirs:
+        for path in sorted(folder.glob("pop_epoch_*.json")):
+            data = json.loads(path.read_text(encoding="utf-8"))
+            for cand in data.get("candidates") or []:
+                md = cand.get("metadata") or {}
+                if md.get("score1_rejected"):
+                    continue
+                # pop_epoch rows store fitness/score both nested and top-level.
+                fit_raw = md.get("fitness")
+                if fit_raw is None:
+                    fit_raw = cand.get("fitness")
+                if fit_raw is None:
+                    continue
+                cid = str(cand.get("candidate_id"))
+                hold = md.get("last_metrics") or cand.get("last_metrics") or {}
+                if isinstance(hold.get("holdout"), dict):
+                    hold = hold["holdout"]
+                score = cand.get("score")
+                if score is None:
+                    score = md.get("score1")
+                if score is None:
+                    continue
+                try:
+                    score_f = float(score)
+                    fit_f = float(fit_raw)
+                except (TypeError, ValueError):
+                    continue
+                if not math.isfinite(score_f) or not math.isfinite(fit_f):
+                    continue
+                rows[cid] = {
+                    "id": cid,
+                    "score1": score_f,
+                    "fitness": fit_f,
+                    "SR": float(hold.get("SR", hold.get("sr", 0.0)) or 0.0),
+                    "CR": float(hold.get("CR", hold.get("cr", 0.0)) or 0.0),
+                }
     return list(rows.values())
 
 

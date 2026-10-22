@@ -124,7 +124,8 @@ def _cand(cid, *, origin="mutation", parents=(), code=None, metrics=None, dynami
     md = {}
     if metrics is not None:
         md.update(last_metrics=metrics, fitness=metrics["fitness"], train_steps=12000,
-                  score1_scenario_scores={"safety": 0.8}, score1_n_pairs=120)
+                  score1_per_scenario={"s0": 0.8}, score1_n_nan_frames=0,
+                  score1_n_frames=100)
     if dynamics is not None:
         md["training_dynamics"] = dynamics
     return RewardCandidate(
@@ -271,7 +272,7 @@ def test_full_card_renders_every_section_from_recorded_data():
     # F: representative episodes; H: preference check.
     assert "typical success" in text and "typical collision" in text
     assert "Mann-Whitney AUC over 19x11 holdout episode pairs, discounted, gamma 0.99" in text
-    assert "outcome-ordering AUC 0.90" in text
+    assert "EvoNav Score_1 mean 0.800" in text
     assert "Observation:" in text and fc._GUIDANCE in text
 
 

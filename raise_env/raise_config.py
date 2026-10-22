@@ -127,7 +127,7 @@ class PpoConfig:
 class LlmConfig:
     """LLM proposal / ranking provider."""
 
-    provider: str = "seed"  # seed | groq | vllm | ollama | scripted
+    provider: str = "seed"  # seed | groq | xai | vllm | ollama | scripted
     model: Optional[str] = None
     temperature: float = 0.1  # used by LLM ranker
     max_tokens: Optional[int] = None
@@ -151,7 +151,7 @@ class SelectionSection:
     mutation_parents: str = "lower"  # lower | rank_weighted | tournament
     keep_runtime_elite: bool = True
     behavioral_dedup: bool = True
-    max_fallback_fraction: float = 0.5
+    max_fallback_fraction: float = 0.34
     strict_fallback: bool = False
     infra_error_policy: str = "retry_then_abort"  # retry_then_abort|abort|penalize
     # Feedback card (diagnostic prompts).

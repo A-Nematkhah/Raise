@@ -9,7 +9,7 @@ Sections (each prints "unavailable: <reason>" when its data was not recorded):
 
 Every number comes from data the loop already stored: Stage II holdout
 metrics, per-episode holdout records and training-rollout windows written by
-``domains.crowdnav.adapter``, Stage I ``score1_scenario_scores``, and the
+``domains.crowdnav.adapter``, Stage I ``score1_per_scenario``, and the
 candidate archive. Nothing is re-evaluated here.
 
 ``truncation_ladder`` lists progressively smaller renderings; the evolver
@@ -703,16 +703,18 @@ class FeedbackCard:
                 f"(Mann-Whitney AUC over {pref['n_pos']}x{pref['n_neg']} holdout episode pairs, {disc}; "
                 "timeouts run longest, so duration contributes)"
             )
-        safety = _finite((rec.metadata.get("score1_scenario_scores") or {}).get("safety"))
-        if safety is not None:
-            n_traj = rec.metadata.get("score1_n_pairs")
-            lines.append(
-                f"Fixed Stage I dataset: outcome-ordering AUC {(safety + 1.0) / 2.0:.2f} "
-                f"(success > timeout > collision on discounted returns"
-                + (f", {int(n_traj)} trajectories" if n_traj else "")
-                + ")"
-            )
-        if pref is None and safety is None:
+        per = rec.metadata.get("score1_per_scenario") or {}
+        if isinstance(per, dict) and per:
+            vals = [float(v) for v in per.values() if _finite(v) is not None]
+            if vals:
+                mean_s1 = sum(vals) / len(vals)
+                n_nan = rec.metadata.get("score1_n_nan_frames")
+                extra = f", n_nan_frames={int(n_nan)}" if n_nan is not None else ""
+                lines.append(
+                    f"Fixed Stage I dataset: EvoNav Score_1 mean {mean_s1:.3f} "
+                    f"over {len(vals)} scenarios{extra}"
+                )
+        if pref is None and not (isinstance(per, dict) and per):
             return lines, reason
         return lines, None
 

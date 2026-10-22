@@ -133,7 +133,7 @@ class RaiseRunConfig:
     output_dir: str = "results/raise_run"
     seed: int = field(default_factory=run_seed)
     domain: str = "crowdnav"
-    llm_provider: str = field(default_factory=llm_provider)  # seed | groq | vllm | ollama | scripted
+    llm_provider: str = field(default_factory=llm_provider)  # seed | groq | xai | vllm | ollama | scripted
     llm_model: Optional[str] = None
     # None → provider defaults (Groq: 3500; vLLM: 1500; Ollama: 4096).
     llm_max_tokens: Optional[int] = None
@@ -418,6 +418,8 @@ class RaisePipeline:
             kwargs["reasoning_effort"] = str(self.config.llm_reasoning_effort)
         if str(self.config.llm_provider).strip().lower() in (
             "groq",
+            "xai",
+            "grok",
             "vllm",
             "local",
             "gpt-oss",

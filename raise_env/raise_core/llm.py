@@ -12,6 +12,7 @@ Primary Stage I API:
 from __future__ import annotations
 
 import ast
+import json
 import logging
 import os
 import re
@@ -91,6 +92,30 @@ def groq_raw_input_budget(max_completion_tokens: int) -> int:
     room = groq_margined_input_budget(max_completion_tokens)
     margin = max(1.0, float(_GROQ_PROMPT_TOKEN_MARGIN))
     return max(512, int(math.floor(room / margin)))
+
+
+def groq_sizing_completion_tokens(
+    desired_raw_input_tokens: int, requested_max_tokens: int
+) -> int:
+    """Completion tokens to *reserve while sizing input*, not the send budget.
+
+    Prefer keeping ``desired_raw_input_tokens`` under the soft cap; shrink the
+    reserved completion first. ``GroqLLMClient.complete`` still clamps
+    ``max_tokens`` at send time to whatever room remains after the real prompt.
+
+    Without this, a large ``llm.max_tokens`` (e.g. 3500) starves crossover
+    cards: raw input room drops to 3200 while truncated prompts need ~3400+.
+    """
+    import math
+
+    desired = max(512, int(desired_raw_input_tokens))
+    requested = max(256, int(requested_max_tokens))
+    margin = max(1.0, float(_GROQ_PROMPT_TOKEN_MARGIN))
+    margined = int(math.ceil(desired * margin))
+    room_for_completion = int(_GROQ_REQUEST_TOKEN_CAP) - margined
+    if room_for_completion < 256:
+        return 256
+    return max(256, min(requested, room_for_completion))
 
 
 def _clamp_groq_request_budget(
@@ -569,6 +594,68 @@ class OllamaLLMClient(VLLMLLMClient):
         return opts
 
 
+# raise_core/llm.py → raise_env/ (same place as groq_keys.json)
+_RAISE_ENV_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+DEFAULT_XAI_KEY_PATH = os.path.join(_RAISE_ENV_ROOT, "xai_key")
+DEFAULT_XAI_KEYS_JSON = os.path.join(_RAISE_ENV_ROOT, "xai_keys.json")
+
+
+def resolve_xai_api_key(explicit: Optional[str] = None) -> str:
+    """Resolve xAI API key from arg, env, ``xai_key``, or ``xai_keys.json``."""
+    if explicit and str(explicit).strip():
+        return str(explicit).strip()
+    env = (os.environ.get("XAI_API_KEY") or os.environ.get("XAI_KEY") or "").strip()
+    if env:
+        return env
+    key_path = os.environ.get("XAI_KEY_PATH", DEFAULT_XAI_KEY_PATH)
+    if os.path.isfile(key_path):
+        text = open(key_path, encoding="utf-8").read().strip()
+        # Allow a bare key, or "XAI_API_KEY=..." / "key: ..."
+        for line in text.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if "=" in line:
+                line = line.split("=", 1)[1].strip().strip('"').strip("'")
+            if line.lower().startswith("xai-") or line.startswith("xai"):
+                return line
+            if len(line) > 20:
+                return line
+        if text and not text.startswith("#"):
+            return text.splitlines()[0].strip()
+    json_path = os.environ.get("XAI_KEYS_PATH", DEFAULT_XAI_KEYS_JSON)
+    if os.path.isfile(json_path):
+        data = json.loads(open(json_path, encoding="utf-8").read())
+        keys = data.get("keys") or data.get("api_keys") or []
+        if isinstance(keys, str):
+            keys = [keys]
+        for k in keys:
+            k = str(k).strip()
+            if k and not k.startswith("xai_REPLACE") and "YOUR" not in k.upper():
+                return k
+    raise RuntimeError(
+        "xAI API key not found. Create raise_env/xai_key (one line: your key), "
+        "or set XAI_API_KEY, or copy xai_key.example → xai_key."
+    )
+
+
+class XaiLLMClient(VLLMLLMClient):
+    """xAI Grok via the OpenAI-compatible API (``https://api.x.ai/v1``)."""
+
+    provider = "xai"
+    DEFAULT_MODEL = "grok-4.20-0309-reasoning"
+    DEFAULT_BASE_URL = "https://api.x.ai/v1"
+
+    def __init__(self, **kwargs):
+        kwargs.setdefault("model", self.DEFAULT_MODEL)
+        if kwargs.get("base_url") is None:
+            kwargs["base_url"] = os.environ.get("XAI_BASE_URL", self.DEFAULT_BASE_URL)
+        api_key = kwargs.pop("api_key", None)
+        kwargs["api_key"] = resolve_xai_api_key(api_key)
+        kwargs.setdefault("max_tokens", 2000)
+        super().__init__(**kwargs)
+
+
 class SeedVariantLLMClient(LLMClient):
     """
     Emits valid domain ``compute_reward`` variants (no API key).
@@ -609,10 +696,12 @@ def make_llm_client(
     **kwargs,
 ) -> LLMClient:
     """
-    Factory: ``provider`` in {``scripted``, ``seed``, ``groq``, ``vllm``, ``ollama``}.
+    Factory: ``provider`` in
+    {``scripted``, ``seed``, ``groq``, ``xai``, ``vllm``, ``ollama``}.
 
     For ``scripted``, pass ``completions=...``.
     For ``seed``, returns ``SeedVariantLLMClient`` (no API key).
+    For ``xai``, reads ``raise_env/xai_key`` or ``XAI_API_KEY``.
     Optional ``base_code`` / ``variant_fn`` (domain D.5 seed and its
     ``seed_variant``) drive the seed-variant client.
     """
@@ -625,6 +714,8 @@ def make_llm_client(
         return ScriptedLLMClient(completions)
     if name == "groq":
         return GroqLLMClient(model=model or GroqLLMClient.DEFAULT_MODEL, **kwargs)
+    if name in ("xai", "grok"):
+        return XaiLLMClient(model=model or XaiLLMClient.DEFAULT_MODEL, **kwargs)
     if name in ("vllm", "local", "gpt-oss", "gpt-oss-120b"):
         return VLLMLLMClient(model=model or VLLMLLMClient.DEFAULT_MODEL, **kwargs)
     if name == "ollama":

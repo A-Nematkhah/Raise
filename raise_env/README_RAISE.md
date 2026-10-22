@@ -7,7 +7,7 @@ LLM-guided reward evolution for crowd-aware robot navigation in the
 | Package | Role |
 |---------|------|
 | `raise_core/` | LLM client, reward sandbox, evolution loop, Stage III |
-| `domains/crowdnav/` | CrowdNav++ pack (prompts, env wrapper, PPO trainer, Score1, viz) + `data/` |
+| `domains/crowdnav/` | CrowdNav++ pack (prompts, env wrapper, PPO trainer, EvoNav Score_1, viz) + `data/` |
 | `third_party/crowdnavpp/` | CrowdNav++ `CrowdSimVarNum` @ `3907731`, unmodified (MIT) |
 | `raise_paths.py` | Puts `raise_env/` and the vendored simulator on `sys.path` |
 
@@ -43,6 +43,14 @@ install `requirements-cuda.txt` (pinned `torch==2.11.0+cu128`; adjust the
 1. Copy `groq_keys.json.example` → `groq_keys.json`
 2. Add keys: `{"keys": ["gsk_...", "..."]}`
 3. Or set `GROQ_API_KEY` for a single key (pool disabled)
+
+## API keys (xAI / Grok)
+
+1. Copy `xai_key.example` → `xai_key`
+2. Put your key on one line (starts with `xai-…`)
+3. Or set `XAI_API_KEY`
+4. Run with `--set llm.provider=xai --set llm.model=grok-4.20-0309-reasoning`  
+   (or use `configs/raise_2h.yaml`, which defaults to xAI)
 
 ## Ollama (local, no API key)
 
@@ -92,7 +100,7 @@ sha256) under `--output-dir`. Resume compares the snapshot unless
 | `--output-dir` / `--run-dir` | Run directory |
 | `--resume` / `--no-resume` | Checkpoint resume (default: resume) |
 | `--allow-config-drift` | Resume despite snapshot mismatch |
-| `--dry-run` / `--fast` | Stub trainers + smoke Score1 |
+| `--dry-run` / `--fast` | Stub trainers + smoke Score_1 |
 | `--print-config` | JSON dump of effective config and exit |
 | `--verbose` | DEBUG logging |
 | `--baselines` | Run `scripts/run_baselines.py` after the pipeline |

@@ -937,86 +937,108 @@ class ClosedLoopRunner:
             if ranker is not None:
                 evolver.archive.add_population(ranked, generation=g)
                 fallback_population = rank_population_for_evolution(ranked)
-                # Fitness-first render; may drop weak cards to fit input budget.
-                cards = evolver.render_selection_cards(fallback_population)
-                card_ids = {cid for cid, _ in cards}
-                fallback_order = [
-                    c.candidate_id
-                    for c in fallback_population
-                    if c.candidate_id in card_ids
-                ]
-                result = ranker.rank(
-                    cards,
-                    fallback_order=fallback_order,
-                    seed=int(selection_cfg.seed) + g,
-                    stage="stage2",
-                    generation=g,
-                    flags={
-                        candidate.candidate_id: candidate_guard_flags(
-                            candidate, selection_cfg
-                        )
-                        for candidate in ranked
-                        if candidate.candidate_id in card_ids
-                    },
-                )
-                by_id = {candidate.candidate_id: candidate for candidate in ranked}
-                ranked_llm = [
-                    by_id[candidate_id]
-                    for candidate_id in result.ranking
-                    if candidate_id in by_id
-                ]
-                # Candidates dropped from the ranking prompt stay at the tail.
-                ranked_tail = [
-                    c for c in fallback_population if c.candidate_id not in card_ids
-                ]
-                ranked = ranked_llm + ranked_tail
-                note_candidates = [
-                    f"{candidate_id}: {result.rationale[candidate_id]}"
-                    for candidate_id in result.ranking[: min(3, len(result.ranking))]
-                    if candidate_id in result.rationale
-                ]
-                if note_candidates and selection_cfg.reflection_note_cap:
-                    selection_notes = (
-                        selection_notes
-                        + [f"Gen {g} reflection: " + " | ".join(note_candidates)]
-                    )[-selection_cfg.reflection_note_cap :]
-                for candidate in ranked_llm:
-                    candidate.metadata = {
-                        **(candidate.metadata or {}),
-                        "llm_selection_rank": (
-                            result.ranking.index(candidate.candidate_id) + 1
-                        ),
-                        "llm_selection_score": result.scores.get(
-                            candidate.candidate_id
-                        ),
-                        "selection_weaknesses": result.weaknesses.get(
-                            candidate.candidate_id, []
-                        ),
-                        "selection_rationale": result.rationale.get(
-                            candidate.candidate_id, ""
-                        ),
-                        "selection_reflection_notes": list(selection_notes),
-                    }
-                if history and history[-1].get("ranking"):
-                    rank_consistency = append_consistency_csv(
-                        os.path.join(
-                            closed_loop_dir(cfg.output_dir), "rank_consistency.csv"
-                        ),
-                        stage="stage2_generation",
-                        generation=g,
-                        previous=history[-1]["ranking"],
-                        current=result.ranking,
-                        top_k=selection_cfg.top_k,
-                    )
-                selection_payload = {
-                    "ranking": result.ranking,
-                    "scores": result.scores,
-                    "weaknesses": result.weaknesses,
-                    "rationale": result.rationale,
-                    "fallback": result.fallback,
-                    "fallback_reason": result.fallback_reason,
-                    "rank_consistency": rank_consistency,
+                # Pure clone populations (crossover_fallback copies): LLM votes
+                # are position noise. Skip rank and keep fitness order.
+                unique_genomes = {
+                    genome_fingerprint(c.code) for c in fallback_population
                 }
+                skip_identical = (
+                    len(fallback_population) > 1 and len(unique_genomes) == 1
+                )
+                if skip_identical:
+                    ranked = list(fallback_population)
+                    selection_payload = {
+                        "mode": "llm_rank_skipped_identical_genomes",
+                        "ranking": [c.candidate_id for c in ranked],
+                        "n_unique_genomes": 1,
+                    }
+                    logger.warning(
+                        "epoch %d: skipped llm_rank — all %d candidates share "
+                        "one genome (crossover/mutation fallback clones)",
+                        g,
+                        len(fallback_population),
+                    )
+                else:
+                    # Fitness-first render; may drop weak cards to fit input budget.
+                    cards = evolver.render_selection_cards(fallback_population)
+                    card_ids = {cid for cid, _ in cards}
+                    fallback_order = [
+                        c.candidate_id
+                        for c in fallback_population
+                        if c.candidate_id in card_ids
+                    ]
+                    result = ranker.rank(
+                        cards,
+                        fallback_order=fallback_order,
+                        seed=int(selection_cfg.seed) + g,
+                        stage="stage2",
+                        generation=g,
+                        flags={
+                            candidate.candidate_id: candidate_guard_flags(
+                                candidate, selection_cfg
+                            )
+                            for candidate in ranked
+                            if candidate.candidate_id in card_ids
+                        },
+                    )
+                    by_id = {candidate.candidate_id: candidate for candidate in ranked}
+                    ranked_llm = [
+                        by_id[candidate_id]
+                        for candidate_id in result.ranking
+                        if candidate_id in by_id
+                    ]
+                    # Candidates dropped from the ranking prompt stay at the tail.
+                    ranked_tail = [
+                        c for c in fallback_population if c.candidate_id not in card_ids
+                    ]
+                    ranked = ranked_llm + ranked_tail
+                    note_candidates = [
+                        f"{candidate_id}: {result.rationale[candidate_id]}"
+                        for candidate_id in result.ranking[: min(3, len(result.ranking))]
+                        if candidate_id in result.rationale
+                    ]
+                    if note_candidates and selection_cfg.reflection_note_cap:
+                        selection_notes = (
+                            selection_notes
+                            + [f"Gen {g} reflection: " + " | ".join(note_candidates)]
+                        )[-selection_cfg.reflection_note_cap :]
+                    for candidate in ranked_llm:
+                        candidate.metadata = {
+                            **(candidate.metadata or {}),
+                            "llm_selection_rank": (
+                                result.ranking.index(candidate.candidate_id) + 1
+                            ),
+                            "llm_selection_score": result.scores.get(
+                                candidate.candidate_id
+                            ),
+                            "selection_weaknesses": result.weaknesses.get(
+                                candidate.candidate_id, []
+                            ),
+                            "selection_rationale": result.rationale.get(
+                                candidate.candidate_id, ""
+                            ),
+                            "selection_reflection_notes": list(selection_notes),
+                        }
+                    if history and history[-1].get("ranking"):
+                        rank_consistency = append_consistency_csv(
+                            os.path.join(
+                                closed_loop_dir(cfg.output_dir), "rank_consistency.csv"
+                            ),
+                            stage="stage2_generation",
+                            generation=g,
+                            previous=history[-1]["ranking"],
+                            current=result.ranking,
+                            top_k=selection_cfg.top_k,
+                        )
+                    selection_payload = {
+                        "ranking": result.ranking,
+                        "scores": result.scores,
+                        "weaknesses": result.weaknesses,
+                        "rationale": result.rationale,
+                        "fallback": result.fallback,
+                        "fallback_reason": result.fallback_reason,
+                        "rank_consistency": rank_consistency,
+                    }
             ranked_for_evo = (
                 list(ranked)
                 if ranker is not None

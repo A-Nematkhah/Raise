@@ -187,6 +187,8 @@ llm:
   model: openai/gpt-oss-120b    # Groq gpt-oss 120B
   temperature: 0.1
   # Groq on_demand TPM for this org is 8000 (prompt + max_tokens). Keep headroom.
+  # Do NOT raise above ~2000 on 8k TPM: max_tokens=3500 starved crossover input
+  # to 3200 raw tokens and every crossover became refused_over_budget.
   max_tokens: 2000
   reasoning_effort: null
   seed: null
@@ -204,7 +206,7 @@ selection:
   mutation_parents: lower
   keep_runtime_elite: true
   behavioral_dedup: true
-  max_fallback_fraction: 0.5
+  max_fallback_fraction: 0.34   # ~1/3 slots; was 0.5 and hid crossover clone runs
   strict_fallback: false
   infra_error_policy: retry_then_abort
   feedback_card: true

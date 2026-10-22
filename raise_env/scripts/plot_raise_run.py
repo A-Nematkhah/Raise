@@ -24,6 +24,7 @@ from raise_core.script_utils import bootstrap_raise_env
 
 bootstrap_raise_env(chdir=True)
 import argparse
+import json
 import os
 import sys
 from typing import Any, Dict, List, Optional, Sequence, Tuple

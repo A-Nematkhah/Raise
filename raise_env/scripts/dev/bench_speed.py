@@ -924,7 +924,8 @@ def k_cold_start(p: Dict[str, Any], st: Dict[str, Any], rep: int) -> Dict[str, A
     from domains.crowdnav.prompts import D5_SEED_FUNCTION
     from domains.crowdnav.reward_checks import make_crowdnav_validator
     from domains.crowdnav.score1_worker import make_score_fn
-    from domains.crowdnav.stage1 import load_crowdnav_dataset, score_crowdnav_dataset
+    from domains.crowdnav.score1 import score_crowdnav_dataset
+    from domains.crowdnav.stage1 import load_crowdnav_dataset
 
     out: Dict[str, Any] = {}
     pc = time.perf_counter

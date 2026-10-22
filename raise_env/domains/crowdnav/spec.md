@@ -143,27 +143,34 @@ evaluation instead uses the observed episode outcome; a timeout receives -0.5
 for fitness regardless of its native reward. This is an intentional difference
 between PPO's training target and the reported outcome-score fitness.
 
-## Stage I (Score1)
+## Stage I (EvoNav Score_1)
 
-Score1 is a cheap sanity filter over a dataset of real CrowdNav++ rollouts
-(`scripts/collect_crowdnav_stage1_dataset.py`: FOV-aware ORCA at several
-clearance / speed / reaction settings, Linear, slow Linear, stop and random
-robots on the same `train` scenarios). The collector supports holonomic and
-unicycle kinematics; unicycle runs must satisfy CrowdNav++'s human-count
-initialization follows the simulator's configured variable-human rules.
-Score1 returns are discounted with PPO's γ.
+Score_1 is a training-free fitness for LLM reward candidates over a dataset of
+real CrowdNav++ rollouts (`scripts/collect_crowdnav_stage1_dataset.py`: FOV-aware
+ORCA at several clearance / speed / reaction settings, Linear, slow Linear, stop
+and random robots on the same `train` scenarios). The collector supports
+holonomic and unicycle kinematics.
 
 ```
-safety  = 2·AUC − 1 of success ≻ timeout ≻ collision on discounted returns
-quality = 0.40 · efficiency (Spearman of return vs −nav_time, successes)
-        + 0.25 · comfort    (Spearman of return vs −danger fraction, successes)
-        + 0.35 · step Spearman(step reward, step rule)
-Score1  = 0.5·safety + 0.5·max(0, safety)·quality
+Score_1(r) = (1/M) * sum_j (1/F_j) * sum_f Spearman( rank_rules[j,f], rank_r[j,f] )
 ```
 
-Hard rejects: `no_signal`, `prefers_failure` (safety < 0), `score1_error`,
-`score1_timeout`. When the active kinematics differ from the recorded rollout
-kinematics, Score1 re-expresses recorded actions before evaluating them.
+- `rank_rules`: at each scenario `j` and frame `f`, rank the `N_traj` trajectories
+  by analytic class order success (shorter path first) ≻ other/timeout (shorter
+  distance-to-goal first) ≻ fail/collision (shorter distance-to-goal first), via
+  a scalar rule score (class offset + within-class term; see
+  `domains.crowdnav.score1.rule_score_at_frame`).
+- `rank_r`: rank by the candidate's cumulative per-frame reward up to `f`
+  (`cumsum`). Early-terminated trajectories carry forward their final class and
+  cumulative reward.
+- Ties use average ranks (`raise_core.rules`). Constant ranks → NaN Spearman;
+  `nan_policy=zero` (default) counts those frames as 0, or `skip` omits them.
+- Hard rejects / errors: exception, non-finite reward, or Score1 worker timeout
+  → `score=-inf` with `reject_reason` (`score1_error`, `score1_timeout`, …).
+
+CLI: `python -m domains.crowdnav.score1 --dataset PATH --candidates DIR_OR_JSON`.
+When active kinematics differ from recorded rollouts, Stage I re-expresses
+recorded actions before evaluating them.
 
 ## Design principles
 

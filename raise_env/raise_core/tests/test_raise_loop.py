@@ -24,14 +24,19 @@ class _RecordingTrainer(StubPolicyTrainer):
 
 
 def _cfg(out: str, **kw) -> ClosedLoopConfig:
+    # Pin operator/eval knobs so unit tests do not inherit the 48h YAML profile
+    # (llm_rank + top_k=2 + stage2_seeds=3 → 2 elites carried, 3× train calls).
     base = dict(
         population_size=4,
         generations=2,
         stage2_train_steps=32,
+        stage2_seeds=1,
+        stage2_paired_seeds=False,
         use_stub=True,
         llm_provider="seed",
         output_dir=out,
         device="cpu",
+        selection=SelectionConfig(mode="legacy", top_k=1, n_votes=1, p_restart=0.0),
     )
     base.update(kw)
     return ClosedLoopConfig(**base)
@@ -107,7 +112,8 @@ def test_llm_rank_mode_ranks_cards_and_uses_elitist_evolution(monkeypatch, tmp_p
 
     assert len(calls) == 2
     assert all(len(cards) == 4 for cards, _, _ in calls)
-    assert all("DIAGNOSTIC FEEDBACK CARD" in card for cards, _, _ in calls for _, card in cards)
+    # Ranking strips per-card title/legend; section markers must remain.
+    assert all("[A]" in card for cards, _, _ in calls for _, card in cards)
     assert epochs[0]["selection"]["ranking"] == list(reversed(calls[0][1]))
     assert epochs[0]["evolve_ranking"] == epochs[0]["selection"]["ranking"]
     assert len(result.population) == 4

@@ -27,9 +27,13 @@ Robot behaviours:
 from __future__ import annotations
 
 import os as _os
+import sys as _sys
 
 _ROOT = _os.path.abspath(_os.path.join(_os.path.dirname(__file__), ".."))
-import raise_paths  # noqa: F401
+if _ROOT not in _sys.path:
+    _sys.path.insert(0, _ROOT)
+
+import raise_paths  # noqa: E402,F401
 import argparse  # noqa: E402
 import math  # noqa: E402
 import sys  # noqa: E402

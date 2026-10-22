@@ -174,9 +174,10 @@ def test_score1_rejected_candidate_is_not_trained(tmp_path):
         bad = candidate_id == "bad"
         return Score1Result(
             score=0.0 if bad else 0.4,
-            degenerate_fraction=1.0 if bad else 0.0,
+            n_nan_frames=10 if bad else 0,
+            n_frames=10,
             rejected=bad,
-            reject_reason="no_signal" if bad else None,
+            reject_reason="score1_error" if bad else None,
         )
 
     trainer = _ScriptedTrainer()

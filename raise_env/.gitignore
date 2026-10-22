@@ -38,6 +38,9 @@ dist/
 
 # Secrets — copy groq_keys.json.example → groq_keys.json (never commit)
 groq_keys.json
+# xAI: copy xai_key.example → xai_key (one-line key; never commit)
+xai_key
+xai_keys.json
 .env
 .env.*
 !.env.example

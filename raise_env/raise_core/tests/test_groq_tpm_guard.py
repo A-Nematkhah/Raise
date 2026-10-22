@@ -68,3 +68,18 @@ def test_batch_max_tokens_never_reserves_7000():
 
     assert _E()._batch_max_tokens(8) <= 2000
     assert _E()._batch_max_tokens(8) < 7000
+
+
+def test_sizing_completion_prefers_crossover_input_room():
+    """llm.max_tokens=3500 must not shrink raw input room to 3200 for cards."""
+    from raise_core.llm import groq_sizing_completion_tokens
+
+    # crowdnav_run failure mode: desired input 3800, requested completion 3500.
+    sizing = groq_sizing_completion_tokens(3800, 3500)
+    raw = groq_raw_input_budget(sizing)
+    assert raw >= 3800
+    assert sizing < 3500
+    # Send-time clamp still keeps margined prompt + completion under soft cap.
+    assert int(math.ceil(3800 * float(_GROQ_PROMPT_TOKEN_MARGIN))) + sizing <= int(
+        _GROQ_REQUEST_TOKEN_CAP
+    )

@@ -39,7 +39,7 @@ def test_atomic_write_roundtrip_rejected_score(tmp_path: Path):
         reward_fn=reward_fn,
         score=float("-inf"),
         valid=True,
-        metadata={"score1_rejected": True, "score1_reject_reason": "prefers_failure"},
+        metadata={"score1_rejected": True, "score1_reject_reason": "score1_error"},
     )
     atomic_write_json(path, candidate_to_dict(cand))
     text = path.read_text(encoding="utf-8")

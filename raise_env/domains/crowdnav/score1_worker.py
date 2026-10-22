@@ -15,17 +15,23 @@ import logging
 import multiprocessing as mp
 import os
 import pickle
+import sys
 import threading
 import weakref
+from dataclasses import replace
 from typing import Any, Callable, Optional, Sequence, Tuple
 
-from domains.crowdnav.settings import CrowdNavSettings, get_settings
+from domains.crowdnav.settings import (
+    DEFAULT_ENV_CONFIG_PATH,
+    CrowdNavSettings,
+    get_settings,
+)
+from domains.crowdnav.score1 import score_crowdnav_dataset
 from domains.crowdnav.stage1 import (
     CrowdNavTrajectoryRecord,
     load_crowdnav_dataset,
     make_score_fn as stage1_make_score_fn,
     resolve_dataset_path,
-    score_crowdnav_dataset,
     with_settings,
 )
 from raise_core.sandbox.errors import RewardSandboxError
@@ -38,11 +44,35 @@ DEFAULT_SCORE1_TIMEOUT_SECONDS = 60.0
 _STARTUP_TIMEOUT_SECONDS = 120.0
 
 
+def _sanitize_child_argv() -> None:
+    """Drop Raise CLI flags so CrowdNav++ ``get_args()`` cannot SystemExit the child.
+
+    Windows ``spawn`` re-imports modules with the parent's ``sys.argv``. Upstream
+    ``crowd_nav.configs.config.Config`` calls ``get_args()`` at class body time.
+    """
+    prog = sys.argv[0] if sys.argv else "crowdnav-score1"
+    sys.argv = [prog]
+
+
+def settings_for_score1_child(settings: CrowdNavSettings) -> CrowdNavSettings:
+    """Strip ``env_config_obj`` so spawn does not pickle/import upstream ``Config``.
+
+    Pickling a live ``Config`` forces the child to import
+    ``crowd_nav.configs.config``, which parses ``sys.argv`` and dies on Raise flags
+    (``--config``, ``--output-dir``, …).
+    """
+    if settings.env_config_obj is None:
+        return settings
+    path = settings.env_config_path or DEFAULT_ENV_CONFIG_PATH
+    return replace(settings, env_config_obj=None, env_config_path=path)
+
+
 def _worker_main(conn: Any, dataset_path: str, settings: CrowdNavSettings) -> None:
     """Child entry (top-level for spawn): score candidates until told to stop.
 
     The child starts with default settings, so the parent's are passed in.
     """
+    _sanitize_child_argv()
     try:
         dataset = with_settings(load_crowdnav_dataset(dataset_path), settings)
     except BaseException as exc:  # noqa: BLE001
@@ -85,10 +115,12 @@ def _stop_process(proc: Any, conn: Any) -> None:
 
 def rejected_result(reason: str) -> Score1Result:
     return Score1Result(
-        score=-1.0,
-        degenerate_fraction=1.0,
+        score=float("-inf"),
+        n_nan_frames=0,
+        n_frames=0,
         rejected=True,
         reject_reason=reason,
+        error=reason,
     )
 
 
@@ -176,9 +208,10 @@ class Score1TimeoutWorker:
             self._discard()
         ctx = mp.get_context("spawn")
         parent_conn, child_conn = ctx.Pipe()
+        child_settings = settings_for_score1_child(self.settings)
         proc = ctx.Process(
             target=_worker_main,
-            args=(child_conn, self.dataset_path, self.settings),
+            args=(child_conn, self.dataset_path, child_settings),
             daemon=True,
             name="crowdnav-score1",
         )
